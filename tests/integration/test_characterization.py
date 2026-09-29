@@ -34,12 +34,30 @@ def test_char_over_quantity_remove(api: RawApi, scratch: Scratch) -> None:
     assert float(scratch.item(item["pk"])["quantity"]) == 0
 
 
+DEPLETING_MARKER_FOUND_FROM = 530
+"""Measured: API 511 (1.4.3) does not find the marker of a removal that deleted the item, API 530 (1.5.6) does."""
+
+
+def search(api: RawApi, marker: str) -> list[str]:
+    found = api.get("/api/stock/track/", search=marker)
+    return [row["notes"] for row in (found["results"] if isinstance(found, dict) else found)]
+
+
 def test_char_deplete_deletes_item_keeps_history(api: RawApi, scratch: Scratch) -> None:
     """Removing the last unit of an item marked delete_on_deplete deletes the item, but not its history.
 
-    The research expected the history to go with the item. It does not, and the marker of the
-    removal itself stays searchable, so recovery can still find a write that emptied an item.
+    The research expected the history to go with the item. It does not. Whether the marker of the
+    removal that deleted the item can be found depends on the version, so on older versions recovery
+    cannot prove that such a write happened (design section 7: a marker not found proves nothing).
     """
+    control = scratch.stock(3)
+    control_marker = f"control-{uuid.uuid4().hex}"
+    response = api.post(
+        "/api/stock/remove/", {"items": [{"pk": control["pk"], "quantity": 1}], "notes": control_marker}
+    )
+    assert response.status_code == 201, response.text[:500]
+    assert search(api, control_marker) == [control_marker]  # search finds the notes of a removal
+
     item = scratch.stock(3, delete_on_deplete=True)
     entries = [row["pk"] for row in api.get("/api/stock/track/", item=item["pk"])]
     assert entries  # creating the item wrote history
@@ -49,9 +67,8 @@ def test_char_deplete_deletes_item_keeps_history(api: RawApi, scratch: Scratch) 
     assert api.status(f"/api/stock/{item['pk']}/") == 404
     for entry in entries:
         assert api.status(f"/api/stock/track/{entry}/") == 200
-    found = api.get("/api/stock/track/", search=marker)
-    rows = found["results"] if isinstance(found, dict) else found
-    assert [row["notes"] for row in rows] == [marker], rows
+    expected = [marker] if api.get("/api/")["apiVersion"] >= DEPLETING_MARKER_FOUND_FROM else []
+    assert search(api, marker) == expected
     # A history query filtered by the deleted item is refused, not answered with an empty list.
     assert api.status(f"/api/stock/track/?item={item['pk']}") == 400
 
