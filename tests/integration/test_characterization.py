@@ -155,7 +155,7 @@ def test_char_marker_visible_after_response(api: RawApi, scratch: Scratch) -> No
         marker = f"visible-{uuid.uuid4().hex}"
         body = {"items": [{"pk": item["pk"], "quantity": 1}], "location": scratch.other, "notes": marker}
         assert api.post("/api/stock/transfer/", body).status_code == 201
-        assert search(api, marker) == [marker]
+        assert search(api, marker) == [marker, marker]  # a partial transfer writes both sides of the split
         item = api.items(scratch.part, scratch.parent)[0]
 
 
