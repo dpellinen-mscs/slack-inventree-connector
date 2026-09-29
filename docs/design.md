@@ -425,7 +425,7 @@ A plan has its own state: `current`, `stale`, `expired`, `applied`,
 | State | Meaning | Next |
 | --- | --- | --- |
 | `planned` | Part of a current plan | `approved`, `rejected`, `cancelled` (plan became stale), `expired` |
-| `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present) |
+| `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present), `cancelled` (plan became stale) |
 | `applying` | Intent stored, write about to be sent or sent | `applied`, `failed`, `unknown` |
 | `failed` | InvenTree refused the request. Nothing was written | `approved`, by a human, as a new attempt |
 | `unknown` | The outcome is not known | `applied`, `failed` (no marker and nothing changed) or `verify_failed`, by recovery |
@@ -450,7 +450,8 @@ click on a button changes nothing.
 
 ### The marker
 
-`[sic:<22 random base32 characters>:<a or u><two-digit attempt number>]`,
+`[sic:<22 random base32 characters>:<a or u><two-digit attempt number>]`
+(Crockford's alphabet in lower case: digits and letters without i, l, o, u),
 for example `[sic:k7m2q9x4t1b8w3n6p5r0zd:a01]`. `a` marks an apply and `u`
 an undo. The random id belongs to one request, and every attempt of that
 request shares it.
@@ -603,7 +604,11 @@ and needs no extra service.
 | `audit_log` | Append-only log of every state change, ids only |
 
 `audit_log` rows are never updated or deleted by the application. Database
-triggers reject both. The log holds ids and never message text, so it can
+triggers reject both. Triggers also keep every key column fixed, keep
+the recorded intent of an attempt (marker, snapshot, request body) fixed,
+and keep rows that carry a key from being deleted. The first migration
+holds the tables of section 7; the others arrive with their features
+([ADR 0009](decisions/0009-audit-store.md)). The log holds ids and never message text, so it can
 stay complete when retention removes text elsewhere. Retention of text is
 configurable, and expiry replaces the text while keeping the row.
 
