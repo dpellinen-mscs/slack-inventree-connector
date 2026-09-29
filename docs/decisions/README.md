@@ -11,6 +11,7 @@ editing history.
 | [0003](0003-standalone-python-service.md) | A standalone Python service with a pure core and thin adapters | Accepted |
 | [0004](0004-default-write-policy.md) | Clear take-outs apply automatically, everything else is confirmed | Accepted |
 | [0005](0005-project-name.md) | The project is named stockthread | Accepted |
+| [0006](0006-python-tooling.md) | Python tooling: hatchling, ruff, mypy strict, pytest, make | Accepted |
 
 ## Template
 
