@@ -22,6 +22,7 @@ Current version: see [`VERSION`](VERSION).
 | `catalog/aliases.json` | Aliases a human has already confirmed, in normalized form |
 | `schema/case-file.schema.json` | JSON Schema for a case file, with the lists of types, flags and tags |
 | `tools/validate_corpus.py` | Corpus checker, standard library only |
+| `tools/score.py` | Reference scorer, standard library only |
 
 ## A case
 
@@ -260,6 +261,49 @@ the averages say:
 
 Every pull request that changes extraction or matching reports these scores,
 together with the corpus version.
+
+### Running the scorer
+
+An extractor writes its results to a predictions file:
+
+```json
+{
+  "corpus_version": "0.1.0",
+  "extractor": "rules-0.1",
+  "predictions": [
+    {
+      "id": "clear-001",
+      "movements": [
+        {
+          "movement_type": "take_to_vehicle",
+          "line_items": [{ "item_text": "Disc 40", "quantity": 2, "unit": null }],
+          "source_text": null,
+          "destination_text": "my truck",
+          "flags": ["implied_source"]
+        }
+      ],
+      "post_flags": []
+    }
+  ]
+}
+```
+
+A movement has the same shape as in `expected.movements`. A case without a
+prediction counts as "no movement extracted". A field that is scored and
+that the prediction leaves out counts as wrong.
+
+```sh
+python3 eval/tools/score.py predictions.json
+python3 eval/tools/score.py predictions.json --json report.json --fail-on-hard
+python3 eval/tools/score.py predictions.json --skip-matching
+```
+
+Use `--skip-matching` for an extractor that has no matcher behind it. Match
+results are then ignored, also for the exact match.
+
+The scorer prints the metrics and lists every hard failure. With
+`--fail-on-hard` it exits with 1 if there is one. It refuses a predictions
+file that was made for another corpus version.
 
 ## Versioning
 
