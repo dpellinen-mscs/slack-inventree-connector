@@ -1,4 +1,6 @@
-# slack-inventree-connector
+# stockthread
+
+Slack to InvenTree stock movements.
 
 Turn informal Slack stock posts ("2 APs on Sam's truck") into verified, auditable
 [InvenTree](https://inventree.org) stock movements, with a human in the loop where it matters.
@@ -12,3 +14,4 @@ Turn informal Slack stock posts ("2 APs on Sam's truck") into verified, auditabl
 - [Decisions](docs/decisions/): the decision log
 - [Research notes](docs/research/): InvenTree, Slack, prior art
 - [Eval corpus](eval/): synthetic Slack posts with expected results
+- [Contributing](CONTRIBUTING.md): set up the project and run the checks
