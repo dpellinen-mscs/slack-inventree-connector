@@ -186,9 +186,12 @@ needs.
   under the instance lock. A reply that arrives before its thread root
   creates the post keyed on the root's timestamp, and the root joins it
   when it arrives. The window is compared exactly, to the microsecond.
-  Which messages end up together can depend on arrival order (a sibling
-  that arrives after the thread root's reply was posted starts its own
-  post), but a message never changes post once placed.
+  The window is measured from the nearest placed message, so siblings
+  chain (0 s, 4 s, 8 s is one post). Which messages end up together can
+  therefore depend on arrival order (0, 8, 4 gives two posts; a sibling
+  whose reply arrived before it keys its own post), but a message never
+  changes post once placed, and a reply always joins its root. Timestamps
+  must be in Slack's exact form, because keys compare as strings.
 - **Plan revisions.** Every plan has a revision number and a hash of the
   messages it was built from. An edit, a deletion or a new message in the
   thread makes the revision stale: its buttons are removed and a new plan

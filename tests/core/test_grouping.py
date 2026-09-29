@@ -67,8 +67,8 @@ def test_a_redelivered_message_gets_the_same_post() -> None:
     assert choose_post(Arrival("103.0", "U1"), known, ["100.0"], WINDOW) == "100.0"
 
 
-def test_every_arrival_order_gives_the_same_posts_for_a_thread() -> None:
-    """A root, its reply and a sibling, in all six orders, fed through the same rule the store runs."""
+def test_a_reply_stays_with_its_root_in_every_arrival_order() -> None:
+    """A root, its reply and a sibling, in all six orders. Whether the sibling joins can depend on the order."""
     messages = [Arrival("100.0", "U1", "100.0"), Arrival("102.0", "U1"), Arrival("150.0", "U2", "100.0")]
     for order in itertools.permutations(messages):
         known: list[Placed] = []
@@ -88,3 +88,12 @@ def test_a_timestamp_must_be_a_number(bad: str) -> None:
 
 def test_timestamps_are_exact() -> None:
     assert seconds("1790000000.000101") - seconds("1790000000.000100") == seconds("0.000001")
+
+
+def test_siblings_chain_so_the_order_can_decide() -> None:
+    """Documented: the window is measured from the nearest message, so 0, 4, 8 is one post but 0, 8, 4 is two."""
+    known: list[Placed] = []
+    for ts in ("0.0", "8.0", "4.0"):
+        post = choose_post(Arrival(ts, "U1"), known, {m.post_ts for m in known}, WINDOW)
+        known.append(Placed(ts, "U1", None, post, open_to_siblings=True))
+    assert [m.post_ts for m in known] == ["0.0", "8.0", "0.0"]

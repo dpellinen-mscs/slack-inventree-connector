@@ -115,6 +115,10 @@ class QueuedEvent:
     attempts: int
 
 
+_SLACK_TS = re.compile(r"\d{1,10}\.\d{6}")
+"""A Slack message timestamp as Slack sends it."""
+
+
 def new_lock_owner() -> str:
     """A random owner id for the instance lock, new for every process."""
     return secrets.token_hex(16)
@@ -248,7 +252,10 @@ class Store:
         return None if row is None else int(row[0])
 
     def create_post(self, key: PostKey) -> int:
-        """Create the post, or return the id of the existing one. The key is fixed from here on."""
+        """Create the post, or return the id of the existing one. The key is fixed from here on.
+
+        This bypasses grouping and the lock: the pipeline uses `place_message`. For tests and tools only.
+        """
         with self._transaction():
             existing = self._post_id(key)
             if existing is not None:
@@ -266,14 +273,20 @@ class Store:
     ) -> tuple[PostKey, bool]:
         """Put a message in its post (design section 4, "Grouping"): the post key, and whether the post is new.
 
-        `message` is the message's own key. A message is placed once: a redelivery gets the same post.
-        `owner` must hold the instance lock, so two instances never group the same channel differently.
+        `message` is the message's own key. A message is placed once: a redelivery gets the same post, with
+        `False`. After a crash the first placement may have committed without a plan, so callers plan on
+        every placement, not only when the post is new. `owner` must hold the instance lock, so two
+        instances never group the same channel differently. Timestamps must be in Slack's exact form
+        ("1790000000.000100"): keys are compared as strings.
         """
         if not user_id or window_seconds < 0:
             raise ValueError("a message needs a user, and the window cannot be negative")
+        thread_ts = thread_ts or None
+        for ts in (message.ts, thread_ts or message.ts):
+            if not _SLACK_TS.fullmatch(ts):
+                raise ValueError(f"not a Slack timestamp: {ts!r}")
         at = seconds(message.ts)
         root = thread_ts or message.ts
-        seconds(root)
         workspace, channel = message.workspace_id, message.channel_id
         with self._transaction():
             self._check_lock(owner)

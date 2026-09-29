@@ -87,31 +87,36 @@ def test_a_reply_before_its_root_keys_the_post_on_the_root(store: Store) -> None
 
 def test_grouping_needs_the_lock(store: Store) -> None:
     with pytest.raises(LockLost):
-        store.place_message("instance-b", key("1.0"), user_id="U0SAM0001", thread_ts=None, window_seconds=WINDOW)
-    place(store, "1.0")
+        store.place_message("instance-b", key("1.000000"), user_id="U0SAM0001", thread_ts=None, window_seconds=WINDOW)
+    place(store, "1.000000")
     with pytest.raises(LockLost):
-        store.close_siblings("instance-b", key("1.0"))
+        store.close_siblings("instance-b", key("1.000000"))
 
 
-@pytest.mark.parametrize("bad", ["", "abc", "NaN", "-1"])
+@pytest.mark.parametrize("bad", ["", "abc", "NaN", "-1", " 100.000000", "100.00", "1_790_000_000.000000"])
 def test_a_timestamp_must_be_a_number(store: Store, bad: str) -> None:
     with pytest.raises(ValueError):  # noqa: PT011 - the key or the timestamp check, whichever sees it first
         place(store, bad)
     with pytest.raises(ValueError):  # noqa: PT011
-        place(store, "1.0", thread_ts=bad or "x")
+        place(store, "1.000000", thread_ts=bad or "x")
+
+
+def test_an_empty_thread_is_no_thread(store: Store) -> None:
+    assert place(store, "1.000000", thread_ts="") == (key("1.000000"), True)
+    assert place(store, "2.000000", thread_ts="") == (key("1.000000"), False)
 
 
 def test_the_database_keeps_a_message_in_its_post(store: Store, path: Path) -> None:
-    place(store, "1.0")
-    place(store, "50.0", user="U0DANA0004")
+    place(store, "1.000000")
+    place(store, "50.000000", user="U0DANA0004")
     raw = sqlite3.connect(path, isolation_level=None)
     for statement in (
         "UPDATE post_messages SET post_id = 2",
         "DELETE FROM post_messages",
         "INSERT OR REPLACE INTO post_messages (post_id, workspace_id, channel_id, ts, user_id, added_at)"
-        " VALUES (2, 'T0ACME0001', 'C0STOCK001', '1.0', 'U0SAM0001', 'now')",
+        " VALUES (2, 'T0ACME0001', 'C0STOCK001', '1.000000', 'U0SAM0001', 'now')",
         "INSERT INTO post_messages (post_id, workspace_id, channel_id, ts, user_id, added_at)"
-        " VALUES (1, 'T0ACME0001', 'C0OTHER001', '2.0', 'U0SAM0001', 'now')",
+        " VALUES (1, 'T0ACME0001', 'C0OTHER001', '2.000000', 'U0SAM0001', 'now')",
     ):
         with pytest.raises(sqlite3.IntegrityError):
             raw.execute(statement)
@@ -126,7 +131,7 @@ def test_the_database_keeps_a_message_in_its_post(store: Store, path: Path) -> N
 
 
 def test_no_message_text_is_stored(path: Path, store: Store) -> None:
-    place(store, "1.0")
+    place(store, "1.000000")
     with sqlite3.connect(path) as raw:
         columns = {row[1] for row in raw.execute("PRAGMA table_info(post_messages)")}
     assert columns == {"id", "post_id", "workspace_id", "channel_id", "ts", "user_id", "thread_ts", "added_at"}
@@ -136,12 +141,12 @@ def test_a_version_2_file_upgrades_with_its_posts_open(path: Path, monkeypatch: 
     real = store_db._migrations()
     monkeypatch.setattr(store_db, "_migrations", lambda: real[:2])
     old = Store.open(path)
-    old.create_post(key("1.0"))
+    old.create_post(key("1.000000"))
     old.close()
     monkeypatch.setattr(store_db, "_migrations", lambda: real)
     upgraded = Store.open(path)
     upgraded.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
     assert upgraded.schema_version == 3
-    assert place(upgraded, "1.0") == (key("1.0"), False)  # the old post's first message joins it
-    assert place(upgraded, "3.0") == (key("1.0"), False)
+    assert place(upgraded, "1.000000") == (key("1.000000"), False)  # the old post's first message joins it
+    assert place(upgraded, "3.000000") == (key("1.000000"), False)
     upgraded.close()
