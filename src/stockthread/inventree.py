@@ -12,6 +12,7 @@ customer data, and the token is a secret.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from types import TracebackType
@@ -34,6 +35,8 @@ MAX_PAGES = 1000
 MAX_ATTEMPTS = 3
 """Attempts for one read that gets HTTP 429. Only reads are ever retried."""
 MAX_RETRY_AFTER_SECONDS = 30.0
+_API_PATH = re.compile(r"/api/(?:[A-Za-z0-9_-]+/)*")
+"""Plain segments only: no dots, no percent escapes, no query. Every InvenTree path ends with a slash."""
 
 
 class InvenTreeError(Exception):
@@ -119,8 +122,8 @@ class InvenTreeReader:
 
     async def get(self, path: str, params: Mapping[str, str | int | bool] | None = None) -> Any:
         """GET one API path, such as `/api/part/`, and return the decoded JSON."""
-        if not path.startswith("/api/") or ".." in path or "?" in path or "#" in path:
-            raise InvenTreeError(f"refused to read {path!r}: only paths below /api/, without a query")
+        if not _API_PATH.fullmatch(path):
+            raise InvenTreeError(f"refused to read {path!r}: only plain paths below /api/, ending in a slash")
         query = {key: str(value).lower() if isinstance(value, bool) else value for key, value in (params or {}).items()}
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:

@@ -94,7 +94,25 @@ async def test_only_get_ever_leaves_the_process(method: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "path", ["api/part/", "/admin/", "/api/../admin/", "https://elsewhere.example/api/", "/api/part/?x=1", "/api/#x"]
+    "path",
+    [
+        "api/part/",
+        "/admin/",
+        "/api/part",
+        "/api/../admin/",
+        "/api/%2e%2e/admin/",
+        "/api/.%2E/x/",
+        "/api/%2F%2E%2E%2Fx/",
+        "/api/./",
+        "/api/.",
+        "/api/part\\..\\admin/",
+        "//elsewhere.example/api/",
+        "https://elsewhere.example/api/",
+        "/api/part/?x=1",
+        "/api/#x",
+        "/api/\x00/",
+        "/api/\ud800/",
+    ],
 )
 async def test_paths_outside_the_api_are_refused(path: str) -> None:
     client, recorder = reader(respond(body={}))

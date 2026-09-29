@@ -6,6 +6,7 @@ pinned version it runs against. When one fails, the design is what changes.
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -33,17 +34,25 @@ def test_char_over_quantity_remove(api: RawApi, scratch: Scratch) -> None:
     assert float(scratch.item(item["pk"])["quantity"]) == 0
 
 
-def test_char_deplete_deletes_history(api: RawApi, scratch: Scratch) -> None:
-    """Removing the last unit of an item marked delete_on_deplete deletes it, and its history with it."""
+def test_char_deplete_deletes_item_keeps_history(api: RawApi, scratch: Scratch) -> None:
+    """Removing the last unit of an item marked delete_on_deplete deletes the item, but not its history.
+
+    The research expected the history to go with the item. It does not, and the marker of the
+    removal itself stays searchable, so recovery can still find a write that emptied an item.
+    """
     item = scratch.stock(3, delete_on_deplete=True)
     entries = [row["pk"] for row in api.get("/api/stock/track/", item=item["pk"])]
     assert entries  # creating the item wrote history
-    response = api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 3}], "notes": "d"})
+    marker = f"deplete-{uuid.uuid4().hex}"
+    response = api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 3}], "notes": marker})
     assert response.status_code == 201, response.text[:500]
     assert api.status(f"/api/stock/{item['pk']}/") == 404
     for entry in entries:
-        assert api.status(f"/api/stock/track/{entry}/") == 404
-    # Recovery cannot ask for the history of a deleted item: the filter refuses an unknown item.
+        assert api.status(f"/api/stock/track/{entry}/") == 200
+    found = api.get("/api/stock/track/", search=marker)
+    rows = found["results"] if isinstance(found, dict) else found
+    assert [row["notes"] for row in rows] == [marker], rows
+    # A history query filtered by the deleted item is refused, not answered with an empty list.
     assert api.status(f"/api/stock/track/?item={item['pk']}") == 400
 
 
