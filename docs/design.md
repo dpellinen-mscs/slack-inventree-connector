@@ -249,8 +249,10 @@ needs.
   missing source item as correct only when the plan expected it to reach
   zero. Measured on 1.4.3 and 1.5.6 (`test_char_deplete_deletes_item_keeps_history`):
   the item answers 404, but its history entries survive, so the research
-  claim that history is deleted with the item was wrong. A history query
-  filtered by the deleted item answers 400, not an empty list.
+  claim that history is deleted with the item was wrong. The marker of the
+  removal that deleted the item is found by search on 1.5.6 and not on
+  1.4.3. A history query filtered by the deleted item answers 400, not an
+  empty list.
   Verification and recovery must read that 400 as "the item is gone", and
   look markers up by search, never through the item filter alone.
 - **Serialized stock** always has quantity 1 per stock item, so "2 units"
@@ -451,9 +453,10 @@ request shares it.
 - The search for a marker reads every page of results and compares the
   whole token, because the server search matches substrings.
 - **A marker that is found proves the write happened. A marker that is not
-  found proves nothing.** History can be deleted with a depleted stock
-  item, and it is not yet known whether history is always readable at the
-  moment the server answers.
+  found proves nothing.** On 1.4.3 the marker of a removal that deleted
+  its stock item cannot be found (section 5, Depletion), an admin can
+  delete history, and it is not yet known whether history is always
+  readable at the moment the server answers.
 
 ### Apply protocol
 
