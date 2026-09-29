@@ -148,7 +148,19 @@ needs.
   listener stores the raw event, acknowledges, and processes it later.
 - **Durable queue.** The queue is the `slack_events` table with a
   processing status. Rows that were not finished are picked up again at
-  startup, so a restart loses nothing that was acknowledged.
+  startup, so a restart loses nothing that was acknowledged. A row moves
+  `pending` -> `processing` -> `done`, `dropped` or `failed`, and back to
+  `pending` only at startup. An event claimed 3 times without finishing is
+  `failed`, so one bad payload cannot crash the connector in a loop. Only
+  the holder of the instance lock claims and finishes events, and startup
+  requeues only events an earlier instance left behind. Delivery is **at
+  least once**: after a lock takeover, an event the old instance was still
+  processing runs again, so processing checks the lock before any write,
+  and everything downstream is idempotent (post keys, request keys,
+  markers). Triggers keep the key and the raw body fixed (retention may
+  expire the body only of a finished event), keep attempts from going down,
+  move the claim only with the status, freeze finished rows, and refuse
+  deletes and illegal status changes. An outcome is a short code, never text.
 - **Deduplication.** Slack retries deliveries. Events are deduplicated on
   `event_id`, messages on `(workspace, channel, ts)`, and writes on the
   request key (section 7).

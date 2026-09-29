@@ -57,7 +57,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 
 - [ ] Slack ingest over Socket Mode and HTTP, with signature verification on HTTP
 - [ ] Workspace and app id checks, channel allowlist, subtype allowlist, bot filtering, deduplication
-- [ ] Durable event queue, and catch-up from channel history after downtime
+- [ ] Durable event queue (store side done: `slack_events`, migration 0002), and catch-up from channel history after downtime
 - [ ] Grouping: photo with caption, sibling messages and threads become one post
 - [ ] Rule-based extractor that needs no LLM
 - [ ] LLM extractor behind a provider interface, with a strict output schema
