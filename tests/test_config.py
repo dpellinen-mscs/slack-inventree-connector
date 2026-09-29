@@ -132,6 +132,10 @@ def test_unknown_key_is_refused(data: dict[str, Any], where: str) -> None:
         (with_changes("inventree", url="https://sam:SPOT@inventree.local"), "inventree.url"),
         (with_changes("inventree", url="https://inventree.local/?token=SPOT"), "inventree.url"),
         (with_changes("inventree", url="https://inventree.local/#SPOT"), "inventree.url"),
+        (with_changes("inventree", url="http://:"), "inventree.url"),
+        (with_changes("inventree", url="http://:8000/"), "inventree.url"),
+        (with_changes("inventree", url="http://inventree.local:SPOT"), "inventree.url"),
+        (with_changes("inventree", url="http://inventree.local:99999"), "inventree.url"),
         (with_changes("policy", auto_apply=["unclear"]), "policy.auto_apply.0"),
         (with_changes("policy", auto_apply=["take_to_site", "take_to_site"]), "policy.auto_apply"),
         (with_changes("policy", max_quantity=0), "policy.max_quantity"),
@@ -140,7 +144,9 @@ def test_unknown_key_is_refused(data: dict[str, Any], where: str) -> None:
     ],
 )
 def test_wrong_value_is_refused_and_named(data: dict[str, Any], where: str) -> None:
-    assert f"{where}:" in rejected(data)
+    message = rejected(data)
+    assert f"{where}:" in message
+    assert "SPOT" not in message
 
 
 def test_missing_required_settings_are_named() -> None:
@@ -257,6 +263,11 @@ def test_every_problem_is_reported_at_once() -> None:
     assert "SLACK_BOT_TOKEN: does not look valid" in message
     assert "writes.enabled" in message
     assert "SLACK_BOT_TOKEN: Field required" not in message
+
+
+def test_url_may_have_a_port_or_an_ip_address() -> None:
+    for url in ("http://inventree.local:8000", "http://192.0.2.10/", "http://[2001:db8::10]:8000/"):
+        assert parse_settings(with_changes("inventree", url=url), ENV).inventree.url == url
 
 
 def test_url_may_have_a_path() -> None:
