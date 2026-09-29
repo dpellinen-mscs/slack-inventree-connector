@@ -604,18 +604,31 @@ send to InvenTree.
 
 Deterministic. The rules run in this order:
 
-1. Exact match on IPN or name.
-2. Normalized match: case, punctuation, plurals, possessives, spacing.
-3. Confirmed alias.
-4. Token and fuzzy candidates, with a score threshold and a cap on the
-   list length.
+1. **exact**: the text equals an IPN or a part name, or a location path
+   or name.
+2. **normalized**: the same after folding case, punctuation, plurals,
+   possessives and spacing.
+3. **alias**: a confirmed alias, or "my truck" for the poster's vehicle.
+4. **words**: every word of the text is one of the record's words (name,
+   keywords and aliases; path and description for locations). "Disc 40"
+   finds "Norvane Disc 40 Access Point". A word such as "3ft" or "van3"
+   may be split into letters and digits.
+5. **fuzzy**: as rule 4, but a word of 4 letters or more may be misspelled
+   (`difflib` similarity 0.8, so "ondrl" finds "Ondrel"). Words with digits
+   never get this allowance, so "truck 7" never becomes "Truck 1".
 
-- Exactly one hit at rule 1, 2 or 3 is `matched`.
-- More than one hit at any rule is `ambiguous`. Matching does not fall
-  through to a later rule to find a single winner.
-- Hits at rule 4 are candidates for a human. Whether a single hit at rule
-  4 may count as `matched` is decided against the corpus and recorded with
-  the scores. Under auto-apply it never counts.
+- The first rule with any hit decides. One hit is `matched`, more than one
+  is `ambiguous` with every hit as a candidate. Matching does not fall
+  through to a later rule to find a single winner. The candidate list is
+  capped where it is shown, not in the result.
+- A single hit at rule 4 or 5 is `matched`, because the corpus clerk would
+  pick that one record. It still cannot authorize a write: it raises the
+  `fuzzy_match` review reason. Only rules 1 to 3 authorize, and the code
+  enforces that with an allowlist (`Match.can_authorize_a_write`).
+- Corpus 0.2.0, with the expected text as input (`tests/core/test_matching_corpus.py`):
+  part match 100% (109 results) and location match 100% (92 results).
+  Of the single part matches, 77 of 99 came from rule 4 or 5, so they
+  need a confirmation under the current policy.
 - Template, inactive and virtual parts are never a match. Structural
   locations are never a match.
 - "My truck" resolves through the mapping from Slack user to vehicle.
