@@ -25,7 +25,8 @@ QUESTION_OR_REQUEST = re.compile(
     re.IGNORECASE,
 )
 PLAN_OR_CONDITION = re.compile(
-    r"\b(going to|gonna|will|i'll|tomorrow|tonight|later today|next week|want to|wanna|about to|plan(ning)? to)\b"
+    r"\b(going to|gonna|i'll|tomorrow|tonight|later today|next week|want to|wanna|about to|plan(ning)? to)\b"
+    r"|\b(i|we|he|she|they|you|someone|who) will\b|\bwill (be|take|grab|bring|need|get|pick|drop|return|load|use)\b"
     r"|^if\b|, if\b",
     re.IGNORECASE,
 )
