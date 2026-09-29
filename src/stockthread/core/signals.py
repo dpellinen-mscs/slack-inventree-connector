@@ -25,12 +25,29 @@ QUESTION_OR_REQUEST = re.compile(
     re.IGNORECASE,
 )
 PLAN_OR_CONDITION = re.compile(
-    r"\b(going to|gonna|will|i'll|tomorrow|tonight|later today|next week)\b|^if\b|, if\b", re.IGNORECASE
-)
-NEGATION = re.compile(
-    r"\b(not|never|nothing|no longer|didn't|did not|wasn't|haven't|scratch that|actually no|put (them|it) back)\b",
+    r"\b(going to|gonna|will|i'll|tomorrow|tonight|later today|next week|want to|wanna|about to|plan(ning)? to)\b"
+    r"|^if\b|, if\b",
     re.IGNORECASE,
 )
+NEGATION = re.compile(
+    r"\b(not|never|nothing|no longer|didn't|didnt|did not|don't|dont|wasn't|haven't|scratch that|actually no"
+    r"|put (them|it) back|nvm|never ?mind|cancel(led)?|wrong|oops|undo)\b",
+    re.IGNORECASE,
+)
+VAGUE = re.compile(
+    r"\b(some|a few|few|several|about|around|approx(imately)?|roughly|couple|or so)\b|~\s*\d"
+    r"|(?<![\w-])\d{1,3}\s*(-|to|or)\s*\d{1,3}(?![\w-])",
+    re.IGNORECASE,
+)
+"""A quantity that is approximate, a range or a vague word."""
+CORRECTION = re.compile(r"\b(actually|correction|make that|i mean|sorry|wait)\b|(^|\s)\*\w", re.IGNORECASE)
+"""A later message or phrase that changes a stated value."""
+THIRD_PERSON = re.compile(
+    r"(?:^|[.!\n]\s*)(?!(?:i|we|just|also|then|and|finally|already|so)\b)([a-z]+)"
+    r" (took|grabbed|put|loaded|moved|returned|brought|used|installed|received|dropped|pulled|counted)\b",
+    re.IGNORECASE,
+)
+"""Someone other than the poster did it: "Mike put 2 poe 8 on his truck"."""
 HEDGE = re.compile(r"\b(i think|maybe|probably|i guess|not sure|might have|might be|or so|ish)\b", re.IGNORECASE)
 
 NUMBER_WORDS = {
@@ -39,4 +56,7 @@ NUMBER_WORDS = {
     "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
 }  # fmt: skip
 CONTAINERS = frozenset({"box", "bag", "pack", "case", "roll", "spool", "bundle", "carton", "pallet"})
+CONTAINER_WORDS = re.compile(
+    r"\b(box(es)?|bags?|packs?|cases?|rolls?|spools?|bundles?|cartons?|pallets?)\b", re.IGNORECASE
+)
 VEHICLE_WORDS = re.compile(r"\b(truck|van|trailer|vehicle)s?\b|\bvan\d", re.IGNORECASE)

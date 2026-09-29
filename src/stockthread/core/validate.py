@@ -10,6 +10,7 @@ A reason's detail names the check, never the message text, so reasons are safe t
 
 from __future__ import annotations
 
+import contextlib
 import re
 import unicodedata
 from decimal import Decimal, InvalidOperation
@@ -24,25 +25,39 @@ from stockthread.core.model import (
     reason_for_flag,
 )
 from stockthread.core.signals import (
+    CONTAINER_WORDS,
     CONTAINERS,
+    CORRECTION,
     HEDGE,
     NEGATION,
     NUMBER_WORDS,
     PLAN_OR_CONDITION,
     QUESTION_OR_REQUEST,
     SUSPICIOUS,
+    THIRD_PERSON,
+    VAGUE,
     VEHICLE_WORDS,
 )
 
-_NUMBER_TOKEN = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?=x\b|[^\w.]|$|-)", re.IGNORECASE)
-"""A number on its own: "2", "2x", "12-piece", "2-3". Not the 3 in "van3" or the 40 in "d40"."""
-_ONE = re.compile(r"\b(a|an|the|one|single|this|that)\b", re.IGNORECASE)
-_WORD_QUANTITIES = (
-    (re.compile(r"\bhalf a dozen\b", re.IGNORECASE), Decimal(6)),
-    (re.compile(r"\bdozen\b", re.IGNORECASE), Decimal(12)),
-    (re.compile(r"\b(pair|couple)\b", re.IGNORECASE), Decimal(2)),
-    (re.compile(r"\bhalf\b", re.IGNORECASE), Decimal("0.5")),
-)
+_NUMBER_TOKEN = re.compile(r"^(\d+(?:\.\d+)?)(x|-\w+)?$", re.IGNORECASE)
+"""A number token: "2", "2x", "12-piece". Not "van3" or "d40"."""
+_ONE = frozenset({"a", "an", "the", "one", "single", "this", "that"})
+_WORD_QUANTITIES = {"dozen": Decimal(12), "pair": Decimal(2), "couple": Decimal(2), "half": Decimal("0.5")}
+_QUANTITY_WINDOW = 4
+"""How many words before an item may hold its quantity: "5 boxes of", "a 12-piece box of", "2 of the 5"."""
+_SEPARATOR = re.compile(r"[,;:\n+&]|\band\b|→|->")
+_TYPE_VERBS = {
+    MovementType.COUNT: re.compile(r"\b(count(ed)?|stocktake|inventory)\b"),
+    MovementType.RECEIVE: re.compile(r"\b(receiv\w*|rcvd|arrived|delivery|delivered|came in)\b"),
+    MovementType.CONSUME: re.compile(
+        r"\b(install\w*|used|use|replaced|swapped|consumed|ran|broke|broken|lost|damaged|toast|dead)\b"
+    ),
+    MovementType.RETURN: re.compile(r"\b(return\w*|brought back|back to|put back)\b|\bswapped\b"),
+    MovementType.TRANSFER: re.compile(r"\b(moved?|transferr?\w*)\b"),
+}
+"""A movement type that changes stock in a way a take cannot needs one of its words in the text."""
+_FROM = r"(from|off|out of)"
+_TO = r"(to|into|onto|on|in|at|for|up|→|->)"
 
 
 def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
@@ -59,9 +74,11 @@ def validate(
     """Every review reason for one candidate. `text` is the post's text by people, all messages joined."""
     reasons = {reason_for_flag(flag) for flag in movement.flags}
     reasons |= {reason_for_flag(flag) for flag in post_flags if flag is not PostFlag.CONTAINS_SENSITIVE}
+    text = _folded(text)
     reasons |= _from_fields(movement, text)
-    reasons |= _from_text(text)
+    reasons |= _from_text(movement, text)
     reasons |= _grounding(movement, text)
+    reasons |= _places(movement, text)
     reasons |= _contradictions(movement)
     reasons |= {
         _rule(ReasonCode.QUANTITY_ABOVE_LIMIT, f"line {n}: above policy.max_quantity")
@@ -83,8 +100,13 @@ def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         reasons.add(_rule(ReasonCode.ITEMS_MISSING))
     if any(item.quantity is None for item in movement.line_items):
         reasons.add(_rule(ReasonCode.QUANTITY_MISSING, "no number"))
-    if any(item.unit in CONTAINERS or item.pack_size is not None for item in movement.line_items):
+    if any(_unit(item.unit) in CONTAINERS or item.pack_size is not None for item in movement.line_items):
         reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS))
+    for n, item in enumerate(movement.line_items, start=1):
+        if item.serials and (item.quantity is None or len(item.serials) != item.quantity):
+            reasons.add(_rule(ReasonCode.SERIAL_UNCONFIRMED, f"line {n}: serial count differs from the quantity"))
+        if any(not _has_words(serial, text) for serial in item.serials):
+            reasons.add(_rule(ReasonCode.SERIAL_UNCONFIRMED, f"line {n}: serial not in the text"))
     if not text.strip():
         reasons.add(_rule(ReasonCode.PHOTO_ONLY, "no text"))
     if kind is MovementType.UNCLEAR:
@@ -92,10 +114,29 @@ def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     return reasons
 
 
-def _from_text(text: str) -> set[ReviewReason]:
+def _unit(unit: str | None) -> str | None:
+    if unit is None:
+        return None
+    unit = unit.casefold().strip()
+    return unit[:-2] if unit.endswith("xes") else unit[:-1] if unit.endswith("s") else unit
+
+
+def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
+    """Reasons the text gives, whatever the extractor made of it."""
     reasons = set()
     if SUSPICIOUS.search(text):
         reasons.add(_rule(ReasonCode.SUSPICIOUS_INSTRUCTIONS))
+    if CONTAINER_WORDS.search(text):
+        reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, "container word in the text"))
+    if VAGUE.search(text):
+        reasons.add(_rule(ReasonCode.QUANTITY_VAGUE, "vague quantity word in the text"))
+    if CORRECTION.search(text):
+        reasons.add(_rule(ReasonCode.CORRECTED_IN_THREAD, "correction word in the text"))
+    if THIRD_PERSON.search(text):
+        reasons.add(_rule(ReasonCode.ACTOR_NOT_POSTER, "someone else is named as the actor"))
+    verbs = _TYPE_VERBS.get(movement.movement_type)
+    if verbs is not None and not verbs.search(text):
+        reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, f"no word in the text supports {movement.movement_type.value}"))
     for pattern, detail in (
         (QUESTION_OR_REQUEST, "question or request"),
         (PLAN_OR_CONDITION, "plan or condition"),
@@ -108,28 +149,87 @@ def _from_text(text: str) -> set[ReviewReason]:
 
 
 def _folded(text: str) -> str:
-    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text).casefold()).strip()
+    text = unicodedata.normalize("NFKC", text).casefold().replace("\N{RIGHT SINGLE QUOTATION MARK}", "'")
+    return re.sub(r"[ \t\r\f\v]+", " ", text).strip()
+
+
+def _occurrences(phrase: str, text: str) -> list[re.Match[str]]:
+    """Where a phrase occurs in the folded text as whole words."""
+    phrase = _folded(phrase)
+    if len(re.findall(r"\w", phrase)) < 2:
+        return []  # "a", "-": too short to be grounded by anything
+    return list(re.finditer(rf"(?<!\w){re.escape(phrase)}(?!\w)", text))
+
+
+def _has_words(phrase: str, text: str) -> bool:
+    return bool(_occurrences(phrase, text))
+
+
+def _stated(before: str) -> set[Decimal]:
+    """The quantities the words right before an item can state."""
+    before = _SEPARATOR.split(before)[-1]
+    words = before.split()[-_QUANTITY_WINDOW:]
+    found = set()
+    for index, word in enumerate(words):
+        word = word.strip("(),.!")
+        if number := _NUMBER_TOKEN.match(word):
+            with contextlib.suppress(InvalidOperation):
+                found.add(Decimal(number.group(1)))
+        if word in NUMBER_WORDS:
+            found.add(Decimal(NUMBER_WORDS[word]))
+        if word in _WORD_QUANTITIES:
+            halved = word == "dozen" and "half" in words[max(0, index - 2) : index]  # "half a dozen"
+            found.add(_WORD_QUANTITIES[word] / 2 if halved else _WORD_QUANTITIES[word])
+    if _one_container(words):
+        found.add(Decimal(1))
+    return found
+
+
+def _one_container(words: list[str]) -> bool:
+    """An article right before the item ("the radio"), or before its container ("a 12-piece box of", "box of 100")."""
+    words = [word.strip("(),.!") for word in words]
+    container = False
+    while words:
+        last = words[-1]
+        if CONTAINER_WORDS.fullmatch(last):
+            container = True
+        elif not (last == "of" or re.fullmatch(r"\d+-\w+", last) or (last.isdigit() and words[-2:-1] == ["of"])):
+            break
+        words.pop()
+    return (bool(words) and words[-1] in _ONE) or (container and not words)
 
 
 def _grounding(movement: CandidateMovement, text: str) -> set[ReviewReason]:
-    """Each item text appears in the message, and each quantity matches a number or number word in it."""
-    folded = _folded(text)
-    numbers = set()
-    for token in _NUMBER_TOKEN.findall(folded):
-        try:
-            numbers.add(Decimal(token))
-        except InvalidOperation:  # pragma: no cover - the pattern only finds numbers
-            continue
-    numbers |= {Decimal(value) for word, value in NUMBER_WORDS.items() if re.search(rf"\b{word}\b", folded)}
-    numbers |= {value for pattern, value in _WORD_QUANTITIES if pattern.search(folded)}
-    if _ONE.search(folded):
-        numbers.add(Decimal(1))
+    """Each item is in the text as whole words, and its quantity is stated right before it."""
+    places = [_folded(place) for place in (movement.source_text, movement.destination_text) if place]
     reasons = set()
     for n, item in enumerate(movement.line_items, start=1):
-        if item.item_text and _folded(item.item_text) not in folded:
+        if not item.item_text:
+            continue  # items_missing covers it
+        found = _occurrences(item.item_text, text)
+        if not found or any(_folded(item.item_text) in place for place in places):
             reasons.add(_rule(ReasonCode.ITEM_NOT_IN_TEXT, f"line {n}"))
-        if item.quantity is not None and item.quantity not in numbers:
+        if item.quantity is not None and not any(item.quantity in _stated(text[: m.start()]) for m in found):
             reasons.add(_rule(ReasonCode.QUANTITY_NOT_IN_TEXT, f"line {n}"))
+    return reasons
+
+
+def _places(movement: CandidateMovement, text: str) -> set[ReviewReason]:
+    """Each location is in the text, on the side the movement puts it: "from X", "to X", or "X:" for a heading."""
+    reasons = set()
+    for side, place, pattern in (
+        ("source", movement.source_text, rf"{_FROM}\s+(the\s+)?$"),
+        ("destination", movement.destination_text, rf"(^|{_TO}\s+(the\s+)?)$"),
+    ):
+        if place is None:
+            continue
+        found = _occurrences(place, text)
+        if not found:
+            reasons.add(_rule(ReasonCode.LOCATION_NOT_IN_TEXT, side))
+            continue
+        after_heading = side == "destination" and any(re.match(r"\s*(count\s*)?:", text[m.end() :]) for m in found)
+        if not after_heading and not any(re.search(pattern, text[: m.start()].rstrip() + " ") for m in found):
+            reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, f"the text does not put the {side} on that side"))
     return reasons
 
 
@@ -146,6 +246,11 @@ def _contradictions(movement: CandidateMovement) -> set[ReviewReason]:
         found.append("a receive has no source location")
     if kind is not MovementType.COUNT and any(item.quantity == 0 for item in movement.line_items):
         found.append("zero quantity outside a count")
-    if source is not None and destination is not None and _folded(source) == _folded(destination):
+    if source is not None and destination is not None and _squashed(source) == _squashed(destination):
         found.append("source and destination are the same")
     return {_rule(ReasonCode.CONTRADICTION, detail) for detail in found}
+
+
+def _squashed(place: str) -> str:
+    """Only letters and digits: "Van 3" and "van3" are the same place."""
+    return re.sub(r"\W|_", "", _folded(place))

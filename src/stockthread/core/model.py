@@ -103,6 +103,7 @@ class ReasonCode(StrEnum):
     MOVEMENT_UNCLEAR = "movement_unclear"
     CONTRADICTION = "contradiction"
     ITEM_NOT_IN_TEXT = "item_not_in_text"
+    LOCATION_NOT_IN_TEXT = "location_not_in_text"
     QUANTITY_NOT_IN_TEXT = "quantity_not_in_text"
     QUANTITY_ABOVE_LIMIT = "quantity_above_limit"
     QUANTITY_ABOVE_STOCK = "quantity_above_stock"

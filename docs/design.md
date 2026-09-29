@@ -336,10 +336,20 @@ can also steer the gate by what it omits. These rules close that path:
 - **Where.** `core/validate.py` implements the rules above that need no
   catalog, and `tests/core/test_validate.py` checks, on every corpus
   movement with all extractor flags removed, that the rules alone still
-  raise every flag that follows from the fields. A number anywhere in the
-  text grounds a quantity ("Disc 40" grounds 40), so grounding catches
-  invented numbers, not misread ones. The limit applies to every unit,
-  so "300 ft" of cable needs a click at the default of 100.
+  raise every flag that follows from the fields.
+- **What the validator checks against the text.** An item must appear as
+  whole words, and it must not be a location. Its quantity must be stated
+  in the few words before it ("2 breakers", "a box of", "half a dozen"),
+  so quantities cannot move between items. Each location must appear on
+  its side: after "from" or "off" for the source; after "to", "on", "at"
+  or "for", or as a heading ("truck 2:"), for the destination. Serials
+  must appear in the text, one per unit. Receive, count, consume, return
+  and transfer each need one of their words in the text. Container words,
+  vague quantities, corrections, a third person as the actor, negations,
+  plans, questions and instructions raise their reasons from the text
+  alone. On the corpus, the extra reasons fall on photos, threads,
+  multi-movement posts and one Spanish post. The limit applies to every
+  unit, so "300 ft" of cable needs a click at the default of 100.
 - **Matching is deterministic** and takes only the item text, the location
   text and the poster as input (section 10). The extraction prompt never
   contains catalog or alias data, so the model cannot learn part names to
