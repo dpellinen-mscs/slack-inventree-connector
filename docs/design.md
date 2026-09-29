@@ -237,12 +237,15 @@ needs.
   work on quantities per part and location. Serialized stock is verified
   and undone by stock item and serial number.
 - **No merge in v1.0.** The server can merge transferred stock into
-  matching stock at the destination. A merge deletes stock items together
-  with their history, and it removes batch identity. Both would weaken
-  verification and undo, so v1.0 never merges. It sends `merge: false`
-  where the API version has the field, and it refuses writes when the
-  server-wide setting "merge stock on transfer" would merge anyway. The
-  cost is more small stock items on a vehicle. Merge is an option to
+  matching stock at the destination. A merge deletes the moving stock item,
+  writes the transfer's history entry on the destination item, and removes
+  batch identity. That would weaken verification and undo, so v1.0 never
+  merges. It sends `merge: false` on every transfer line. Measured
+  (`test_char_transfer_merge_setting_on`): on 1.5.6 only an explicit
+  `merge: true` merges; the server-wide setting "merge stock on transfer"
+  (off by default) does not change a line that omits `merge` or sends
+  `false`. 1.4.3 has neither the setting nor the field, and never merges.
+  The cost is more small stock items on a vehicle. Merge is an option to
   consider after v1.0.
 - **Depletion.** Removing the last unit can delete the stock item together
   with its history, depending on a server setting. Verification treats a
@@ -662,12 +665,12 @@ the test suite.
 | `test_char_marker_on_every_entry_type` | The notes reach every history entry a request writes |
 | `test_char_marker_visible_after_response` | Whether history is readable as soon as the server has answered |
 | `test_char_marker_search_is_substring` | The history search matches substrings, and `limit` with `offset` pages through it without overlap |
-| `test_char_notes_length` | What happens to notes beyond the length limit |
+| `test_char_notes_length` | Notes of 20,000 characters are stored whole (SQLite; PostgreSQL not measured yet) |
 | `test_char_multi_item_request_is_atomic` | One bad line fails the whole request |
 | `test_char_restricted_user_can_adjust` | The documented minimum roles are enough |
-| `test_char_concurrent_transfers_same_item` | What two simultaneous transfers from one item do |
+| `test_char_concurrent_transfers_same_item` | Two simultaneous transfers never move more than the item held. On SQLite, colliding requests give one 201 and one 5xx that wrote nothing. Requests handled one after the other give two 201s, and the second moves only what was left: a 201 can move less than asked, so read-back must compare the delta with the plan |
 | `test_char_transfer_does_not_merge` | A transfer to a location that holds the same part leaves separate items (server-wide merge setting off) |
-| `test_char_transfer_merge_setting_on` | What a transfer does when the server-wide merge setting is on (not written yet) |
+| `test_char_transfer_merge_setting_on` | The server-wide merge setting does not merge a line that omits `merge` or sends `false`; only `merge: true` merges (1.5.6) |
 | `test_char_stock_list_cascade_false` | A stock list with `cascade=false` leaves out sub-locations |
 | `test_char_error_body_format` | The shape of a 4xx answer from InvenTree, which recovery uses to tell it from a proxy |
 
