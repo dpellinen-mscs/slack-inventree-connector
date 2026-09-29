@@ -24,4 +24,6 @@ Nothing is released yet. The connector cannot write stock in this state.
   pick up unfinished events at startup, and stop retrying an event that keeps failing.
 - Integration tests against real InvenTree 1.4.3 and 1.5.6 in Docker, including characterization tests
   of the server behavior the design depends on.
+- Grouping of Slack messages into posts (migration 0003): siblings from the same user within the
+  window, thread replies with their root, in any arrival order; a message never changes post.
 - A threat model, first version (`docs/threat-model.md`).
