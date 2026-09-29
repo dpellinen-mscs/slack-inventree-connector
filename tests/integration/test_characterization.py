@@ -7,7 +7,7 @@ pinned version it runs against. When one fails, the design is what changes.
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from conftest import RawApi, Scratch
@@ -38,9 +38,13 @@ DEPLETING_MARKER_FOUND_FROM = 530
 """Measured: API 511 (1.4.3) does not find the marker of a removal that deleted the item, API 530 (1.5.6) does."""
 
 
-def search(api: RawApi, marker: str) -> list[str]:
+def search_rows(api: RawApi, marker: str) -> list[dict[str, Any]]:
     found = api.get("/api/stock/track/", search=marker)
-    return [row["notes"] for row in (found["results"] if isinstance(found, dict) else found)]
+    return list(found["results"] if isinstance(found, dict) else found)
+
+
+def search(api: RawApi, marker: str) -> list[str]:
+    return [row["notes"] for row in search_rows(api, marker)]
 
 
 def test_char_deplete_deletes_item_keeps_history(api: RawApi, scratch: Scratch) -> None:
@@ -120,3 +124,79 @@ def test_char_error_body_format(api: RawApi, scratch: Scratch) -> None:
     assert missing.status_code == 404
     assert missing.headers["content-type"].startswith("application/json")
     assert "detail" in missing.json()
+
+
+def test_char_marker_on_every_entry_type(api: RawApi, scratch: Scratch) -> None:
+    """The notes of a request reach every history entry it writes: split (both sides), move, add, remove."""
+    split = scratch.stock(10)
+    marker = f"split-{uuid.uuid4().hex}"
+    body = {"items": [{"pk": split["pk"], "quantity": 4}], "location": scratch.other, "notes": marker}
+    assert api.post("/api/stock/transfer/", body).status_code == 201
+    [new] = api.items(scratch.part, scratch.other)
+    rows = search_rows(api, marker)
+    assert sorted((row["item"], row["tracking_type"]) for row in rows) == sorted([(split["pk"], 42), (new["pk"], 40)])
+
+    whole = scratch.stock(2)
+    steps: list[tuple[str, dict[str, Any], int]] = [
+        ("/api/stock/transfer/", {"items": [{"pk": whole["pk"], "quantity": 2}], "location": scratch.child}, 20),
+        ("/api/stock/add/", {"items": [{"pk": whole["pk"], "quantity": 3}]}, 11),
+        ("/api/stock/remove/", {"items": [{"pk": whole["pk"], "quantity": 1}]}, 12),
+    ]
+    for path, request, code in steps:
+        marker = f"entry-{code}-{uuid.uuid4().hex}"
+        assert api.post(path, {**request, "notes": marker}).status_code == 201
+        assert [(row["item"], row["tracking_type"]) for row in search_rows(api, marker)] == [(whole["pk"], code)]
+
+
+def test_char_marker_visible_after_response(api: RawApi, scratch: Scratch) -> None:
+    """History is readable as soon as the server has answered a write (single server, no worker)."""
+    item = scratch.stock(10)  # enough that each of the five transfers is a split
+    for _ in range(5):
+        marker = f"visible-{uuid.uuid4().hex}"
+        body = {"items": [{"pk": item["pk"], "quantity": 1}], "location": scratch.other, "notes": marker}
+        assert api.post("/api/stock/transfer/", body).status_code == 201
+        assert search(api, marker) == [marker, marker]  # a partial transfer writes both sides of the split
+        item = api.items(scratch.part, scratch.parent)[0]
+
+
+def test_char_marker_search_is_substring(api: RawApi, scratch: Scratch) -> None:
+    """The history search matches substrings of the notes, and it is paginated with limit and offset."""
+    item = scratch.stock(10)
+    base = f"st-{uuid.uuid4().hex}"
+    notes = [f"[{base}a] slack C0FIELD/1727555555.000100 by U0SAM0001", f"[{base}b] slack C0FIELD/1727555555.000200"]
+    for text in notes:
+        assert (
+            api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 1}], "notes": text}).status_code
+            == 201
+        )
+    assert search(api, f"{base}a") == [notes[0]]
+    assert sorted(search(api, base)) == sorted(notes)  # a prefix finds both: compare the whole token
+    page = api.get("/api/stock/track/", search=base, limit=1, offset=0)
+    assert page["count"] == 2
+    assert len(page["results"]) == 1
+
+
+def test_char_serialized_quantity_noop(api: RawApi, scratch: Scratch) -> None:
+    """Add and remove on a serialized item change nothing and still return success."""
+    body = {"part": scratch.trackable_part, "location": scratch.parent, "quantity": 1}
+    item = api.create("/api/stock/", {**body, "serial_numbers": f"SN-{uuid.uuid4().hex[:8]}"})
+    assert float(item["quantity"]) == 1
+    for path in ("/api/stock/add/", "/api/stock/remove/"):
+        response = api.post(path, {"items": [{"pk": item["pk"], "quantity": 1}], "notes": "serialized"})
+        assert response.status_code == 201, response.text[:500]
+        assert float(scratch.item(item["pk"])["quantity"]) == 1
+
+
+def test_char_transfer_does_not_merge(api: RawApi, scratch: Scratch) -> None:
+    """A transfer to a location that holds the same part leaves separate items, with and without merge=false.
+
+    The case with the server-wide "merge stock on transfer" setting switched on is not covered yet.
+    """
+    waiting = scratch.stock(4, location=scratch.other)
+    for extra in ({}, {"merge": False}):
+        moving = scratch.stock(3)
+        line = {"pk": moving["pk"], "quantity": 3, **extra}
+        assert api.post("/api/stock/transfer/", {"items": [line], "location": scratch.other}).status_code == 201
+        assert float(scratch.item(waiting["pk"])["quantity"]) == 4
+        assert scratch.item(moving["pk"])["location"] == scratch.other
+    assert sorted(float(row["quantity"]) for row in api.items(scratch.part, scratch.other)) == [3, 3, 4]
