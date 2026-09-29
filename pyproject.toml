@@ -8,7 +8,9 @@ version = "0.0.0"
 description = "Slack to InvenTree stock movements, with a human in the loop where it matters."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pydantic>=2.13,<3",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -33,12 +35,13 @@ src = ["src", "tests"]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "S", "PT", "C4"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+"tests/**" = ["S101", "S105", "S106"]  # assert, and the synthetic secrets in tests
 
 [tool.mypy]
 strict = true
 python_version = "3.11"
 files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

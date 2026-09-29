@@ -660,8 +660,12 @@ corrupts responses. It drives the tests for unknown outcomes, including
 
 ## 12. Configuration
 
-One file plus environment variables for secrets. Settings are validated at
-startup, and the connector refuses to start on an unknown key. The startup
+One TOML file plus environment variables for secrets. Settings are
+validated at startup, and the connector refuses to start on an unknown key,
+a value of the wrong type ("yes" is not a boolean) or a secret in the file.
+Errors name the setting and never repeat its value.
+[`stockthread.example.toml`](../stockthread.example.toml) lists every
+setting with its default, and `stockthread check-config` validates a file. The startup
 log prints the effective settings with secrets redacted, and states in one
 line whether writes are on.
 
