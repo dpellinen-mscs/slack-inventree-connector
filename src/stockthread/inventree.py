@@ -140,6 +140,7 @@ class InvenTreeReader:
     async def list_all(self, path: str, params: Mapping[str, str | int | bool] | None = None) -> list[dict[str, Any]]:
         """GET every page of a list endpoint."""
         results: list[dict[str, Any]] = []
+        count: int | None = None
         for _ in range(MAX_PAGES):
             page = await self.get(path, {**(params or {}), "limit": PAGE_SIZE, "offset": len(results)})
             if (
@@ -151,8 +152,13 @@ class InvenTreeReader:
             batch = page["results"]
             if not all(isinstance(entry, dict) for entry in batch):
                 raise InvenTreeError(f"GET {path} returned a list entry that is not an object")
+            # Offset paging skips or repeats rows when the list changes between pages. A changed count or an early
+            # empty page shows that happened, and a partial list must never pass for the whole one.
+            if (count is not None and page["count"] != count) or (not batch and len(results) < page["count"]):
+                raise InvenTreeError(f"GET {path}: the list changed while it was read")
+            count = page["count"]
             results.extend(batch)
-            if not batch or len(results) >= page["count"]:
+            if len(results) >= count:
                 return results
         raise InvenTreeError(f"GET {path} returned more than {MAX_PAGES} pages")
 

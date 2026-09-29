@@ -65,13 +65,19 @@ class InvenTreeSettings(_Section):
     @field_validator("url")
     @classmethod
     def _has_host(cls, value: str) -> str:
-        parts = urllib.parse.urlsplit(value)
+        # urlsplit and .port raise errors that quote the value, so each one becomes a fixed message.
+        try:
+            parts = urllib.parse.urlsplit(value)
+        except ValueError:
+            raise ValueError("has an invalid host") from None
         if not parts.hostname:
             raise ValueError("has no host name")
         try:
-            parts.port  # noqa: B018 - raises on a port that is not a number from 0 to 65535
+            port = parts.port
         except ValueError:
             raise ValueError("has an invalid port") from None
+        if port == 0:
+            raise ValueError("has an invalid port")
         return value
 
 

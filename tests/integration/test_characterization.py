@@ -156,7 +156,6 @@ def test_char_marker_visible_after_response(api: RawApi, scratch: Scratch) -> No
         body = {"items": [{"pk": item["pk"], "quantity": 1}], "location": scratch.other, "notes": marker}
         assert api.post("/api/stock/transfer/", body).status_code == 201
         assert search(api, marker) == [marker, marker]  # a partial transfer writes both sides of the split
-        item = api.items(scratch.part, scratch.parent)[0]
 
 
 def test_char_marker_search_is_substring(api: RawApi, scratch: Scratch) -> None:
@@ -171,20 +170,25 @@ def test_char_marker_search_is_substring(api: RawApi, scratch: Scratch) -> None:
         )
     assert search(api, f"{base}a") == [notes[0]]
     assert sorted(search(api, base)) == sorted(notes)  # a prefix finds both: compare the whole token
-    page = api.get("/api/stock/track/", search=base, limit=1, offset=0)
-    assert page["count"] == 2
-    assert len(page["results"]) == 1
+    pages = [api.get("/api/stock/track/", search=base, limit=1, offset=offset) for offset in (0, 1)]
+    assert [page["count"] for page in pages] == [2, 2]
+    assert sorted(row["notes"] for page in pages for row in page["results"]) == sorted(notes)  # no overlap, no gap
 
 
 def test_char_serialized_quantity_noop(api: RawApi, scratch: Scratch) -> None:
-    """Add and remove on a serialized item change nothing and still return success."""
+    """Add and remove on a serialized item change nothing and still return success, and they write no history.
+
+    Measured so the marker rule of design section 7 holds for serialized items too: a found marker means a change.
+    """
     body = {"part": scratch.trackable_part, "location": scratch.parent, "quantity": 1}
     item = api.create("/api/stock/", {**body, "serial_numbers": f"SN-{uuid.uuid4().hex[:8]}"})
     assert float(item["quantity"]) == 1
     for path in ("/api/stock/add/", "/api/stock/remove/"):
-        response = api.post(path, {"items": [{"pk": item["pk"], "quantity": 1}], "notes": "serialized"})
+        marker = f"serialized-{uuid.uuid4().hex}"
+        response = api.post(path, {"items": [{"pk": item["pk"], "quantity": 1}], "notes": marker})
         assert response.status_code == 201, response.text[:500]
         assert float(scratch.item(item["pk"])["quantity"]) == 1
+        assert search_rows(api, marker) == []
 
 
 def test_char_transfer_does_not_merge(api: RawApi, scratch: Scratch) -> None:
