@@ -107,11 +107,14 @@ Decision = Drop | Challenge | NewMessage | Edited | Deleted | Click
 
 class SeenEvents(Protocol):
     def first_time(self, event_id: str) -> bool:
-        """Record the event id, and say whether it was new. Slack retries an event with the same id."""
+        """Record the event id, and say whether it was new. Slack retries an event with the same id.
+
+        Record it durably, before Slack is acknowledged: nothing else remembers an accepted event.
+        """
 
 
 class RecentEvents:
-    """Event ids seen by this process, the most recent `size`. The durable queue replaces it across restarts."""
+    """Event ids seen by this process, the most recent `size`. For tests: the listener uses the durable queue."""
 
     def __init__(self, size: int = 10_000) -> None:
         self._seen: OrderedDict[str, None] = OrderedDict()
@@ -156,7 +159,11 @@ def unwrap_socket(envelope: Mapping[str, Any]) -> Mapping[str, Any] | None:
 
 
 def ingest_event(payload: object, settings: SlackSettings, seen: SeenEvents) -> Decision:
-    """Decide what to do with an Events API payload. The event is recorded as seen only when it is processed."""
+    """Decide what to do with an Events API payload.
+
+    An accepted event is recorded in `seen` at once; a drop is never recorded. So `seen` must be the durable
+    queue (a retry is then run from the queue, not from Slack), or a failed handling loses Slack's retry.
+    """
     try:
         decision = _event(_object(payload), settings)
     except _Malformed:
@@ -213,10 +220,22 @@ def _event(payload: Mapping[str, Any], settings: SlackSettings) -> Decision:
         return Deleted(event_id, channel, _text(event.get("deleted_ts")))
     message = _message(channel, inner)
     if subtype == "message_changed":
-        if message.edited_ts is None:
+        if message.edited_ts is None or (previous is not None and _same_post(message, _object(previous))):
             return Drop(DropReason.UNCHANGED)
         return Edited(event_id, message)
     return NewMessage(event_id, message)
+
+
+def _same_post(message: SlackMessage, previous: Mapping[str, Any]) -> bool:
+    """True when nothing a reader sees changed: a thread reply or link preview on a post edited earlier.
+
+    Slack keeps the old `edited` block on every later message_changed, so the stamp alone is not enough.
+    """
+    try:
+        before = _message(message.channel, previous)
+    except _Malformed:
+        return False
+    return (before.edited_ts, before.text, before.file_ids) == (message.edited_ts, message.text, message.file_ids)
 
 
 def _message(channel: str, event: Mapping[str, Any]) -> SlackMessage:

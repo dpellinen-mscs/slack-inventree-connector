@@ -207,6 +207,31 @@ def test_a_change_without_an_edit_is_not_an_edit() -> None:
     assert ingest_event(body, SETTINGS, RecentEvents()) == Drop(DropReason.UNCHANGED)
 
 
+def test_a_reply_under_a_post_edited_earlier_is_not_another_edit() -> None:
+    body = changed()  # Slack keeps the old "edited" block when a thread reply updates the parent
+    event = body["event"]
+    event["previous_message"] = copy.deepcopy(event["message"])
+    event["message"]["reply_count"] = 1
+    assert ingest_event(body, SETTINGS, RecentEvents()) == Drop(DropReason.UNCHANGED)
+
+
+def test_a_second_edit_is_an_edit() -> None:
+    body = changed()
+    event = body["event"]
+    event["previous_message"] = copy.deepcopy(event["message"])
+    event["message"]["text"] = "4 Disc 40 on my truck"
+    event["message"]["edited"]["ts"] = "1790000300.000000"
+    assert isinstance(ingest_event(body, SETTINGS, RecentEvents()), Edited)
+
+
+def test_a_changed_text_under_the_same_edit_stamp_is_still_an_edit() -> None:
+    body = changed()
+    event = body["event"]
+    event["previous_message"] = copy.deepcopy(event["message"])
+    event["message"]["text"] = "9 Disc 40 on my truck"
+    assert isinstance(ingest_event(body, SETTINGS, RecentEvents()), Edited)
+
+
 @pytest.mark.parametrize("key", ["bot_id", "bot_profile", "app_id"])
 def test_any_bot_marker_on_any_part_is_a_bot(key: str) -> None:
     body = plain()
