@@ -1,0 +1,47 @@
+{
+  "description": "The connector's own reply. Dropped because it has a bot_id.",
+  "kind": "event",
+  "transport": "http",
+  "headers": {},
+  "body": {
+    "token": "synthetic-verification-token",
+    "team_id": "T0ACME001",
+    "api_app_id": "A0ACME001",
+    "event": {
+      "type": "message",
+      "channel": "C0ACME001",
+      "channel_type": "channel",
+      "user": "U0SAM0001",
+      "text": "Dry-run: 2 × Norvane Disc 40 to Vehicles/Truck 1",
+      "ts": "1790000220.000700",
+      "event_ts": "1790000220.000700",
+      "client_msg_id": "0f0e0d0c-0000-4000-8000-000220000700",
+      "bot_id": "B0STOCKBOT",
+      "bot_profile": {
+        "id": "B0STOCKBOT",
+        "app_id": "A0ACME001",
+        "name": "stockthread",
+        "team_id": "T0ACME001"
+      },
+      "app_id": "A0ACME001"
+    },
+    "type": "event_callback",
+    "event_id": "Ev0ACME0007",
+    "event_time": 1790000220,
+    "authorizations": [
+      {
+        "enterprise_id": null,
+        "team_id": "T0ACME001",
+        "user_id": "U0STOCKBOT",
+        "is_bot": true,
+        "is_enterprise_install": false
+      }
+    ],
+    "is_ext_shared_channel": false,
+    "event_context": "4-synthetic-Ev0ACME0007"
+  },
+  "expected": {
+    "action": "drop",
+    "reason": "bot"
+  }
+}

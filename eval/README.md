@@ -232,9 +232,10 @@ An empty text is not the same as `null`.
 - Unicode compatibility forms are folded, the text is lower-cased and
   trimmed, and inner whitespace is collapsed.
 - Surrounding punctuation and a leading "the" are dropped.
-- A plural ending of the last word is dropped: "s", "'s", "es" after s, x,
-  z, ch or sh, and "ies" becomes "y". A word written in capitals ("UPS")
-  and a word that ends in "ss" are left alone.
+- The last word also matches without its plural ending: "s", "'s", "es"
+  ("boxes" is "box", "hoses" is "hose") and "ies" ("batteries" is
+  "battery"). A word written in capitals ("UPS") and a word that ends in
+  "ss" have no plural form.
 - `unit` is compared without the plural rule, because the convention asks
   for the singular form.
 
@@ -269,7 +270,9 @@ Three results are hard failures. They are reported on their own, whatever
 the averages say:
 
 1. **False movement.** A movement is extracted from a case whose expected
-   movements are empty.
+   movements are empty, or a case gets an extra movement that pairs with no
+   expected movement and has no flag from the schema. Without a review reason, such a
+   movement would be proposed as a write.
 2. **Missed flag.** A movement was extracted without one of its expected
    flags, or an expected post flag was not raised. Every flag is a review
    reason, and a lost review reason can let a wrong movement through. The
@@ -288,7 +291,7 @@ An extractor writes its results to a predictions file:
 
 ```json
 {
-  "corpus_version": "0.1.0",
+  "corpus_version": "0.2.0",
   "extractor": "rules-0.1",
   "predictions": [
     {
@@ -309,8 +312,9 @@ An extractor writes its results to a predictions file:
 ```
 
 A movement has the same shape as in `expected.movements`. A case without a
-prediction counts as "no movement extracted". A field that is scored and
-that the prediction leaves out counts as wrong.
+prediction counts as "no movement extracted". A field that the prediction
+leaves out is read as `null`, or as an empty list for flags and serials.
+A match result that is left out is wrong.
 
 ```sh
 python3 eval/tools/score.py predictions.json

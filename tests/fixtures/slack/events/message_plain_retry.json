@@ -1,0 +1,42 @@
+{
+  "description": "Slack retries message_plain after a timeout. Same event_id: dropped as a duplicate.",
+  "kind": "event",
+  "transport": "http",
+  "headers": {
+    "X-Slack-Retry-Num": "1",
+    "X-Slack-Retry-Reason": "http_timeout"
+  },
+  "body": {
+    "token": "synthetic-verification-token",
+    "team_id": "T0ACME001",
+    "api_app_id": "A0ACME001",
+    "event": {
+      "type": "message",
+      "channel": "C0ACME001",
+      "channel_type": "channel",
+      "user": "U0SAM0001",
+      "text": "2 Disc 40 on my truck",
+      "ts": "1790000000.000100",
+      "event_ts": "1790000000.000100",
+      "client_msg_id": "0f0e0d0c-0000-4000-8000-000000000100"
+    },
+    "type": "event_callback",
+    "event_id": "Ev0ACME0001",
+    "event_time": 1790000000,
+    "authorizations": [
+      {
+        "enterprise_id": null,
+        "team_id": "T0ACME001",
+        "user_id": "U0STOCKBOT",
+        "is_bot": true,
+        "is_enterprise_install": false
+      }
+    ],
+    "is_ext_shared_channel": false,
+    "event_context": "4-synthetic-Ev0ACME0001"
+  },
+  "expected": {
+    "action": "drop",
+    "reason": "duplicate_event"
+  }
+}

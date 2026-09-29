@@ -13,6 +13,7 @@ editing history.
 | [0005](0005-project-name.md) | The project is named stockthread | Accepted |
 | [0006](0006-python-tooling.md) | Python tooling: hatchling, ruff, mypy strict, pytest, make | Accepted |
 | [0007](0007-inventree-read-client.md) | The InvenTree read client: httpx, GET only, a tested API range | Accepted |
+| [0008](0008-mit-license.md) | The project is licensed under MIT | Accepted |
 | [0009](0009-audit-store.md) | The audit store: stdlib sqlite3, SQL migrations, guards in the database | Accepted |
 
 ## Template

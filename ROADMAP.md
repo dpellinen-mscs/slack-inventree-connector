@@ -28,7 +28,8 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [x] Lean CI for the corpus
 - [x] Shape, stack and default policy decided ([0003](docs/decisions/0003-standalone-python-service.md), [0004](docs/decisions/0004-default-write-policy.md))
 - [x] Name decided: stockthread ([0005](docs/decisions/0005-project-name.md))
-- [ ] License and origin credit decided (#3)
+- [x] License decided: MIT ([0008](docs/decisions/0008-mit-license.md))
+- [ ] Origin credit decided (#3)
 - [ ] Docker works on the build machine
 
 ## M0: foundations
@@ -43,8 +44,8 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [ ] Characterization of a transfer with the server-wide "merge stock on transfer" setting on
 - [ ] Fault proxy for delayed, dropped and failed responses
 - [x] InvenTree client: read-only, rejects every method except GET, with API version check at startup ([0007](docs/decisions/0007-inventree-read-client.md))
-- [ ] Threat model, first version
-- [ ] `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`
+- [x] Threat model, first version ([`docs/threat-model.md`](docs/threat-model.md))
+- [ ] `SECURITY.md` (needs a contact, see the threat model), `CONTRIBUTING.md` (done), `CHANGELOG.md` (done)
 
 **DoD:** a contributor can clone, install and run the full gate with one
 documented command. Integration tests read the seeded catalog from a real
