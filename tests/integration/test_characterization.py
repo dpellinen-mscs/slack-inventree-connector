@@ -150,7 +150,7 @@ def test_char_marker_on_every_entry_type(api: RawApi, scratch: Scratch) -> None:
 
 def test_char_marker_visible_after_response(api: RawApi, scratch: Scratch) -> None:
     """History is readable as soon as the server has answered a write (single server, no worker)."""
-    item = scratch.stock(5)
+    item = scratch.stock(10)  # enough that each of the five transfers is a split
     for _ in range(5):
         marker = f"visible-{uuid.uuid4().hex}"
         body = {"items": [{"pk": item["pk"], "quantity": 1}], "location": scratch.other, "notes": marker}
