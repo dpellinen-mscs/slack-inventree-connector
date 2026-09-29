@@ -14,6 +14,7 @@ editing history.
 | [0006](0006-python-tooling.md) | Python tooling: hatchling, ruff, mypy strict, pytest, make | Accepted |
 | [0007](0007-inventree-read-client.md) | The InvenTree read client: httpx, GET only, a tested API range | Accepted |
 | [0008](0008-mit-license.md) | The project is licensed under MIT | Accepted |
+| [0010](0010-no-origin-credit.md) | The project does not mention where it came from | Accepted |
 
 ## Template
 
