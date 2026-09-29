@@ -1,0 +1,35 @@
+{
+  "format_version": 1,
+  "parts": [
+    {
+      "text": "d40",
+      "part": "AP-NV-D40"
+    },
+    {
+      "text": "poe 8",
+      "part": "SW-NV-8P"
+    },
+    {
+      "text": "drop 150",
+      "part": "FBR-DROP-150"
+    },
+    {
+      "text": "blue screw",
+      "part": "SCR-MASONRY"
+    },
+    {
+      "text": "jarm",
+      "part": "MNT-J-ARM"
+    }
+  ],
+  "locations": [
+    {
+      "text": "warehouse",
+      "location": "Warehouse/Main Stock"
+    },
+    {
+      "text": "shop",
+      "location": "Warehouse/Main Stock"
+    }
+  ]
+}

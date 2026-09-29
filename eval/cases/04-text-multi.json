@@ -1,0 +1,629 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "id": "multi-001",
+      "tags": [
+        "multi-item"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002035.002035",
+            "user": "U0SAM0001",
+            "text": "On truck 1: 2 Disc 40, 1 Disc 60, 3 wall mount brackets, 1 S8 PoE switch"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "Disc 40",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D40"
+                }
+              },
+              {
+                "item_text": "Disc 60",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D60"
+                }
+              },
+              {
+                "item_text": "wall mount brackets",
+                "quantity": 3,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "MNT-WALL"
+                }
+              },
+              {
+                "item_text": "S8 PoE switch",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SW-NV-8P"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 1",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "multi-002",
+      "tags": [
+        "multi-movement",
+        "number-in-name"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790002072.002072",
+            "user": "U0MIKE0002",
+            "text": "Took 2 ONTs and 2 AX3000 routers to my truck, and returned 1 5-port switch to receiving"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "ONTs",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              },
+              {
+                "item_text": "AX3000 routers",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "RTR-OD-AX"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          },
+          {
+            "movement_type": "return",
+            "line_items": [
+              {
+                "item_text": "5-port switch",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SW-OD-5"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "receiving",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Receiving"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "multi-003",
+      "tags": [
+        "list",
+        "multi-item",
+        "pack-unit"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790002109.002109",
+            "user": "U0PRIYA003",
+            "text": "Van 3 restock from main stock:\n- 10 cat6 patch 1ft\n- 10 cat6 patch 3ft\n- 4 fiber patch cables\n- 1 bag zip ties"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "cat6 patch 1ft",
+                "quantity": 10,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "CBL-C6-P1"
+                }
+              },
+              {
+                "item_text": "cat6 patch 3ft",
+                "quantity": 10,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "CBL-C6-P3"
+                }
+              },
+              {
+                "item_text": "fiber patch cables",
+                "quantity": 4,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "FBR-PATCH-2M"
+                }
+              },
+              {
+                "item_text": "zip ties",
+                "quantity": 1,
+                "unit": "bag",
+                "match": {
+                  "status": "matched",
+                  "part": "ZIP-8-BLK"
+                }
+              }
+            ],
+            "source_text": "main stock",
+            "source_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "destination_text": "Van 3",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Van 3"
+            },
+            "flags": [
+              "pack_unit_ambiguous"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "multi-004",
+      "tags": [
+        "alias",
+        "multi-item",
+        "vague-quantity"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002146.002146",
+            "user": "U0SAM0001",
+            "text": "Smith job done. Used 1 ONT, 1 AX3000, 1 NID enclosure, 1 drop 150 and about 20 zip ties, all off my truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "consume",
+            "line_items": [
+              {
+                "item_text": "ONT",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              },
+              {
+                "item_text": "AX3000",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "RTR-OD-AX"
+                }
+              },
+              {
+                "item_text": "NID enclosure",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "NID-ENC"
+                }
+              },
+              {
+                "item_text": "drop 150",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "FBR-DROP-150"
+                }
+              },
+              {
+                "item_text": "zip ties",
+                "quantity": 20,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ZIP-8-BLK"
+                }
+              }
+            ],
+            "source_text": "my truck",
+            "source_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "destination_text": "Smith job",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Smith Residence"
+            },
+            "flags": [
+              "quantity_vague"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "multi-005",
+      "tags": [
+        "multi-item"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790002183.002183",
+            "user": "U0DANA0004",
+            "text": "Received from supplier: 24 Disc 40, 12 Disc 60, 6 outdoor mesh APs. All in receiving."
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "receive",
+            "line_items": [
+              {
+                "item_text": "Disc 40",
+                "quantity": 24,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D40"
+                }
+              },
+              {
+                "item_text": "Disc 60",
+                "quantity": 12,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D60"
+                }
+              },
+              {
+                "item_text": "outdoor mesh APs",
+                "quantity": 6,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-OD"
+                }
+              }
+            ],
+            "source_text": null,
+            "source_text_accept": [
+              "supplier"
+            ],
+            "destination_text": "receiving",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Receiving"
+            },
+            "flags": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "multi-006",
+      "tags": [
+        "alias",
+        "multi-item"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790002220.002220",
+            "user": "U0LUIS0005",
+            "text": "2 sector antennas and 2 PTP radios to Oak Hill Tower from the warehouse"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "sector antennas",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ANT-SK-SEC5"
+                }
+              },
+              {
+                "item_text": "PTP radios",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "RAD-SK-PTP5"
+                }
+              }
+            ],
+            "source_text": "warehouse",
+            "source_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "destination_text": "Oak Hill Tower",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Oak Hill Tower"
+            },
+            "flags": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "multi-007",
+      "tags": [
+        "alias",
+        "symbols"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002257.002257",
+            "user": "U0SAM0001",
+            "text": "truck 1 → truck 2: 3 d40 APs for Mike"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "d40 APs",
+                "quantity": 3,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D40"
+                }
+              }
+            ],
+            "source_text": "truck 1",
+            "source_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "destination_text": "truck 2",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "flags": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "multi-008",
+      "tags": [
+        "multi-movement"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002294.002294",
+            "user": "U0SAM0001",
+            "text": "swapped the dead ONT at Smith residence with one off my truck, old one to the RMA bench"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "consume",
+            "line_items": [
+              {
+                "item_text": "ONT",
+                "quantity": 1,
+                "unit": null,
+                "item_text_accept": [
+                  "one"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": "my truck",
+            "source_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "destination_text": "Smith residence",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Smith Residence"
+            },
+            "flags": []
+          },
+          {
+            "movement_type": "return",
+            "line_items": [
+              {
+                "item_text": "ONT",
+                "quantity": 1,
+                "unit": null,
+                "item_text_accept": [
+                  "dead ONT",
+                  "old one"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": "Smith residence",
+            "source_match": {
+              "status": "matched",
+              "location": "Job Sites/Smith Residence"
+            },
+            "destination_text": "RMA bench",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/RMA Bench"
+            },
+            "flags": []
+          }
+        ]
+      },
+      "notes": "A swap is two movements: the new unit is consumed, and the old unit comes back."
+    },
+    {
+      "id": "multi-009",
+      "tags": [
+        "multi-movement"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790002331.002331",
+            "user": "U0PRIYA003",
+            "text": "2 ONTs to truck 1 and 3 to van 3"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "ONTs",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 1",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          },
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "ONTs",
+                "quantity": 3,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "van 3",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Van 3"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "The item carries over to the second movement."
+    }
+  ]
+}

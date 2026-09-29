@@ -1,0 +1,464 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/slack-inventree-connector/eval/case-file.schema.json",
+  "title": "Eval case file",
+  "description": "One file of synthetic Slack posts with the expected extraction and match results. See eval/README.md.",
+  "type": "object",
+  "required": [
+    "format_version",
+    "cases"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "required": [
+        "id",
+        "tags",
+        "post",
+        "expected"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z]+-[0-9]{3}$"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tag"
+          },
+          "uniqueItems": true
+        },
+        "post": {
+          "$ref": "#/$defs/post"
+        },
+        "expected": {
+          "type": "object",
+          "required": [
+            "movements"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "movements": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/movement"
+              }
+            },
+            "post_flags": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/post_flag"
+              },
+              "uniqueItems": true,
+              "description": "Review reasons that hold for the post as a whole, with or without a movement."
+            }
+          }
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "post": {
+      "type": "object",
+      "required": [
+        "channel",
+        "user",
+        "messages"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "type": "string",
+          "pattern": "^C[A-Z0-9]+$"
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^U[A-Z0-9]+$"
+        },
+        "messages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/message"
+          }
+        }
+      }
+    },
+    "message": {
+      "type": "object",
+      "required": [
+        "ts",
+        "user",
+        "text"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ts": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9]{6}$"
+        },
+        "thread_ts": {
+          "type": "string",
+          "pattern": "^[0-9]{10}\\.[0-9]{6}$"
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^U[A-Z0-9]+$"
+        },
+        "text": {
+          "type": "string"
+        },
+        "is_bot": {
+          "type": "boolean"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/file"
+          }
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": [
+        "id",
+        "mimetype",
+        "synthetic_scene"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^F[A-Z0-9]+$"
+        },
+        "mimetype": {
+          "type": "string"
+        },
+        "synthetic_scene": {
+          "type": "string",
+          "description": "Plain-text stand-in for the image content. Fixture runs feed this to the extractor in place of pixels."
+        }
+      }
+    },
+    "movement": {
+      "type": "object",
+      "required": [
+        "movement_type",
+        "line_items",
+        "source_text",
+        "destination_text",
+        "flags"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "movement_type": {
+          "$ref": "#/$defs/movement_type"
+        },
+        "movement_type_accept": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/movement_type"
+          },
+          "uniqueItems": true
+        },
+        "line_items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/line_item"
+          }
+        },
+        "source_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_text_accept": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source_match": {
+          "$ref": "#/$defs/location_match"
+        },
+        "destination_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destination_text_accept": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "destination_match": {
+          "$ref": "#/$defs/location_match"
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/flag"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "movement_type": {
+      "enum": [
+        "take_to_vehicle",
+        "take_to_site",
+        "return",
+        "transfer",
+        "receive",
+        "consume",
+        "count",
+        "unclear"
+      ]
+    },
+    "flag": {
+      "enum": [
+        "implied_source",
+        "implied_destination",
+        "quantity_missing",
+        "quantity_vague",
+        "pack_unit_ambiguous",
+        "items_missing",
+        "photo_only",
+        "quantity_from_photo",
+        "serial_unconfirmed",
+        "photo_text_mismatch",
+        "corrected_in_thread",
+        "actor_not_poster"
+      ]
+    },
+    "post_flag": {
+      "enum": [
+        "suspicious_instructions",
+        "contains_sensitive"
+      ]
+    },
+    "tag": {
+      "enum": [
+        "abbreviation",
+        "alias",
+        "article-quantity",
+        "bot",
+        "brief-example",
+        "caption",
+        "chatter",
+        "clarification",
+        "correction",
+        "count",
+        "damaged",
+        "fraction",
+        "future-intent",
+        "implausible-quantity",
+        "length-unit",
+        "list",
+        "multi-item",
+        "multi-movement",
+        "negation",
+        "non-english",
+        "number-in-name",
+        "number-noise",
+        "pack-unit",
+        "photo",
+        "plural",
+        "possessive",
+        "prompt-injection",
+        "question",
+        "request",
+        "sensitive",
+        "serial",
+        "sibling-messages",
+        "slack-markup",
+        "spelled-number",
+        "symbols",
+        "third-party",
+        "thread",
+        "typo",
+        "unknown-item",
+        "unknown-location",
+        "vague-item",
+        "vague-location",
+        "vague-quantity"
+      ]
+    },
+    "line_item": {
+      "type": "object",
+      "required": [
+        "item_text",
+        "quantity",
+        "unit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "item_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "item_text_accept": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "quantity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Zero is valid only in a count."
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z]+$"
+        },
+        "pack_size": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "serials": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "match": {
+          "$ref": "#/$defs/part_match"
+        }
+      }
+    },
+    "part_match": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "part"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "matched"
+            },
+            "part": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "candidates"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "ambiguous"
+            },
+            "candidates": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "unmatched"
+            }
+          }
+        }
+      ]
+    },
+    "location_match": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "location"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "matched"
+            },
+            "location": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "candidates"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "ambiguous"
+            },
+            "candidates": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "unmatched"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

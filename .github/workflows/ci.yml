@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  corpus:
+    name: Eval corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate the corpus
+        run: python3 eval/tools/validate_corpus.py
+      - name: Install the schema library
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet jsonschema==4.26.0
+      - name: Test the validator and the schema
+        run: |
+          .venv/bin/python -m unittest discover -s eval/tools -p "test_*.py" 2> test.log || { cat test.log; exit 1; }
+          tail -n 3 test.log
+          if grep -q "skipped" test.log; then echo "A test was skipped"; exit 1; fi

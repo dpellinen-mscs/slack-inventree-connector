@@ -1,0 +1,942 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "id": "ambig-001",
+      "tags": [
+        "brief-example",
+        "vague-item"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790001295.001295",
+            "user": "U0DANA0004",
+            "text": "returned 1 switch to receiving"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "return",
+            "line_items": [
+              {
+                "item_text": "switch",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "ambiguous",
+                  "candidates": [
+                    "SW-NV-16P",
+                    "SW-NV-8P",
+                    "SW-OD-5"
+                  ]
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "receiving",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Receiving"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ambig-002",
+      "tags": [
+        "pack-unit"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790001332.001332",
+            "user": "U0SAM0001",
+            "text": "grabbed a box of rj45 connectors for truck 1"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "rj45 connectors",
+                "quantity": 1,
+                "unit": "box",
+                "match": {
+                  "status": "matched",
+                  "part": "CON-RJ45"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 1",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source",
+              "pack_unit_ambiguous"
+            ]
+          }
+        ]
+      },
+      "notes": "The part is stocked per connector, and a box size is not stated."
+    },
+    {
+      "id": "ambig-003",
+      "tags": [
+        "brief-example",
+        "pack-unit"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790001369.001369",
+            "user": "U0MIKE0002",
+            "text": "put a 12-piece box of splice sleeves on my truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "splice sleeves",
+                "quantity": 1,
+                "unit": "box",
+                "pack_size": 12,
+                "match": {
+                  "status": "matched",
+                  "part": "FBR-SLEEVE"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "flags": [
+              "implied_source",
+              "pack_unit_ambiguous"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ambig-004",
+      "tags": [
+        "brief-example",
+        "pack-unit"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790001406.001406",
+            "user": "U0PRIYA003",
+            "text": "12 pieces of cat6 patch 7ft to van 3"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "cat6 patch 7ft",
+                "quantity": 12,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "CBL-C6-P7"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "van 3",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Van 3"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "'pieces' is an each-like unit and normalizes to a null unit."
+    },
+    {
+      "id": "ambig-005",
+      "tags": [
+        "alias",
+        "vague-quantity"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790001443.001443",
+            "user": "U0SAM0001",
+            "text": "some zip ties and a few blue screws on my truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "zip ties",
+                "quantity": null,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ZIP-8-BLK"
+                }
+              },
+              {
+                "item_text": "blue screws",
+                "quantity": null,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SCR-MASONRY"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source",
+              "quantity_vague"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ambig-006",
+      "tags": [
+        "vague-item",
+        "vague-quantity"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790001480.001480",
+            "user": "U0MIKE0002",
+            "text": "grabbed a couple of SFPs for oak street"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "movement_type_accept": [
+              "unclear"
+            ],
+            "line_items": [
+              {
+                "item_text": "SFPs",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "ambiguous",
+                  "candidates": [
+                    "SFP-10G-LR",
+                    "SFP-1G-LX"
+                  ]
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "oak street",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Oak Street Tower"
+            },
+            "flags": [
+              "implied_source",
+              "quantity_vague"
+            ]
+          }
+        ]
+      },
+      "notes": "'a couple' extracts as 2 and is flagged as vague."
+    },
+    {
+      "id": "ambig-007",
+      "tags": [
+        "article-quantity",
+        "vague-location"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790001517.001517",
+            "user": "U0SAM0001",
+            "text": "took the radio to the oak tower"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "radio",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "RAD-SK-PTP5"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "oak tower",
+            "destination_match": {
+              "status": "ambiguous",
+              "candidates": [
+                "Job Sites/Oak Hill Tower",
+                "Job Sites/Oak Street Tower"
+              ]
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ambig-008",
+      "tags": [
+        "unknown-item"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790001554.001554",
+            "user": "U0MIKE0002",
+            "text": "2 ladder racks on my truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "ladder racks",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "unmatched"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "Nothing in the catalog fits. The matcher must not force a fuzzy match."
+    },
+    {
+      "id": "ambig-009",
+      "tags": [
+        "vague-item"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790001591.001591",
+            "user": "U0SAM0001",
+            "text": "grabbed stuff for the Smith job"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "movement_type_accept": [
+              "unclear"
+            ],
+            "line_items": [],
+            "source_text": null,
+            "destination_text": "Smith job",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Smith Residence"
+            },
+            "flags": [
+              "implied_source",
+              "items_missing"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ambig-010",
+      "tags": [
+        "vague-item"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790001628.001628",
+            "user": "U0MIKE0002",
+            "text": "returned 2 APs"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "return",
+            "line_items": [
+              {
+                "item_text": "APs",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "ambiguous",
+                  "candidates": [
+                    "AP-NV-D40",
+                    "AP-NV-D60",
+                    "AP-NV-OD"
+                  ]
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": null,
+            "flags": [
+              "implied_destination",
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ambig-011",
+      "tags": [
+        "vague-item"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790001665.001665",
+            "user": "U0DANA0004",
+            "text": "5 on truck 2"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": null,
+                "quantity": 5,
+                "unit": null
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 2",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "flags": [
+              "implied_source",
+              "items_missing"
+            ]
+          }
+        ]
+      },
+      "notes": "A quantity with no item keeps the quantity and a null item_text."
+    },
+    {
+      "id": "ambig-012",
+      "tags": [
+        "pack-unit"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790001702.001702",
+            "user": "U0SAM0001",
+            "text": "box of 100 rj45s to truck 1"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "rj45s",
+                "quantity": 1,
+                "unit": "box",
+                "pack_size": 100,
+                "match": {
+                  "status": "matched",
+                  "part": "CON-RJ45"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 1",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source",
+              "pack_unit_ambiguous"
+            ]
+          }
+        ]
+      },
+      "notes": "One box or 100 connectors? The extractor records both numbers and flags it."
+    },
+    {
+      "id": "ambig-013",
+      "tags": [
+        "length-unit"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790001739.001739",
+            "user": "U0PRIYA003",
+            "text": "took 300 ft of cat6 riser cable to riverside"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "cat6 riser cable",
+                "quantity": 300,
+                "unit": "ft",
+                "match": {
+                  "status": "matched",
+                  "part": "CBL-C6-RISER"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "riverside",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Riverside Apartments"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "Validation must flag the unit mismatch: the part is stocked by the box."
+    },
+    {
+      "id": "ambig-014",
+      "tags": [
+        "vague-item",
+        "vague-quantity"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790001776.001776",
+            "user": "U0MIKE0002",
+            "text": "patch cables on truck 2"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "patch cables",
+                "quantity": null,
+                "unit": null,
+                "match": {
+                  "status": "ambiguous",
+                  "candidates": [
+                    "CBL-C6-P1",
+                    "CBL-C6-P3",
+                    "CBL-C6-P7",
+                    "FBR-PATCH-2M"
+                  ]
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 2",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "flags": [
+              "implied_source",
+              "quantity_missing"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ambig-015",
+      "tags": [
+        "third-party"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790001813.001813",
+            "user": "U0DANA0004",
+            "text": "Priya took 3 patch cables"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "unclear",
+            "movement_type_accept": [
+              "take_to_vehicle"
+            ],
+            "line_items": [
+              {
+                "item_text": "patch cables",
+                "quantity": 3,
+                "unit": null,
+                "match": {
+                  "status": "ambiguous",
+                  "candidates": [
+                    "CBL-C6-P1",
+                    "CBL-C6-P3",
+                    "CBL-C6-P7",
+                    "FBR-PATCH-2M"
+                  ]
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": null,
+            "flags": [
+              "actor_not_poster",
+              "implied_destination",
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "Reported by someone else, with no destination."
+    },
+    {
+      "id": "ambig-016",
+      "tags": [
+        "vague-quantity"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790001850.001850",
+            "user": "U0SAM0001",
+            "text": "took 2-3 patch cables to the Smith job"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "patch cables",
+                "quantity": null,
+                "unit": null,
+                "match": {
+                  "status": "ambiguous",
+                  "candidates": [
+                    "CBL-C6-P1",
+                    "CBL-C6-P3",
+                    "CBL-C6-P7",
+                    "FBR-PATCH-2M"
+                  ]
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "Smith job",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Smith Residence"
+            },
+            "flags": [
+              "implied_source",
+              "quantity_vague"
+            ]
+          }
+        ]
+      },
+      "notes": "A range is not a quantity."
+    },
+    {
+      "id": "ambig-017",
+      "tags": [
+        "alias",
+        "unknown-location"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790001887.001887",
+            "user": "U0PRIYA003",
+            "text": "gave 2 drop 150s to Luis"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "unclear",
+            "movement_type_accept": [
+              "take_to_vehicle"
+            ],
+            "line_items": [
+              {
+                "item_text": "drop 150s",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "FBR-DROP-150"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "Luis",
+            "destination_match": {
+              "status": "unmatched"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "A person is not a stock location."
+    },
+    {
+      "id": "ambig-018",
+      "tags": [
+        "unknown-location"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790001924.001924",
+            "user": "U0MIKE0002",
+            "text": "4 J-arm mounts on truck 7"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "J-arm mounts",
+                "quantity": 4,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "MNT-J-ARM"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 7",
+            "destination_match": {
+              "status": "unmatched"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "There is no Truck 7. The nearest name must not be picked."
+    },
+    {
+      "id": "ambig-019",
+      "tags": [
+        "possessive"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790001961.001961",
+            "user": "U0DANA0004",
+            "text": "loaded 6 ONTs on Priya's van"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "ONTs",
+                "quantity": 6,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "Priya's van",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Van 3"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ambig-020",
+      "tags": [
+        "alias",
+        "third-party"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790001998.001998",
+            "user": "U0DANA0004",
+            "text": "Mike put 2 poe 8 on his truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "poe 8",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SW-NV-8P"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "his truck",
+            "flags": [
+              "actor_not_poster",
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "The destination match is not scored: 'his' refers to the actor, not to the poster."
+    }
+  ]
+}

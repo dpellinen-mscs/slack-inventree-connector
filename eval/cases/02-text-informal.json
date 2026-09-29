@@ -1,0 +1,735 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "id": "informal-001",
+      "tags": [
+        "brief-example",
+        "spelled-number",
+        "typo"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790000740.009740",
+            "user": "U0SAM0001",
+            "text": "grabbed three norvain power supplies for the Smith job"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "movement_type_accept": [
+              "unclear"
+            ],
+            "line_items": [
+              {
+                "item_text": "norvain power supplies",
+                "quantity": 3,
+                "unit": null,
+                "match": {
+                  "status": "ambiguous",
+                  "candidates": [
+                    "PSU-NV-24",
+                    "PSU-NV-48"
+                  ]
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "Smith job",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Smith Residence"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "Brand typo plus a family name that fits two parts. The matcher must return both and must not pick."
+    },
+    {
+      "id": "informal-002",
+      "tags": [
+        "plural",
+        "possessive",
+        "spelled-number"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790000777.009777",
+            "user": "U0MIKE0002",
+            "text": "two APs on Mikes truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "APs",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "ambiguous",
+                  "candidates": [
+                    "AP-NV-D40",
+                    "AP-NV-D60",
+                    "AP-NV-OD"
+                  ]
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "Mikes truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-003",
+      "tags": [
+        "alias",
+        "article-quantity"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790000814.009814",
+            "user": "U0PRIYA003",
+            "text": "put a poe 8 in my van"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "poe 8",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SW-NV-8P"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my van",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Van 3"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-004",
+      "tags": [
+        "symbols",
+        "typo"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790000851.009851",
+            "user": "U0SAM0001",
+            "text": "1x ondrl ont -> truck 1"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "ondrl ont",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 1",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-005",
+      "tags": [
+        "spelled-number"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790000888.009888",
+            "user": "U0MIKE0002",
+            "text": "took a dozen zip ties for the oak street job"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "movement_type_accept": [
+              "unclear"
+            ],
+            "line_items": [
+              {
+                "item_text": "zip ties",
+                "quantity": 12,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ZIP-8-BLK"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "oak street job",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Oak Street Tower"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-006",
+      "tags": [
+        "abbreviation"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790000925.009925",
+            "user": "U0DANA0004",
+            "text": "rcvd 10 sfp+ 10g lr"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "receive",
+            "line_items": [
+              {
+                "item_text": "sfp+ 10g lr",
+                "quantity": 10,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SFP-10G-LR"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": null,
+            "flags": [
+              "implied_destination"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-007",
+      "tags": [
+        "alias",
+        "plural",
+        "possessive"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790000962.009962",
+            "user": "U0SAM0001",
+            "text": "Sam's truck: 2 d40s, 1 disc 60"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "d40s",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D40"
+                }
+              },
+              {
+                "item_text": "disc 60",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D60"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "Sam's truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-008",
+      "tags": [
+        "alias",
+        "plural"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790000999.009999",
+            "user": "U0LUIS0005",
+            "text": "brought back 2 jarms to the shop"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "return",
+            "line_items": [
+              {
+                "item_text": "jarms",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "MNT-J-ARM"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "shop",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-009",
+      "tags": [
+        "abbreviation",
+        "alias",
+        "plural"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790001036.001036",
+            "user": "U0PRIYA003",
+            "text": "loaded up van3 w/ 5 drop 150s and 2 drop 300s"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "drop 150s",
+                "quantity": 5,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "FBR-DROP-150"
+                }
+              },
+              {
+                "item_text": "drop 300s",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "FBR-DROP-300"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "van3",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Van 3"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-010",
+      "tags": [
+        "alias",
+        "spelled-number"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790001073.001073",
+            "user": "U0MIKE0002",
+            "text": "Used fifteen blue screws at riverside"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "consume",
+            "line_items": [
+              {
+                "item_text": "blue screws",
+                "quantity": 15,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SCR-MASONRY"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "riverside",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Riverside Apartments"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-011",
+      "tags": [
+        "number-in-name"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790001110.001110",
+            "user": "U0SAM0001",
+            "text": "pulled 1 16 port poe switch for oak hill"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "movement_type_accept": [
+              "unclear"
+            ],
+            "line_items": [
+              {
+                "item_text": "16 port poe switch",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SW-NV-16P"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "oak hill",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Oak Hill Tower"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "The quantity is 1. The 16 belongs to the item name."
+    },
+    {
+      "id": "informal-012",
+      "tags": [
+        "alias",
+        "plural",
+        "symbols"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790001147.001147",
+            "user": "U0MIKE0002",
+            "text": "2 wall mounts + 2 d40 aps → my truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "wall mounts",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "MNT-WALL"
+                }
+              },
+              {
+                "item_text": "d40 aps",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D40"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-013",
+      "tags": [
+        "abbreviation",
+        "alias",
+        "article-quantity"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790001184.001184",
+            "user": "U0SAM0001",
+            "text": "Returned the 24v psu to the warehouse"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "return",
+            "line_items": [
+              {
+                "item_text": "24v psu",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "PSU-NV-24"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "warehouse",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "informal-014",
+      "tags": [
+        "plural"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790001221.001221",
+            "user": "U0LUIS0005",
+            "text": "took 2 aps on my truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "aps",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "ambiguous",
+                  "candidates": [
+                    "AP-NV-D40",
+                    "AP-NV-D60",
+                    "AP-NV-OD"
+                  ]
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "unmatched"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "Luis has no assigned vehicle, so 'my truck' is unmatched."
+    },
+    {
+      "id": "informal-015",
+      "tags": [
+        "number-in-name"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790001258.001258",
+            "user": "U0PRIYA003",
+            "text": "3 3ft patch cables and 7 7ft patch cables to van 3"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "3ft patch cables",
+                "quantity": 3,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "CBL-C6-P3"
+                }
+              },
+              {
+                "item_text": "7ft patch cables",
+                "quantity": 7,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "CBL-C6-P7"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "van 3",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Van 3"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

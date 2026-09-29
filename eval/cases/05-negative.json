@@ -1,0 +1,330 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "id": "negative-001",
+      "tags": [
+        "question"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002368.002368",
+            "user": "U0SAM0001",
+            "text": "anyone seen the label printer?"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-002",
+      "tags": [
+        "chatter",
+        "number-noise"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790002405.002405",
+            "user": "U0MIKE0002",
+            "text": "Running 15 min late to the Smith job"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-003",
+      "tags": [
+        "request"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790002442.002442",
+            "user": "U0PRIYA003",
+            "text": "Can someone bring me 2 Disc 40s at Oak Street?"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-004",
+      "tags": [
+        "question"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790002479.002479",
+            "user": "U0LUIS0005",
+            "text": "Do we have any 10G SFPs left?"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-005",
+      "tags": [
+        "future-intent"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002516.002516",
+            "user": "U0SAM0001",
+            "text": "Going to grab 3 ONTs tomorrow morning"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-006",
+      "tags": [
+        "chatter"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002553.002553",
+            "user": "U0SAM0001",
+            "text": "Truck 1 needs an oil change"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-007",
+      "tags": [
+        "chatter"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790002590.002590",
+            "user": "U0DANA0004",
+            "text": "Great work on the Riverside install everyone 🎉"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-008",
+      "tags": [
+        "chatter",
+        "number-noise"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790002627.002627",
+            "user": "U0MIKE0002",
+            "text": "Customer at Smith residence says wifi is slow in the 2 back bedrooms"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-009",
+      "tags": [
+        "chatter"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790002664.002664",
+            "user": "U0DANA0004",
+            "text": "We should order more zip ties"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-010",
+      "tags": [
+        "chatter",
+        "number-noise"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790002701.002701",
+            "user": "U0LUIS0005",
+            "text": "lunch at 12?"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-011",
+      "tags": [
+        "chatter"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790002738.002738",
+            "user": "U0DANA0004",
+            "text": "PSA: new Disc 60 firmware is out, update before installing"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-012",
+      "tags": [
+        "negation"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790002775.002775",
+            "user": "U0MIKE0002",
+            "text": "I did NOT take the 2 APs from receiving, they're still there"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-013",
+      "tags": [
+        "request"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790002812.002812",
+            "user": "U0PRIYA003",
+            "text": "Need 4 drop 300s for Thursday's job, can someone set them aside?"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-014",
+      "tags": [
+        "negation"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002849.002849",
+            "user": "U0SAM0001",
+            "text": "Replaced the customer's own router at Riverside, nothing from our stock"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-015",
+      "tags": [
+        "future-intent"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790002886.002886",
+            "user": "U0LUIS0005",
+            "text": "if the Riverside job goes ahead I'll need 2 Disc 60"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      }
+    },
+    {
+      "id": "negative-016",
+      "tags": [
+        "bot"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0BOT00009",
+        "messages": [
+          {
+            "ts": "1790002923.002923",
+            "user": "U0BOT00009",
+            "text": "Moved 2 x Norvane Disc 40 Access Point to Vehicles/Truck 1.",
+            "is_bot": true
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "A receipt from the connector itself, or a post from any other bot, is never a movement."
+    }
+  ]
+}

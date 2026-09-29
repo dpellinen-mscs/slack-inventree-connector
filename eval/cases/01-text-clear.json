@@ -1,0 +1,869 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "id": "clear-001",
+      "tags": [
+        "brief-example"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790000037.009037",
+            "user": "U0SAM0001",
+            "text": "2 Disc 40 on my truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "Disc 40",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D40"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "'my truck' resolves through the poster's assigned vehicle."
+    },
+    {
+      "id": "clear-002",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790000074.009074",
+            "user": "U0MIKE0002",
+            "text": "returned 1 S8 PoE switch to receiving"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "return",
+            "line_items": [
+              {
+                "item_text": "S8 PoE switch",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SW-NV-8P"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "receiving",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Receiving"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "clear-003",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790000111.009111",
+            "user": "U0PRIYA003",
+            "text": "Took 4 Cat6 patch cables 3 ft from main stock to van 3"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "Cat6 patch cables 3 ft",
+                "quantity": 4,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "CBL-C6-P3"
+                }
+              }
+            ],
+            "source_text": "main stock",
+            "source_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "destination_text": "van 3",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Van 3"
+            },
+            "flags": []
+          }
+        ]
+      },
+      "notes": "Fully explicit: no flags expected."
+    },
+    {
+      "id": "clear-004",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790000148.009148",
+            "user": "U0SAM0001",
+            "text": "Dropped off 1 Skarrow PTP radio at Oak Street Tower from truck 1"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "Skarrow PTP radio",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "RAD-SK-PTP5"
+                }
+              }
+            ],
+            "source_text": "truck 1",
+            "source_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "destination_text": "Oak Street Tower",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Oak Street Tower"
+            },
+            "flags": []
+          }
+        ]
+      },
+      "notes": "The part is trackable, so the resolve step needs a serial. That is not an extraction flag."
+    },
+    {
+      "id": "clear-005",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790000185.009185",
+            "user": "U0DANA0004",
+            "text": "Received 20 Ondrel G1 ONTs into receiving"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "receive",
+            "line_items": [
+              {
+                "item_text": "Ondrel G1 ONTs",
+                "quantity": 20,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "receiving",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Receiving"
+            },
+            "flags": []
+          }
+        ]
+      },
+      "notes": "A receive has no source stock location, so implied_source does not apply."
+    },
+    {
+      "id": "clear-006",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790000222.009222",
+            "user": "U0MIKE0002",
+            "text": "Installed 1 Ondrel AX3000 router at Smith residence, from my truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "consume",
+            "line_items": [
+              {
+                "item_text": "Ondrel AX3000 router",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "RTR-OD-AX"
+                }
+              }
+            ],
+            "source_text": "my truck",
+            "source_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "destination_text": "Smith residence",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Smith Residence"
+            },
+            "flags": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "clear-007",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790000259.009259",
+            "user": "U0SAM0001",
+            "text": "Used 6 RJ45 connectors from truck 1 at Riverside Apartments"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "consume",
+            "line_items": [
+              {
+                "item_text": "RJ45 connectors",
+                "quantity": 6,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "CON-RJ45"
+                }
+              }
+            ],
+            "source_text": "truck 1",
+            "source_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "destination_text": "Riverside Apartments",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Riverside Apartments"
+            },
+            "flags": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "clear-008",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790000296.009296",
+            "user": "U0DANA0004",
+            "text": "Stock count: 14 SFP 1G LX modules in main stock"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "count",
+            "line_items": [
+              {
+                "item_text": "SFP 1G LX modules",
+                "quantity": 14,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SFP-1G-LX"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "main stock",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "flags": []
+          }
+        ]
+      },
+      "notes": "For a count, destination_text is the counted location."
+    },
+    {
+      "id": "clear-009",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790000333.009333",
+            "user": "U0PRIYA003",
+            "text": "Moved 2 UPS 600 from main stock to the trailer"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "UPS 600",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "UPS-600"
+                }
+              }
+            ],
+            "source_text": "main stock",
+            "source_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "destination_text": "trailer",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Trailer"
+            },
+            "flags": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "clear-010",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790000370.009370",
+            "user": "U0MIKE0002",
+            "text": "Returned 3 J-arm mounts from truck 2 to main stock"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "return",
+            "line_items": [
+              {
+                "item_text": "J-arm mounts",
+                "quantity": 3,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "MNT-J-ARM"
+                }
+              }
+            ],
+            "source_text": "truck 2",
+            "source_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "destination_text": "main stock",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "flags": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "clear-011",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790000407.009407",
+            "user": "U0SAM0001",
+            "text": "1 Norvane outdoor mesh AP to Oak Hill Tower"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "Norvane outdoor mesh AP",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-OD"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "Oak Hill Tower",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Oak Hill Tower"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "clear-012",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790000444.009444",
+            "user": "U0DANA0004",
+            "text": "Received 5 boxes of Cat6 riser cable"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "receive",
+            "line_items": [
+              {
+                "item_text": "Cat6 riser cable",
+                "quantity": 5,
+                "unit": "box",
+                "match": {
+                  "status": "matched",
+                  "part": "CBL-C6-RISER"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": null,
+            "flags": [
+              "implied_destination",
+              "pack_unit_ambiguous"
+            ]
+          }
+        ]
+      },
+      "notes": "The text-level flag is raised for any container unit. Validation may clear it, because this part is stocked by the box."
+    },
+    {
+      "id": "clear-013",
+      "tags": [
+        "alias"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790000481.009481",
+            "user": "U0LUIS0005",
+            "text": "Took 2 grounding blocks and 2 NID enclosures to the Smith job from the warehouse"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "grounding blocks",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "GND-BLOCK"
+                }
+              },
+              {
+                "item_text": "NID enclosures",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "NID-ENC"
+                }
+              }
+            ],
+            "source_text": "warehouse",
+            "source_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "destination_text": "Smith job",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Smith Residence"
+            },
+            "flags": []
+          }
+        ]
+      },
+      "notes": "'the warehouse' matches through a confirmed alias, because Warehouse itself is structural."
+    },
+    {
+      "id": "clear-014",
+      "tags": [],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790000518.009518",
+            "user": "U0DANA0004",
+            "text": "moved 20 G1 ONTs from receiving to main stock"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "transfer",
+            "line_items": [
+              {
+                "item_text": "G1 ONTs",
+                "quantity": 20,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": "receiving",
+            "source_match": {
+              "status": "matched",
+              "location": "Warehouse/Receiving"
+            },
+            "destination_text": "main stock",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "flags": []
+          }
+        ]
+      },
+      "notes": "A put-away between warehouse locations is a transfer, not a return."
+    },
+    {
+      "id": "clear-015",
+      "tags": [
+        "article-quantity",
+        "damaged"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790000555.009555",
+            "user": "U0MIKE0002",
+            "text": "dropped a Disc 40 off the ladder, it's toast"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "consume",
+            "line_items": [
+              {
+                "item_text": "Disc 40",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D40"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": null,
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "Damaged stock is consumed. A consume needs no destination."
+    },
+    {
+      "id": "clear-016",
+      "tags": [
+        "serial"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790000592.009592",
+            "user": "U0SAM0001",
+            "text": "1 PTP radio SN SR5-000456 to oak hill tower from truck 1"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "PTP radio",
+                "quantity": 1,
+                "unit": null,
+                "serials": [
+                  "SR5-000456"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "RAD-SK-PTP5"
+                }
+              }
+            ],
+            "source_text": "truck 1",
+            "source_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "destination_text": "oak hill tower",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Oak Hill Tower"
+            },
+            "flags": []
+          }
+        ]
+      },
+      "notes": "A serial typed by a person is not flagged. The resolve step still checks it against InvenTree."
+    },
+    {
+      "id": "clear-017",
+      "tags": [
+        "count",
+        "multi-item"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790000629.009629",
+            "user": "U0DANA0004",
+            "text": "truck 2 count: 3 Disc 40, 1 S8 PoE switch, 0 ONTs"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "count",
+            "line_items": [
+              {
+                "item_text": "Disc 40",
+                "quantity": 3,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-D40"
+                }
+              },
+              {
+                "item_text": "S8 PoE switch",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SW-NV-8P"
+                }
+              },
+              {
+                "item_text": "ONTs",
+                "quantity": 0,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 2",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "flags": []
+          }
+        ]
+      },
+      "notes": "Zero is a valid quantity in a count, and only there."
+    },
+    {
+      "id": "clear-018",
+      "tags": [
+        "number-noise"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790000666.009666",
+            "user": "U0SAM0001",
+            "text": "Ticket 4412: installed 1 G1 ONT at Smith residence at 3pm"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "consume",
+            "line_items": [
+              {
+                "item_text": "G1 ONT",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "Smith residence",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Smith Residence"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "clear-019",
+      "tags": [
+        "alias",
+        "number-noise"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790000703.009703",
+            "user": "U0LUIS0005",
+            "text": "brought back 2 of the 5 drop 150s from Oak Hill to main stock"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "return",
+            "line_items": [
+              {
+                "item_text": "drop 150s",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "FBR-DROP-150"
+                }
+              }
+            ],
+            "source_text": "Oak Hill",
+            "source_match": {
+              "status": "matched",
+              "location": "Job Sites/Oak Hill Tower"
+            },
+            "destination_text": "main stock",
+            "destination_match": {
+              "status": "matched",
+              "location": "Warehouse/Main Stock"
+            },
+            "flags": []
+          }
+        ]
+      },
+      "notes": "Two came back. The other three stay where they are."
+    }
+  ]
+}
