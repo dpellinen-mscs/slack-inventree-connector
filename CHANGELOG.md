@@ -18,6 +18,8 @@ Nothing is released yet. The connector cannot write stock in this state.
 - The core domain model and the request state machine of the apply protocol.
 - Synthetic Slack payload fixtures and signature test vectors.
 - A read-only InvenTree client (GET only), with an API version check.
+- Slack ingest checks: workspace, app, channel allowlist, subtypes, bots, duplicates, and the
+  approver check for Apply, each drop with a reason.
 - A rule-based extractor that needs no LLM. It reads the common one-message shapes and declines
   everything else, and it has zero hard failures on the eval corpus.
 - A validator that derives review reasons by rule: flags that follow from the fields, grounding of
@@ -29,4 +31,6 @@ Nothing is released yet. The connector cannot write stock in this state.
   pick up unfinished events at startup, and stop retrying an event that keeps failing.
 - Integration tests against real InvenTree 1.4.3 and 1.5.6 in Docker, including characterization tests
   of the server behavior the design depends on.
+- Grouping of Slack messages into posts (migration 0003): siblings from the same user within the
+  window, thread replies with their root, in any arrival order; a message never changes post.
 - A threat model, first version (`docs/threat-model.md`).

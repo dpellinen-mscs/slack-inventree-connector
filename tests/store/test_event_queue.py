@@ -221,7 +221,7 @@ def test_a_version_1_file_upgrades(path: Path, monkeypatch: pytest.MonkeyPatch) 
     Store.open(path).close()
     monkeypatch.setattr(store_db, "_migrations", lambda: real)
     upgraded = Store.open(path)
-    assert upgraded.schema_version == 2
+    assert upgraded.schema_version == len(real)
     upgraded.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
     assert upgraded.enqueue_event("Ev1", "event", BODY)
     upgraded.close()
