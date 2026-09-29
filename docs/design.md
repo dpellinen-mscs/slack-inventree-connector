@@ -155,8 +155,20 @@ needs.
 - **Filtering.** The first check in every listener is the channel
   allowlist. An empty allowlist means the connector acts nowhere. Message
   subtypes are handled by allowlist: plain messages, file shares and thread
-  broadcasts. Any message with a `bot_id` is dropped, which also stops the
-  connector from reacting to its own posts.
+  broadcasts, plus edits and deletions, which become their own values and
+  never write by themselves. Any message with a `bot_id`, or an edit of
+  one, is dropped, which also stops the connector from reacting to its own
+  posts. `slack/ingest.py` implements these checks as a pure function that
+  gives every drop a reason. The deduplication there is in memory; the
+  durable queue takes it over.
+- **Shared channels.** A message or click from a user of another
+  organization (Slack Connect) is dropped as `wrong_workspace`. Enterprise
+  Grid org installs are not supported yet: `workspace_id` must be a `T` id.
+- **Clicks at ingest.** Only the connector's own buttons on a message are
+  accepted. Only an approver may click Apply, and ingest drops any other
+  user's Apply click. Other buttons (answers, corrections, Undo)
+  may come from the poster, so ingest passes them on with the user id, and
+  review checks the user against the stored button row.
 - **Catch-up after downtime.** Slack does not replay events that were
   missed while the connector was down. At startup and after a reconnect,
   the connector reads the history of each allowlisted channel from the last
