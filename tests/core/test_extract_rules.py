@@ -105,6 +105,57 @@ def test_clear_non_movements_are_not_declined(text: str) -> None:
         "took 1,5 ONTs from shop to truck 1",
         "took 2 million ONTs from shop to truck 1",
         "took sixty five ONTs from shop to truck 1",
+        # A line after the first is unread, so nothing is (review 2 of #31): _clean folds newlines.
+        "Sam's truck:\n2 Disc 40\n3 Disc 60",
+        "took 3 ONTs from shop to truck 1\n2 SFPs too",
+        "took 3 ONTs from shop to truck 1\nnvm",
+        "took 3 ONTs from shop to truck 1.\n2 SFPs too",
+        "took 3 ONTs from shop to truck 1\r\nnvm",
+        "took 3 ONTs from shop to truck 1\u2028nvm",
+        # "doz", "half dozen": the first number is not the quantity.
+        "took 3 doz zip ties to truck 1",
+        "took 3 dz zip ties to truck 1",
+        "took a half dozen zip ties to truck 1",
+        # A time ahead after a movement verb: the take may have happened.
+        "grabbed 3 ONTs from shop for the job tomorrow",
+        # A verb after the item names the movement.
+        "2 ONTs installed at smith job",
+        "2 ONTs used at smith job",
+        "2 ONTs swapped at smith job",
+        # Adversarial review of the fixes above: a serial ends its item, or nothing is read.
+        "took 2 USB serial 1000 adapters to truck 1",
+        "took 1 serial 2000 series switch to truck 1",
+        "took 2 serial 1234 cables to truck 1",
+        "took 2 ONTs sn 1234 5678 to smith",
+        "took 2 ONTs sn 1234, 5678 to smith",
+        # Any past-tense verb, known or not, with a time ahead: the take may have happened.
+        "Picked up 3 ONTs from shop for tomorrow",
+        "Restocked van 2 with 4 Disc 40 for tomorrow",
+        "stocked truck 1 with 6 ONTs tonight",
+        "took 2 ONTs to truck 1 tmrw",
+        "took 2 ONTs to truck 1 tonite",
+        "took 2 ONTs for tmrw's job",
+        # A word after the item that says its state or what happened to it.
+        "2 ONTs broken on truck 1",
+        "2 ONTs found in truck 1",
+        "2 ONTs sitting on truck 1",
+        "2 ONTs spare on truck 1",
+        "2 ONTs DOA at smith job",
+        "2 ONTs delivered at smith job",
+        "2 ONTs back ordered on truck 1",
+        "put 2 ONTs back on truck 1",
+        # About, not exactly.
+        "took 5+ ONTs to truck 1",
+        "took 5-ish ONTs to truck 1",
+        "took 20-something ONTs to truck 1",
+        "took 10 odd ONTs to truck 1",
+        "took 2 lots of cable to truck 1",
+        "took 2 ONTs x 3 to truck 1",
+        # A correction inside the place.
+        "took 2 ONTs to truck 1 sorry meant truck 2",
+        "took 2 ONTs to truck 1 *truck 2",
+        "took 2 ONTs to truck 1 ~truck 3~",
+        "took 2 ONTs to truck 1 - 1 was DOA",
     ],
 )
 def test_what_it_cannot_read_is_declined_not_guessed(text: str) -> None:
@@ -161,6 +212,36 @@ def test_a_sentence_with_instructions_is_never_read() -> None:
 )
 def test_quantities_units_and_serials(text: str, item: LineItem) -> None:
     assert movement(text).line_items == (item,)
+
+
+@pytest.mark.parametrize(
+    ("text", "item"),
+    [
+        ("took 2 USB serial adapters from shop to truck 1", LineItem("USB serial adapters", Decimal(2))),
+        ("took 2 serial cables from shop to truck 1", LineItem("serial cables", Decimal(2))),
+        ("took 2 snap-in keystones from shop to truck 1", LineItem("snap-in keystones", Decimal(2))),
+        ("took 1 ONT sn AB12CD from shop to truck 1", LineItem("ONT", Decimal(1), serials=("AB12CD",))),
+        ("took 1 ONT s/n 4411-7 from shop to truck 1", LineItem("ONT", Decimal(1), serials=("4411-7",))),
+        ("took 1 ONT serial # ZX9Q from shop to truck 1", LineItem("ONT", Decimal(1), serials=("ZX9Q",))),
+        ("took 1 ONT serial 88123 from shop to truck 1", LineItem("ONT", Decimal(1), serials=("88123",))),
+    ],
+)
+def test_a_serial_needs_a_label_and_a_digit(text: str, item: LineItem) -> None:
+    assert movement(text).line_items == (item,)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["took a bunch of ONTs to truck 1", "took a lot of ONTs to truck 1", "took lots of ONTs to truck 1"],
+)
+def test_a_bunch_is_a_vague_quantity_not_one(text: str) -> None:
+    found = movement(text)
+    assert found.line_items == (LineItem("ONTs", None),)
+    assert Flag.QUANTITY_VAGUE in found.flags
+
+
+def test_a_time_ahead_is_never_read_as_not_a_movement() -> None:
+    assert one("grab 3 ONTs for the job tomorrow").declined
 
 
 def test_flags_follow_from_the_fields() -> None:

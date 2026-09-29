@@ -37,15 +37,23 @@ _SENSITIVE = re.compile(
 )
 _NOT_A_MOVEMENT = re.compile(
     r"\?|\b(can|could|would) (some|any)one\b|\b(can|could) you\b|\bneeds?\b|\bplease\b|\bshould\b|\bset \w+ aside\b"
-    r"|\b(going to|gonna|i'll|tomorrow|tonight|later today|next week)\b|^if\b|, if\b"
+    r"|\b(going to|gonna|i'll)\b|^if\b|, if\b"
     r"|\b(i|we|he|she|they|you|someone|who) will\b|\bwill (be|take|grab|bring|need|get|pick|drop|return|load|use)\b"
     r"|\b(not|never|nothing|no longer|didn't|did not|wasn't|haven't|scratch that|actually no|put (them|it) back)\b",
     re.IGNORECASE,
 )
+_LATER = r"tomorrow|tmrw?|2mo?r+ow|tonight|tonite|later today|next week"
+"""A time ahead. Never read as "not a movement": "grabbed 3 ONTs for the job tomorrow" and "picked up 3 ONTs for
+tomorrow" are takes that happened, and no list of past-tense verbs is complete, so the post is declined."""
 _SLACK_MARKUP = re.compile(r"<[@#!][^>]*>|:[a-z0-9_+-]+:")
 _TICKET = re.compile(r"^(ticket|job|wo|work order)\s*#?\d+\s*[:,-]\s*", re.IGNORECASE)
 _TIME = re.compile(r"\bat \d{1,2}(:\d{2})?\s*(am|pm)\b", re.IGNORECASE)
-_SERIAL = re.compile(r"\b(?:sn|s/n|serial)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{3,})\b", re.IGNORECASE)
+_SERIAL = re.compile(
+    r"(?<![\w/-])(?:s/?n\b\s*[:#]?|serial\s*[:#]|serial\s+(?=\d))\s*((?=[A-Z0-9-]*\d)[A-Z0-9][A-Z0-9-]{3,})\b",
+    re.IGNORECASE,
+)
+"""A serial after a label: "SN SR5-000456", "s/n: 123-AB", "serial # AB12", "serial 1234". A serial holds a digit,
+and the word "serial" needs a ":", "#" or a digit after it: "USB serial adapters" and "snap-in" hold none."""
 
 
 class _Verb(Enum):
@@ -92,11 +100,11 @@ _NUMBER = r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
 _LIST_COMMA = r"(?<!\d),|,(?!\d)"
 """A comma between digits never separates items: "1,500" is one number, and "1,5" is declined."""
 _MULTIPLIER = re.compile(
-    rf"(?i)\s*((dozen|score|gross|hundreds?|thousands?|millions?|grand|k|{'|'.join(_NUMBERS)})\b|\d*\s*[/\u2044])"
+    rf"(?i)\s*((dozen|doz|dz|half|score|gross|hundreds?|thousands?|millions?|grand|k|{'|'.join(_NUMBERS)})\b|\d*\s*[/\u2044])"
 )
-"""A number word or a fraction after a quantity: "two dozen", "twenty five", "a hundred", "10 ½". Never guessed.
-A digit may follow ("1 16 port switch"), so "2 12 ONTs" reads as 2 of an item named "12 ONTs", which the
-matcher must find."""
+"""A number word or a fraction after a quantity: "two dozen", "3 doz", "a half dozen", "twenty five", "a hundred",
+"10 ½". Never guessed. A digit may follow ("1 16 port switch" reads as 1 of "16 port switch"); a digit before a
+plural is a second item ("2 12 ONTs" declines, see `_second_item`)."""
 
 _NOT_STOCK = re.compile(
     r"\b(sec(ond)?|min(ute)?|hour|hr|day|week|month|year|while|time|pto|lunch|break|meeting|call|update|complaint"
@@ -106,7 +114,7 @@ _NOT_STOCK = re.compile(
 """Words that name time, people or events, or a report of what is left: "3 hours at the Smith job",
 "2 ONTs left on truck 1" are not movements."""
 _NOT_A_PLACE = re.compile(
-    r"\b(today|tonight|tomorrow|yesterday|morning|afternoon|lol|jk|haha|kidding|maybe|\d{1,2}(:\d{2})?\s*(am|pm))\b"
+    rf"\b({_LATER}|today|yesterday|morning|afternoon|lol|jk|haha|kidding|maybe|\d{1, 2}(:\d{2})?\s*(am|pm))\b"
     r"|^(find|get|see|check|fix|help|do|make|go)\b",
     re.IGNORECASE,
 )
@@ -152,8 +160,12 @@ def extract(messages: Sequence[MessageInput]) -> Extraction:
     if len(live) > 1 or live[0].file_ids:
         return Extraction(EXTRACTOR, (), flags, declined=True)
     text = _clean(live[0].text)
+    if len(live[0].text.strip().splitlines()) > 1:
+        return Extraction(EXTRACTOR, (), flags, declined=True)  # lists, and a line after the movement
     if _NOT_A_MOVEMENT.search(text):
         return Extraction(EXTRACTOR, (), flags)
+    if re.search(rf"(?i)\b({_LATER})\b", text):
+        return Extraction(EXTRACTOR, (), flags, declined=True)
     try:
         movement = _movement(text)
     except _Decline:
@@ -173,8 +185,8 @@ def _clean(text: str) -> str:
 
 
 def _movement(text: str) -> CandidateMovement:
-    if "\n" in text or re.search(rf"(?i)\b({_OTHER_VERBS})\b.*\b({_OTHER_VERBS})\b", text):
-        raise _Decline  # lists, and a second movement
+    if re.search(rf"(?i)\b({_OTHER_VERBS})\b.*\b({_OTHER_VERBS})\b", text):
+        raise _Decline  # a second movement
     if found := re.fullmatch(r"(?i)(.*?)\b(?:stock ?)?count\s*:\s*(.+)", text):
         return _count(found.group(1), found.group(2))
     if re.search(r"(?i)\bcount", text):
@@ -213,9 +225,10 @@ def _load(header: str, rest: str) -> CandidateMovement:
 def _candidate(
     movement_type: MovementType, items_text: str, source: str | None, destination: str | None, *, zero: bool = False
 ) -> CandidateMovement:
-    read = [
-        _line_item(part, zero) for part in re.split(rf"{_LIST_COMMA}|\s+(?:and|\+|&)\s+", items_text) if part.strip()
-    ]
+    parts = [part for part in re.split(rf"{_LIST_COMMA}|\s+(?:and|\+|&)\s+", items_text) if part.strip()]
+    if len(parts) > 1 and _SERIAL.search(items_text):
+        raise _Decline  # "ONTs sn 1234, 5678": a list of serials, or of items? Unread.
+    read = [_line_item(part, zero) for part in parts]
     if not read:
         raise _Decline
     items = tuple(item for item, _ in read)
@@ -237,6 +250,8 @@ def _verb(text: str) -> tuple[_Verb | None, str]:
     counted = re.match(rf"(?:{'|'.join(_CONTAINERS)}) of \d", lowered)  # "box of 100 rj45s"
     if not (re.match(r"\d", first) or first in _NUMBERS or counted):
         raise _Decline  # "Priya took ...", "router installed", "fyi ...", "the job went fine on truck 1"
+    if re.search(rf"(?i)\b({_OTHER_VERBS})\b", text):
+        raise _Decline  # "2 ONTs installed at smith job": the verb after the item names the movement
     return None, text
 
 
@@ -265,12 +280,21 @@ def _places(rest: str) -> tuple[str, str | None, str | None]:
 _SIGN_OFF = re.compile(r"(?i)(thanks|thx|ty|thank you|cheers)?")
 """What may follow a comma after a location without being a second statement."""
 _MORE_THAN_A_PLACE = re.compile(
-    r"(?i)\s(and|with|w/|but|then|minus|plus|instead|except|or|so|because|since|until|after|before|when)\s|[()]"
+    r"(?i)\s(and|with|w/|but|then|minus|plus|instead|except|or|so|because|since|until|after|before|when"
+    r"|sorry|meant|oops|wait|nvm|actually)\s|[()*~]|\s-\s"
 )
+"""A second clause or a correction inside a place: "truck 1 but 2 were DOA", "truck 1 sorry meant truck 2",
+"truck 1 *truck 2", "truck 1 - 1 was DOA"."""
 _MORE_THAN_AN_ITEM = re.compile(
-    r"(?i)\s(with|w/|plus|but|then|minus|instead|except|or)\s|[()/\u2044]|\b\d+\s+([a-z]\w*)"
+    r"(?i)\s(with|w/|plus|but|then|minus|instead|except|or)\s|[()/\u2044]|\bx\s*\d|\b\d+\s+([a-z]\w*)"
 )
-"""A second item or clause inside an item: "ONTs with 2 SFPs", "ONTs/3 SFPs", "ONTs 3 SFPs"."""
+"""A second item or clause inside an item: "ONTs with 2 SFPs", "ONTs/3 SFPs", "ONTs 3 SFPs", "ONTs x 3"."""
+_STATE_WORDS = re.compile(
+    r"(?i)\b(broken|bad|dead|doa|damaged|defective|faulty|busted|fried|found|sitting|spare|extra|out|back|missing"
+    r"|ordered|backordered|delivered|went|install|needed|swapped|replaced|returned|received)$"
+)
+"""A last word that says what state an item is in or what happened to it, not what it is: "2 ONTs broken on
+truck 1", "2 ONTs DOA at smith job", "put 2 ONTs back on truck 1" (a return, not a take)."""
 
 
 def _place(text: str) -> str | None:
@@ -321,6 +345,8 @@ def _line_item(text: str, zero: bool = False) -> tuple[LineItem, bool]:
     """One item, and whether its quantity is vague. Zero is a quantity only in a count (`zero`)."""
     text = text.strip()
     serials = tuple(_SERIAL.findall(text))
+    if (labelled := _SERIAL.search(text)) and _SERIAL.sub("", text[labelled.start() :]).strip():
+        raise _Decline  # "sn 1234 5678", "serial 2000 series switch": a serial ends the item, or it is unread
     text = _SERIAL.sub("", text).strip()
     quantity, rest = _quantity(text)
     if _MULTIPLIER.match(rest):
@@ -329,7 +355,7 @@ def _line_item(text: str, zero: bool = False) -> tuple[LineItem, bool]:
     item = rest.strip(" ,;:-") or None
     if item is not None and (not re.search(r"\w", item) or "," in item or _NOT_STOCK.search(item)):
         raise _Decline
-    if item is not None and _second_item(item):
+    if item is not None and (_second_item(item) or _STATE_WORDS.search(item) or re.match(r"(?i)lots?\b", item)):
         raise _Decline
     if quantity.value == 0 and not zero:
         raise _Decline
@@ -345,6 +371,10 @@ def _quantity(text: str) -> tuple[_Quantity, str]:
         (r"a pair of\b", _Quantity(Decimal(2))),
         (r"a couple( of)?\b", _Quantity(Decimal(2), vague=True)),
         (r"(some|a few|several)\b", _Quantity(None, vague=True)),
+        (
+            r"(an? (bunch|lot|ton|handful|pile|load|bit|number)|lots|tons|loads|bunches) of\b",
+            _Quantity(None, vague=True),
+        ),
         (rf"{_NUMBER}\s*-\s*{_NUMBER}\b", _Quantity(None, vague=True)),
     ]
     for pattern, quantity in patterns:
@@ -360,6 +390,8 @@ def _quantity(text: str) -> tuple[_Quantity, str]:
         return _unit(_Quantity(_decimal(found.group(1)), vague=True), text[found.end() :])
     if re.match(r"\d{1,3}\.\d{3}(?!\d)|\d+\s*x\s*\d", lowered):
         raise _Decline  # "2.000 ONTs" (two, or two thousand?), "2 x 3 ONTs"
+    if re.match(rf"{_NUMBER}\s*(\+|-?\s*ish\b|-?\s*something\b|odd\b|or so\b)", lowered):
+        raise _Decline  # "5+ ONTs", "5-ish", "20-something", "10 odd": about, not exactly
     if found := re.match(rf"{_NUMBER}\s*x?\b", lowered):
         quantity = _Quantity(_decimal(found.group(1)))
         rest = re.sub(r"(?i)^\s*of the \d+\b", "", text[found.end() :])  # "2 of the 5"
