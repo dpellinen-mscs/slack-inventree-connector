@@ -37,7 +37,8 @@ _SENSITIVE = re.compile(
 )
 _NOT_A_MOVEMENT = re.compile(
     r"\?|\b(can|could|would) (some|any)one\b|\b(can|could) you\b|\bneeds?\b|\bplease\b|\bshould\b|\bset \w+ aside\b"
-    r"|\b(going to|gonna|will|i'll|tomorrow|tonight|later today|next week)\b|^if\b|, if\b"
+    r"|\b(going to|gonna|i'll|tomorrow|tonight|later today|next week)\b|^if\b|, if\b"
+    r"|\b(i|we|he|she|they|you|someone|who) will\b|\bwill (be|take|grab|bring|need|get|pick|drop|return|load|use)\b"
     r"|\b(not|never|nothing|no longer|didn't|did not|wasn't|haven't|scratch that|actually no|put (them|it) back)\b",
     re.IGNORECASE,
 )
@@ -85,14 +86,20 @@ _NUMBERS = {
 _EACH = {"each", "ea", "pc", "pcs", "piece", "pieces", "unit", "units", "x"}
 _CONTAINERS = {"box", "bag", "pack", "case", "roll", "spool", "bundle", "carton", "pallet"}
 _LENGTHS = {"ft": "ft", "feet": "ft", "foot": "ft", "m": "m", "meter": "m", "meters": "m", "metre": "m", "metres": "m"}
-_NUMBER = r"(\d+(?:\.\d+)?)"
+_NUMBER = r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
+"""A number as written: "1,500" is fifteen hundred (a comma between digit groups is not a list comma)."""
+_LIST_COMMA = r",(?!\d{3}(?!\d))"
+_MULTIPLIER = re.compile(rf"(?i)\s*(dozen|score|gross|hundreds?|thousands?|k|{'|'.join(_NUMBERS)})\b")
+"""A number word after a quantity: "two dozen", "twenty five", "a hundred". Never guessed. A digit may follow
+("1 16 port switch"), so "2 12 ONTs" reads as 2 of an item named "12 ONTs", which the matcher must find."""
 
 _NOT_STOCK = re.compile(
     r"\b(sec(ond)?|min(ute)?|hour|hr|day|week|month|year|while|time|pto|lunch|break|meeting|call|update|complaint"
-    r"|guy|people|folks|customer|ticket|more|floor|trip|mile)s?\b",
+    r"|guy|people|folks|customer|ticket|more|floor|trip|mile|left|still|remaining|leftover)s?\b",
     re.IGNORECASE,
 )
-"""Words that name time, people or events: "3 hours at the Smith job" is not stock."""
+"""Words that name time, people or events, or a report of what is left: "3 hours at the Smith job",
+"2 ONTs left on truck 1" are not movements."""
 _NOT_A_PLACE = re.compile(
     r"\b(today|tonight|tomorrow|yesterday|morning|afternoon|lol|jk|haha|kidding|maybe|\d{1,2}(:\d{2})?\s*(am|pm))\b"
     r"|^(find|get|see|check|fix|help|do|make|go)\b",
@@ -201,7 +208,9 @@ def _load(header: str, rest: str) -> CandidateMovement:
 def _candidate(
     movement_type: MovementType, items_text: str, source: str | None, destination: str | None, *, zero: bool = False
 ) -> CandidateMovement:
-    read = [_line_item(part, zero) for part in re.split(r",|\s+(?:and|\+|&)\s+", items_text) if part.strip()]
+    read = [
+        _line_item(part, zero) for part in re.split(rf"{_LIST_COMMA}|\s+(?:and|\+|&)\s+", items_text) if part.strip()
+    ]
     if not read:
         raise _Decline
     items = tuple(item for item, _ in read)
@@ -249,8 +258,11 @@ def _places(rest: str) -> tuple[str, str | None, str | None]:
 
 
 def _place(text: str) -> str | None:
-    """Location text as written, without a leading article or what follows a comma."""
-    text = re.split(r"[,;.!]", text, maxsplit=1)[0].strip()
+    """Location text as written, without a leading article. Declines when anything follows a comma."""
+    text, *after = re.split(r"[,;.!]", text, maxsplit=1)
+    if after and after[0].strip(" ,;.!"):
+        raise _Decline  # "truck 1, jk", "truck 1, 2 SFPs too": what follows is unread, so nothing is
+    text = text.strip()
     text = re.sub(r"(?i)^the\s+", "", text)
     if re.search(r"(?i)\s(and|with|w/)\s", f" {text} ") or _NOT_A_PLACE.search(text):
         raise _Decline
@@ -295,9 +307,11 @@ def _line_item(text: str, zero: bool = False) -> tuple[LineItem, bool]:
     serials = tuple(_SERIAL.findall(text))
     text = _SERIAL.sub("", text).strip()
     quantity, rest = _quantity(text)
+    if _MULTIPLIER.match(rest):
+        raise _Decline  # "two dozen", "twenty five", "a hundred feet": the first number is not the quantity
     rest = re.sub(r"(?i)^of\s+", "", rest.strip())
     item = rest.strip(" ,;:-") or None
-    if item is not None and (not re.search(r"\w", item) or _NOT_STOCK.search(item)):
+    if item is not None and (not re.search(r"\w", item) or "," in item or _NOT_STOCK.search(item)):
         raise _Decline
     if quantity.value == 0 and not zero:
         raise _Decline
@@ -321,13 +335,13 @@ def _quantity(text: str) -> tuple[_Quantity, str]:
     if found := re.match(rf"half an? ({'|'.join(_CONTAINERS)})\b", lowered):
         return _Quantity(Decimal("0.5"), found.group(1)), text[found.end() :]
     if found := re.match(rf"an? {_NUMBER}[- ](?:piece|pc|pack|count|ct) ({'|'.join(_CONTAINERS)})\b", lowered):
-        return _Quantity(Decimal(1), found.group(2), Decimal(found.group(1))), text[found.end() :]
+        return _Quantity(Decimal(1), found.group(2), _decimal(found.group(1))), text[found.end() :]
     if found := re.match(rf"(?:an? )?({'|'.join(_CONTAINERS)}) of {_NUMBER}\b", lowered):
-        return _Quantity(Decimal(1), found.group(1), Decimal(found.group(2))), text[found.end() :]
+        return _Quantity(Decimal(1), found.group(1), _decimal(found.group(2))), text[found.end() :]
     if found := re.match(rf"(?:about|around|approx\.?|~)\s*{_NUMBER}\b", lowered):
-        return _unit(_Quantity(Decimal(found.group(1)), vague=True), text[found.end() :])
+        return _unit(_Quantity(_decimal(found.group(1)), vague=True), text[found.end() :])
     if found := re.match(rf"{_NUMBER}\s*x?\b", lowered):
-        quantity = _Quantity(Decimal(found.group(1)))
+        quantity = _Quantity(_decimal(found.group(1)))
         rest = re.sub(r"(?i)^\s*of the \d+\b", "", text[found.end() :])  # "2 of the 5"
         return _unit(quantity, rest)
     first = lowered.split(" ", 1)[0]
@@ -356,6 +370,10 @@ def _unit(quantity: _Quantity, rest: str) -> tuple[_Quantity, str]:
     if word in _LENGTHS:
         return _Quantity(quantity.value, _LENGTHS[word], quantity.pack_size, quantity.vague), after
     return quantity, rest
+
+
+def _decimal(number: str) -> Decimal:
+    return Decimal(number.replace(",", ""))
 
 
 def _plural(text: str) -> bool:
