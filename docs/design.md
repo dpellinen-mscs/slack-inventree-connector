@@ -660,7 +660,7 @@ the test suite.
 | `test_char_notes_length` | Notes of 20,000 characters are stored whole (SQLite; PostgreSQL not measured yet) |
 | `test_char_multi_item_request_is_atomic` | One bad line fails the whole request |
 | `test_char_restricted_user_can_adjust` | The documented minimum roles are enough |
-| `test_char_concurrent_transfers_same_item` | Two simultaneous transfers never move more than the item held. On SQLite one answers 201 and the other a 5xx that wrote nothing |
+| `test_char_concurrent_transfers_same_item` | Two simultaneous transfers never move more than the item held. On SQLite, colliding requests give one 201 and one 5xx that wrote nothing. Requests handled one after the other give two 201s, and the second moves only what was left: a 201 can move less than asked, so read-back must compare the delta with the plan |
 | `test_char_transfer_does_not_merge` | A transfer to a location that holds the same part leaves separate items (server-wide merge setting off) |
 | `test_char_transfer_merge_setting_on` | The server-wide merge setting does not merge a line that omits `merge` or sends `false`; only `merge: true` merges (1.5.6) |
 | `test_char_stock_list_cascade_false` | A stock list with `cascade=false` leaves out sub-locations |

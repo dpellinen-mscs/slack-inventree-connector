@@ -211,7 +211,11 @@ def test_char_transfer_does_not_merge(api: RawApi, scratch: Scratch) -> None:
 
 MERGE_SETTING = "/api/settings/global/STOCK_MERGE_ON_TRANSFER/"
 MERGE_FROM = 530
-"""Measured: API 511 (1.4.3) has no merge setting and ignores `merge` on a transfer line; API 530 (1.5.6) has both."""
+"""Measured: API 511 (1.4.3) has no merge setting and ignores `merge` on a transfer line; API 530 (1.5.6) has both.
+
+The research puts the `merge` field at API 512 (1.5.0). Versions 512 to 529 are not measured, so 530 is the first
+measured version, not the true boundary.
+"""
 
 
 def test_char_transfer_merge_setting_on(api: RawApi, scratch: Scratch) -> None:
@@ -267,8 +271,11 @@ def test_char_notes_length(api: RawApi, scratch: Scratch) -> None:
 def test_char_concurrent_transfers_same_item(api: RawApi, scratch: Scratch) -> None:
     """Two simultaneous transfers of 4 from an item of 5 never move more than the item held.
 
-    Measured on SQLite (one server process): one answers 201, the other a 5xx that wrote nothing. A 5xx is an
-    unknown outcome for the connector (design section 7); recovery then finds no marker for it.
+    Measured on SQLite (one server process): when the requests collide, one answers 201 and the other a 5xx that
+    wrote nothing. A 5xx is an unknown outcome for the connector (design section 7); recovery then finds no marker.
+    When the server handles them one after the other, both answer 201 and the second moves only the 1 left
+    (an over-quantity transfer moves the whole item, `test_char_over_quantity_transfer`). A 201 that moved less
+    than asked is what the connector's read-back must catch.
     """
     item = scratch.stock(5)
     destinations = {"first": scratch.child, "second": scratch.other}
@@ -296,7 +303,7 @@ def test_char_concurrent_transfers_same_item(api: RawApi, scratch: Scratch) -> N
     assert held(scratch.parent) + sum(moved.values()) == 5
     for name, status in statuses.items():
         if status == 201:
-            assert moved[name] == 4
+            assert 0 < moved[name] <= 4, moved
             assert search(api, markers[name]) != []
         else:
             assert status >= 500, statuses
