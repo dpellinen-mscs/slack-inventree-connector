@@ -56,6 +56,7 @@ TRANSITIONS: dict[tuple[RequestState, RequestState], frozenset[Actor]] = {
     (S.APPROVED, S.APPLYING): frozenset({A.APPLIER}),
     (S.APPROVED, S.PLANNED): frozenset({A.APPLIER}),  # a precondition failed: back to review
     (S.APPROVED, S.VERIFY_FAILED): frozenset({A.APPLIER}),  # the marker is already present
+    (S.APPROVED, S.CANCELLED): frozenset({A.PLANNER}),  # the plan became stale before the write started
     (S.APPLYING, S.APPLIED): frozenset({A.APPLIER}),
     (S.APPLYING, S.FAILED): frozenset({A.APPLIER}),
     (S.APPLYING, S.UNKNOWN): frozenset({A.APPLIER}),

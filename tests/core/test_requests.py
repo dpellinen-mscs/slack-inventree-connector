@@ -26,7 +26,7 @@ A = Actor
 # state machine must change both, on purpose.
 DESIGN_TABLE: dict[RequestState, set[RequestState]] = {
     S.PLANNED: {S.APPROVED, S.REJECTED, S.CANCELLED, S.EXPIRED},
-    S.APPROVED: {S.APPLYING, S.PLANNED, S.VERIFY_FAILED},
+    S.APPROVED: {S.APPLYING, S.PLANNED, S.VERIFY_FAILED, S.CANCELLED},
     S.APPLYING: {S.APPLIED, S.FAILED, S.UNKNOWN},
     S.FAILED: {S.APPROVED},
     S.UNKNOWN: {S.APPLIED, S.FAILED, S.VERIFY_FAILED},
@@ -101,8 +101,11 @@ def test_recovery_acts_only_on_unknown_outcomes() -> None:
 
 def test_only_the_applier_sends_or_concludes_a_write() -> None:
     for (source, target), actors in TRANSITIONS.items():
+        if (source, target) == (S.APPROVED, S.CANCELLED):
+            continue  # nothing was sent: a stale plan withdraws its approval
         if source in (S.APPROVED, S.APPLYING, S.APPLIED, S.UNDOING) and target != S.UNDOING:
             assert actors == {A.APPLIER}, (source, target)
+    assert TRANSITIONS[(S.APPROVED, S.CANCELLED)] == {A.PLANNER}
 
 
 def test_check_transition_allows_every_listed_edge() -> None:
