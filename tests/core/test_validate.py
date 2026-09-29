@@ -59,6 +59,7 @@ def test_post_flags_add_reasons_but_sensitive_is_not_one() -> None:
     [
         ("took 2 Disc 40 from main stock to truck 1?", "question or request"),
         ("will take 2 Disc 40 from main stock to truck 1", "plan or condition"),
+        ("took 2 Disc 40 from main stock to truck 1 for tmrw", "a time ahead"),
         ("did not take 2 Disc 40 from main stock to truck 1", "negation"),
         ("I think I took 2 Disc 40 from main stock to truck 1", "hedge"),
     ],

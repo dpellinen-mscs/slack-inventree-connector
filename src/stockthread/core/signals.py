@@ -24,12 +24,17 @@ QUESTION_OR_REQUEST = re.compile(
     r"\?|\b(can|could|would) (some|any)one\b|\b(can|could) you\b|\bneeds?\b|\bplease\b|\bshould\b|\bset \w+ aside\b",
     re.IGNORECASE,
 )
+LATER_WORDS = r"tomorrow|tmrw?|2mo?r+ow|tonight|tonite|later today|next week"
+LATER = re.compile(rf"\b({LATER_WORDS})\b", re.IGNORECASE)
+"""A time ahead. The extractor never reads it as "not a movement": "grabbed 3 ONTs for the job tomorrow" and
+"picked up 3 ONTs for tomorrow" are takes that happened, and no list of past-tense verbs is complete."""
 PLAN_OR_CONDITION = re.compile(
-    r"\b(going to|gonna|i'll|tomorrow|tonight|later today|next week|want to|wanna|about to|plan(ning)? to)\b"
+    r"\b(going to|gonna|i'll|want to|wanna|about to|plan(ning)? to)\b"
     r"|\b(i|we|he|she|they|you|someone|who) will\b|\bwill (be|take|grab|bring|need|get|pick|drop|return|load|use)\b"
     r"|^if\b|, if\b",
     re.IGNORECASE,
 )
+"""A plan or a condition. A time ahead is `LATER`, which is not a plan by itself."""
 NEGATION = re.compile(
     r"\b(not|never|nothing|no longer|didn't|didnt|did not|don't|dont|wasn't|haven't|scratch that|actually no"
     r"|put (them|it) back|nvm|never ?mind|cancel(led)?|wrong|oops|undo)\b(?!-)",

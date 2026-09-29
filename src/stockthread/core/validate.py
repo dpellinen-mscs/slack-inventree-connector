@@ -29,6 +29,7 @@ from stockthread.core.signals import (
     CONTAINERS,
     CORRECTION,
     HEDGE,
+    LATER,
     MENTION,
     NEGATION,
     NUMBER_WORDS,
@@ -156,6 +157,7 @@ def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     for pattern, detail in (
         (QUESTION_OR_REQUEST, "question or request"),
         (PLAN_OR_CONDITION, "plan or condition"),
+        (LATER, "a time ahead"),
         (NEGATION, "negation"),
         (HEDGE, "hedge"),
     ):
