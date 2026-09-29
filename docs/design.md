@@ -705,7 +705,12 @@ are frozen: a photo with a caption arrives as one message, and the app
 receives events only from channels it is a member of.
 
 A fault proxy between the connector and InvenTree delays, drops and
-corrupts responses. It drives the tests for unknown outcomes, including
+corrupts responses (`tests/support/faultproxy.py`). Each fault happens
+either before the request reaches the server or after the server answered.
+`test_char_failure_seen_by_client_hides_committed_transfer` shows that a
+client timeout, a lost connection, a proxy error page and a cut body can
+each hide a transfer that committed. The proxy drives the M3 tests for
+unknown outcomes, including
 `test_late_commit_after_client_timeout_never_double_applies`.
 
 ## 12. Configuration
