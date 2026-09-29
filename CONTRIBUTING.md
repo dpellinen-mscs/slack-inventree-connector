@@ -31,7 +31,10 @@ tests/integration/start-inventree.sh --stop
 ```
 
 The script starts InvenTree on port 8000 with a throwaway admin account,
-and writes an API token to a file. It never prints the token. The tests
+and writes an API token to a file. It never prints the token. Set
+`STOCKTHREAD_IT_DB=postgres` before starting it to run InvenTree on
+PostgreSQL instead of SQLite; the `.it.env` file passes the setting on to
+the tests. The tests
 create and move stock, so never point them at a real server.
 
 ## Ground rules

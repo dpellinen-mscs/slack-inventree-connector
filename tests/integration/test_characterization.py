@@ -213,7 +213,11 @@ def test_char_transfer_does_not_merge(api: RawApi, scratch: Scratch) -> None:
 
 MERGE_SETTING = "/api/settings/global/STOCK_MERGE_ON_TRANSFER/"
 MERGE_FROM = 530
-"""Measured: API 511 (1.4.3) has no merge setting and ignores `merge` on a transfer line; API 530 (1.5.6) has both."""
+"""Measured: API 511 (1.4.3) has no merge setting and ignores `merge` on a transfer line; API 530 (1.5.6) has both.
+
+The research puts the `merge` field at API 512 (1.5.0). Versions 512 to 529 are not measured, so 530 is the first
+measured version, not the true boundary.
+"""
 
 
 def test_char_transfer_merge_setting_on(api: RawApi, scratch: Scratch) -> None:
@@ -256,6 +260,12 @@ DB = os.environ.get("STOCKTHREAD_IT_DB", "sqlite")
 """The database behind the test server: `sqlite` or `postgres` (set by start-inventree.sh)."""
 NOTES_LIMIT = 512
 """Measured: history notes are `varchar(512)`. PostgreSQL enforces it, SQLite does not."""
+OVERLONG_COMMITS_FROM = 530
+"""Measured on PostgreSQL: API 530 (1.5.6) commits the stock change of a request whose notes are too long, and
+answers 500. API 511 (1.4.3) changes nothing."""
+LOST_UPDATE_BEFORE = 530
+"""Measured on PostgreSQL: API 511 (1.4.3) lets two concurrent splits of one item both succeed, creating stock.
+API 530 (1.5.6) serializes them."""
 
 
 def test_char_notes_length(api: RawApi, scratch: Scratch) -> None:
@@ -296,7 +306,7 @@ def test_char_overlong_notes_write_without_history(api: RawApi, scratch: Scratch
     assert search_rows(api, marker) == []
     assert len(api.get("/api/stock/track/", item=item["pk"])) == history_before
     committed = {"/api/stock/transfer/": 9, "/api/stock/add/": 11, "/api/stock/remove/": 9}[path]
-    expected = committed if api.get("/api/")["apiVersion"] >= 530 else 10
+    expected = committed if api.get("/api/")["apiVersion"] >= OVERLONG_COMMITS_FROM else 10
     assert float(scratch.item(item["pk"])["quantity"]) == expected
 
 
@@ -304,7 +314,8 @@ def test_char_concurrent_transfers_same_item(api: RawApi, scratch: Scratch) -> N
     """Two simultaneous transfers of 4 from an item of 5 never move more than the item held, but they do not
     always move what they asked for.
 
-    - SQLite (one server process): one answers 201, the other a 5xx that wrote nothing.
+    - SQLite (one server process): when the requests collide, one answers 201 and the other a 5xx that wrote
+      nothing. When the server handles them one after the other, the outcome is that of PostgreSQL 1.5.6.
     - PostgreSQL, API 530 (1.5.6): both answer 201. The second moves the 1 that is left, because a transfer of
       more than an item holds moves the whole item (`test_char_over_quantity_transfer`). Only the read-back of
       the history deltas can see that (design section 7).
@@ -336,17 +347,22 @@ def test_char_concurrent_transfers_same_item(api: RawApi, scratch: Scratch) -> N
     left = held(scratch.parent)
     for name, status in statuses.items():
         assert (search(api, markers[name]) != []) == (status == 201), statuses
-    lost_update = DB == "postgres" and api.get("/api/")["apiVersion"] < 530
+        if status == 201:  # every write leaves an entry on the source item, which read-back relies on (section 7)
+            assert item["pk"] in {row["item"] for row in search_rows(api, markers[name])}
+    lost_update = DB == "postgres" and api.get("/api/")["apiVersion"] < LOST_UPDATE_BEFORE
     if lost_update and sorted(moved.values()) == [4, 4]:
         assert left == 1
         assert sorted(statuses.values()) == [201, 201], statuses
         return
     assert left + sum(moved.values()) == 5
-    if DB == "sqlite":
-        first, second = sorted(statuses.values())
-        assert first == 201, statuses
-        assert second >= 500, statuses
-        assert sorted(moved.values()) == [0, 4]
-    else:
+    for name, status in statuses.items():
+        if status == 201:
+            assert 0 < moved[name] <= 4, moved
+        else:
+            assert status >= 500, statuses
+            assert moved[name] == 0
+    if DB == "postgres" or sorted(statuses.values()) == [201, 201]:
         assert sorted(statuses.values()) == [201, 201], statuses
         assert sorted(moved.values()) == [1, 4]
+    else:
+        assert sorted(moved.values()) == [0, 4]
