@@ -1,0 +1,41 @@
+{
+  "format_version": 1,
+  "users": [
+    {
+      "id": "U0SAM0001",
+      "display_name": "Sam",
+      "role": "technician",
+      "vehicle": "Vehicles/Truck 1"
+    },
+    {
+      "id": "U0MIKE0002",
+      "display_name": "Mike",
+      "role": "technician",
+      "vehicle": "Vehicles/Truck 2"
+    },
+    {
+      "id": "U0PRIYA003",
+      "display_name": "Priya",
+      "role": "technician",
+      "vehicle": "Vehicles/Van 3"
+    },
+    {
+      "id": "U0DANA0004",
+      "display_name": "Dana",
+      "role": "warehouse_lead",
+      "vehicle": null
+    },
+    {
+      "id": "U0LUIS0005",
+      "display_name": "Luis",
+      "role": "technician",
+      "vehicle": null
+    },
+    {
+      "id": "U0BOT00009",
+      "display_name": "connector",
+      "role": "bot",
+      "vehicle": null
+    }
+  ]
+}

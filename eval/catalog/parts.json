@@ -1,0 +1,261 @@
+{
+  "format_version": 1,
+  "parts": [
+    {
+      "ipn": "AP-NV-L7",
+      "name": "Norvane L7 Lite Access Point",
+      "description": "Indoor Wi-Fi 7 access point, ceiling mount",
+      "keywords": "ap wifi wireless",
+      "units": null,
+      "trackable": true
+    },
+    {
+      "ipn": "AP-NV-L7P",
+      "name": "Norvane L7 Pro Access Point",
+      "description": "Indoor Wi-Fi 7 access point, high density",
+      "keywords": "ap wifi wireless",
+      "units": null,
+      "trackable": true
+    },
+    {
+      "ipn": "AP-NV-OD",
+      "name": "Norvane Outdoor Mesh Access Point",
+      "description": "Weatherproof outdoor mesh access point",
+      "keywords": "ap wifi wireless outdoor",
+      "units": null,
+      "trackable": true
+    },
+    {
+      "ipn": "PSU-NV-24",
+      "name": "Norvane PoE Power Supply 24V 1A",
+      "description": "Passive PoE power supply, 24 V",
+      "keywords": "psu poe power",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "PSU-NV-48",
+      "name": "Norvane PoE Power Supply 48V 0.5A",
+      "description": "PoE power supply, 48 V",
+      "keywords": "psu poe power",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "SW-NV-8P",
+      "name": "Norvane FlexSwitch 8 PoE",
+      "description": "8-port managed PoE switch",
+      "keywords": "switch poe",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "SW-NV-16P",
+      "name": "Norvane FlexSwitch 16 PoE",
+      "description": "16-port managed PoE switch",
+      "keywords": "switch poe",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "SW-BL-5",
+      "name": "Brightlink 5-Port Gigabit Switch",
+      "description": "Unmanaged desktop switch",
+      "keywords": "switch",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "ONT-BL-G1",
+      "name": "Brightlink G1 GPON ONT",
+      "description": "Single-port GPON optical network terminal",
+      "keywords": "ont gpon fiber",
+      "units": null,
+      "trackable": true
+    },
+    {
+      "ipn": "RTR-BL-AX",
+      "name": "Brightlink AX3000 Wi-Fi Router",
+      "description": "Residential Wi-Fi 6 router",
+      "keywords": "router wifi",
+      "units": null,
+      "trackable": true
+    },
+    {
+      "ipn": "RAD-SR-PTP5",
+      "name": "Skyreach PTP 5 GHz Radio",
+      "description": "Point-to-point backhaul radio",
+      "keywords": "radio ptp backhaul",
+      "units": null,
+      "trackable": true
+    },
+    {
+      "ipn": "ANT-SR-SEC5",
+      "name": "Skyreach 5 GHz Sector Antenna 90 deg",
+      "description": "90 degree sector antenna",
+      "keywords": "antenna sector",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "CBL-C6-RISER",
+      "name": "Cat6 Riser Cable 1000 ft Box",
+      "description": "CMR rated Cat6, pull box",
+      "keywords": "cable cat6 bulk",
+      "units": "box",
+      "trackable": false
+    },
+    {
+      "ipn": "CBL-C6-P1",
+      "name": "Cat6 Patch Cable 1 ft",
+      "description": "Snagless Cat6 patch cable",
+      "keywords": "cable cat6 patch",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "CBL-C6-P3",
+      "name": "Cat6 Patch Cable 3 ft",
+      "description": "Snagless Cat6 patch cable",
+      "keywords": "cable cat6 patch",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "CBL-C6-P7",
+      "name": "Cat6 Patch Cable 7 ft",
+      "description": "Snagless Cat6 patch cable",
+      "keywords": "cable cat6 patch",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "CON-RJ45",
+      "name": "RJ45 Cat6 Connector",
+      "description": "Pass-through modular plug",
+      "keywords": "connector rj45",
+      "units": null,
+      "trackable": false,
+      "purchase_pack": {
+        "unit": "bag",
+        "size": 100
+      }
+    },
+    {
+      "ipn": "FBR-DROP-150",
+      "name": "Fiber Drop Cable 150 ft SC/APC",
+      "description": "Pre-terminated flat drop",
+      "keywords": "fiber drop",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "FBR-DROP-300",
+      "name": "Fiber Drop Cable 300 ft SC/APC",
+      "description": "Pre-terminated flat drop",
+      "keywords": "fiber drop",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "FBR-PATCH-2M",
+      "name": "Fiber Patch Cable SC/APC 2 m",
+      "description": "Single-mode simplex patch cable",
+      "keywords": "fiber patch",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "FBR-SLEEVE",
+      "name": "Fusion Splice Sleeve 60 mm",
+      "description": "Heat-shrink splice protector",
+      "keywords": "fiber splice sleeve",
+      "units": null,
+      "trackable": false,
+      "purchase_pack": {
+        "unit": "pack",
+        "size": 50
+      }
+    },
+    {
+      "ipn": "SFP-1G-LX",
+      "name": "SFP Module 1G LX",
+      "description": "Single-mode 1G optic, 10 km",
+      "keywords": "sfp optic",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "SFP-10G-LR",
+      "name": "SFP+ Module 10G LR",
+      "description": "Single-mode 10G optic, 10 km",
+      "keywords": "sfp optic",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "MNT-J-ARM",
+      "name": "J-Arm Mount",
+      "description": "Galvanized J-arm mast mount",
+      "keywords": "mount mast",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "MNT-AP-WALL",
+      "name": "AP Wall Mount Bracket",
+      "description": "Wall bracket for indoor access points",
+      "keywords": "mount bracket wall",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "GND-BLOCK",
+      "name": "Grounding Block",
+      "description": "Single-port grounding block",
+      "keywords": "ground",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "NID-ENC",
+      "name": "Outdoor NID Enclosure",
+      "description": "Weatherproof network interface enclosure",
+      "keywords": "nid enclosure",
+      "units": null,
+      "trackable": false
+    },
+    {
+      "ipn": "ZIP-8-BLK",
+      "name": "Zip Ties 8 in Black",
+      "description": "UV-resistant cable ties",
+      "keywords": "zip cable tie",
+      "units": null,
+      "trackable": false,
+      "purchase_pack": {
+        "unit": "bag",
+        "size": 100
+      }
+    },
+    {
+      "ipn": "SCR-TAPCON",
+      "name": "Masonry Screw 1/4 x 1-3/4 in",
+      "description": "Hex-head concrete screw",
+      "keywords": "screw masonry",
+      "units": null,
+      "trackable": false,
+      "purchase_pack": {
+        "unit": "box",
+        "size": 100
+      }
+    },
+    {
+      "ipn": "UPS-600",
+      "name": "UPS 600 VA",
+      "description": "Line-interactive uninterruptible power supply",
+      "keywords": "ups battery",
+      "units": null,
+      "trackable": false
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "format_version": 1,
+  "locations": [
+    {
+      "path": "Warehouse",
+      "description": "Acme Fiber main building",
+      "structural": true,
+      "kind": "warehouse"
+    },
+    {
+      "path": "Warehouse/Main Stock",
+      "description": "Shelving, general stock",
+      "structural": false,
+      "kind": "warehouse"
+    },
+    {
+      "path": "Warehouse/Receiving",
+      "description": "Inbound deliveries and returns from the field",
+      "structural": false,
+      "kind": "warehouse"
+    },
+    {
+      "path": "Warehouse/RMA Bench",
+      "description": "Faulty items waiting for return to supplier",
+      "structural": false,
+      "kind": "warehouse"
+    },
+    {
+      "path": "Vehicles",
+      "description": "Company vehicles",
+      "structural": true,
+      "kind": "vehicle"
+    },
+    {
+      "path": "Vehicles/Truck 1",
+      "description": "Sam's truck",
+      "structural": false,
+      "kind": "vehicle"
+    },
+    {
+      "path": "Vehicles/Truck 2",
+      "description": "Mike's truck",
+      "structural": false,
+      "kind": "vehicle"
+    },
+    {
+      "path": "Vehicles/Van 3",
+      "description": "Priya's van",
+      "structural": false,
+      "kind": "vehicle"
+    },
+    {
+      "path": "Vehicles/Trailer",
+      "description": "Shared equipment trailer",
+      "structural": false,
+      "kind": "vehicle"
+    },
+    {
+      "path": "Job Sites",
+      "description": "Active job sites",
+      "structural": true,
+      "kind": "site"
+    },
+    {
+      "path": "Job Sites/Smith Residence",
+      "description": "Residential fiber install",
+      "structural": false,
+      "kind": "site"
+    },
+    {
+      "path": "Job Sites/Oak Street Tower",
+      "description": "Tower site, Oak Street",
+      "structural": false,
+      "kind": "site"
+    },
+    {
+      "path": "Job Sites/Oak Hill Tower",
+      "description": "Tower site, Oak Hill",
+      "structural": false,
+      "kind": "site"
+    },
+    {
+      "path": "Job Sites/Riverside Apartments",
+      "description": "Multi-dwelling unit build-out",
+      "structural": false,
+      "kind": "site"
+    }
+  ]
+}

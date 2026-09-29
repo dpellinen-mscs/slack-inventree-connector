@@ -1,0 +1,35 @@
+{
+  "format_version": 1,
+  "parts": [
+    {
+      "text": "lite",
+      "part": "AP-NV-L7"
+    },
+    {
+      "text": "flex 8",
+      "part": "SW-NV-8P"
+    },
+    {
+      "text": "drop 150",
+      "part": "FBR-DROP-150"
+    },
+    {
+      "text": "tapcon",
+      "part": "SCR-TAPCON"
+    },
+    {
+      "text": "jarm",
+      "part": "MNT-J-ARM"
+    }
+  ],
+  "locations": [
+    {
+      "text": "the warehouse",
+      "location": "Warehouse/Main Stock"
+    },
+    {
+      "text": "the shop",
+      "location": "Warehouse/Main Stock"
+    }
+  ]
+}

@@ -1,0 +1,608 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "id": "group-001",
+      "tags": [
+        "caption",
+        "photo"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002442.002442",
+            "user": "U0SAM0001",
+            "text": "3 L7 Lite on my truck",
+            "files": [
+              {
+                "id": "F0ACME0001",
+                "mimetype": "image/jpeg",
+                "synthetic_scene": "Three sealed retail boxes labeled 'Norvane L7 Lite' on a truck tailgate."
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "L7 Lite",
+                "quantity": 3,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-L7"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "Caption and photo agree. The caption supplies the quantity."
+    },
+    {
+      "id": "group-002",
+      "tags": [
+        "photo"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790002479.002479",
+            "user": "U0MIKE0002",
+            "text": "",
+            "files": [
+              {
+                "id": "F0ACME0002",
+                "mimetype": "image/jpeg",
+                "synthetic_scene": "Two boxes labeled 'Norvane FlexSwitch 8 PoE' on a warehouse shelf."
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "unclear",
+            "line_items": [
+              {
+                "item_text": "Norvane FlexSwitch 8 PoE",
+                "quantity": 2,
+                "unit": null,
+                "item_text_accept": [
+                  "FlexSwitch 8 PoE",
+                  "FlexSwitch 8"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "SW-NV-8P"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": null,
+            "flags": [
+              "implied_destination",
+              "implied_source",
+              "photo_only",
+              "quantity_from_photo"
+            ]
+          }
+        ]
+      },
+      "notes": "A photo alone has no action and no destination."
+    },
+    {
+      "id": "group-003",
+      "tags": [
+        "photo",
+        "sibling-messages"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790002516.002516",
+            "user": "U0MIKE0002",
+            "text": "",
+            "files": [
+              {
+                "id": "F0ACME0003",
+                "mimetype": "image/jpeg",
+                "synthetic_scene": "An open carton holding five boxes labeled 'Brightlink G1 GPON ONT'."
+              }
+            ]
+          },
+          {
+            "ts": "1790002553.002553",
+            "user": "U0MIKE0002",
+            "text": "these are going on truck 2"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "Brightlink G1 GPON ONT",
+                "quantity": 5,
+                "unit": null,
+                "item_text_accept": [
+                  "Brightlink G1 ONT",
+                  "G1 GPON ONT",
+                  "G1 ONT"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-BL-G1"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 2",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 2"
+            },
+            "flags": [
+              "implied_source",
+              "quantity_from_photo"
+            ]
+          }
+        ]
+      },
+      "notes": "A photo followed by a caption message from the same user groups into one movement."
+    },
+    {
+      "id": "group-004",
+      "tags": [
+        "photo",
+        "serial"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002590.002590",
+            "user": "U0SAM0001",
+            "text": "1 PTP radio to oak street tower",
+            "files": [
+              {
+                "id": "F0ACME0004",
+                "mimetype": "image/jpeg",
+                "synthetic_scene": "Close-up of a product label: 'Skyreach PTP 5 GHz', 'S/N SR5-000123', 'MAC 02:00:5E:10:00:01'."
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "PTP radio",
+                "quantity": 1,
+                "unit": null,
+                "serials": [
+                  "SR5-000123"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "RAD-SR-PTP5"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "oak street tower",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Oak Street Tower"
+            },
+            "flags": [
+              "implied_source",
+              "serial_unconfirmed"
+            ]
+          }
+        ]
+      },
+      "notes": "A serial read by a vision model is unconfirmed until a barcode, OCR or a human confirms it."
+    },
+    {
+      "id": "group-005",
+      "tags": [
+        "correction",
+        "thread"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002627.002627",
+            "user": "U0SAM0001",
+            "text": "2 L7 Lite on my truck"
+          },
+          {
+            "ts": "1790002664.002664",
+            "user": "U0SAM0001",
+            "text": "make that 3",
+            "thread_ts": "1790002627.002627"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "L7 Lite",
+                "quantity": 3,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-L7"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "corrected_in_thread",
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "group-006",
+      "tags": [
+        "clarification",
+        "thread"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002701.002701",
+            "user": "U0SAM0001",
+            "text": "2 APs on my truck"
+          },
+          {
+            "ts": "1790002738.002738",
+            "user": "U0BOT00009",
+            "text": "Which access point? Norvane L7 Lite, Norvane L7 Pro or Norvane Outdoor Mesh",
+            "thread_ts": "1790002701.002701",
+            "is_bot": true
+          },
+          {
+            "ts": "1790002775.002775",
+            "user": "U0SAM0001",
+            "text": "the pro ones",
+            "thread_ts": "1790002701.002701"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "pro APs",
+                "quantity": 2,
+                "unit": null,
+                "item_text_accept": [
+                  "APs",
+                  "pro",
+                  "the pro ones",
+                  "pro ones"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-L7P"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "The answer to a clarifying question narrows the item."
+    },
+    {
+      "id": "group-007",
+      "tags": [
+        "caption",
+        "multi-item",
+        "photo"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790002812.002812",
+            "user": "U0PRIYA003",
+            "text": "for the riverside job",
+            "files": [
+              {
+                "id": "F0ACME0005",
+                "mimetype": "image/jpeg",
+                "synthetic_scene": "Two boxes labeled 'Brightlink AX3000 Wi-Fi Router'."
+              },
+              {
+                "id": "F0ACME0006",
+                "mimetype": "image/jpeg",
+                "synthetic_scene": "One box labeled 'UPS 600 VA'."
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "Brightlink AX3000 Wi-Fi Router",
+                "quantity": 2,
+                "unit": null,
+                "item_text_accept": [
+                  "AX3000 Wi-Fi Router",
+                  "Brightlink AX3000",
+                  "AX3000 router",
+                  "AX3000"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "RTR-BL-AX"
+                }
+              },
+              {
+                "item_text": "UPS 600 VA",
+                "quantity": 1,
+                "unit": null,
+                "item_text_accept": [
+                  "UPS 600",
+                  "UPS"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "UPS-600"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "riverside job",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Riverside Apartments"
+            },
+            "flags": [
+              "implied_source",
+              "quantity_from_photo"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "group-008",
+      "tags": [
+        "sibling-messages"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790002849.002849",
+            "user": "U0LUIS0005",
+            "text": "heading to oak hill"
+          },
+          {
+            "ts": "1790002886.002886",
+            "user": "U0LUIS0005",
+            "text": "took 2 sector antennas and 1 radio"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_site",
+            "line_items": [
+              {
+                "item_text": "sector antennas",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ANT-SR-SEC5"
+                }
+              },
+              {
+                "item_text": "radio",
+                "quantity": 1,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "RAD-SR-PTP5"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "oak hill",
+            "destination_match": {
+              "status": "matched",
+              "location": "Job Sites/Oak Hill Tower"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "group-009",
+      "tags": [
+        "caption",
+        "contradiction",
+        "photo"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002923.002923",
+            "user": "U0SAM0001",
+            "text": "2 L7 Lite on my truck",
+            "files": [
+              {
+                "id": "F0ACME0007",
+                "mimetype": "image/jpeg",
+                "synthetic_scene": "Three boxes labeled 'Norvane L7 Pro' on a truck tailgate."
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "L7 Lite",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "AP-NV-L7"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "my truck",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Truck 1"
+            },
+            "flags": [
+              "implied_source",
+              "photo_text_mismatch"
+            ]
+          }
+        ]
+      },
+      "notes": "The caption is extracted as written. The mismatch forces a review."
+    },
+    {
+      "id": "group-010",
+      "tags": [
+        "document",
+        "photo"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790002960.002960",
+            "user": "U0DANA0004",
+            "text": "delivery arrived",
+            "files": [
+              {
+                "id": "F0ACME0008",
+                "mimetype": "image/jpeg",
+                "synthetic_scene": "A packing slip listing '10 x Brightlink G1 GPON ONT' and '5 x Brightlink AX3000 Wi-Fi Router'."
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "receive",
+            "line_items": [
+              {
+                "item_text": "Brightlink G1 GPON ONT",
+                "quantity": 10,
+                "unit": null,
+                "item_text_accept": [
+                  "G1 GPON ONT",
+                  "Brightlink G1 ONT"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-BL-G1"
+                }
+              },
+              {
+                "item_text": "Brightlink AX3000 Wi-Fi Router",
+                "quantity": 5,
+                "unit": null,
+                "item_text_accept": [
+                  "AX3000 Wi-Fi Router",
+                  "Brightlink AX3000"
+                ],
+                "match": {
+                  "status": "matched",
+                  "part": "RTR-BL-AX"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": null,
+            "flags": [
+              "implied_destination",
+              "quantity_from_photo"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

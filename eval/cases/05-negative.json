@@ -1,0 +1,302 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "id": "negative-001",
+      "tags": [
+        "question"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790001924.001924",
+            "user": "U0SAM0001",
+            "text": "anyone seen the label printer?"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-002",
+      "tags": [
+        "chatter",
+        "number-noise"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790001961.001961",
+            "user": "U0MIKE0002",
+            "text": "Running 15 min late to the Smith job"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-003",
+      "tags": [
+        "request"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790001998.001998",
+            "user": "U0PRIYA003",
+            "text": "Can someone bring me 2 L7 Lites at Oak Street?"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-004",
+      "tags": [
+        "question"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790002035.002035",
+            "user": "U0LUIS0005",
+            "text": "Do we have any 10G SFPs left?"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-005",
+      "tags": [
+        "future-intent"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002072.002072",
+            "user": "U0SAM0001",
+            "text": "Going to grab 3 ONTs tomorrow morning"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-006",
+      "tags": [
+        "chatter"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002109.002109",
+            "user": "U0SAM0001",
+            "text": "Truck 1 needs an oil change"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-007",
+      "tags": [
+        "chatter"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790002146.002146",
+            "user": "U0DANA0004",
+            "text": "Great work on the Riverside install everyone 🎉"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-008",
+      "tags": [
+        "chatter",
+        "number-noise"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790002183.002183",
+            "user": "U0MIKE0002",
+            "text": "Customer at Smith residence says wifi is slow in the 2 back bedrooms"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-009",
+      "tags": [
+        "chatter"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790002220.002220",
+            "user": "U0DANA0004",
+            "text": "We should order more zip ties"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-010",
+      "tags": [
+        "chatter",
+        "number-noise"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0LUIS0005",
+        "messages": [
+          {
+            "ts": "1790002257.002257",
+            "user": "U0LUIS0005",
+            "text": "lunch at 12?"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-011",
+      "tags": [
+        "chatter"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790002294.002294",
+            "user": "U0DANA0004",
+            "text": "PSA: new L7 Pro firmware is out, update before installing"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-012",
+      "tags": [
+        "negation"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790002331.002331",
+            "user": "U0MIKE0002",
+            "text": "I did NOT take the 2 APs from receiving, they're still there"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-013",
+      "tags": [
+        "request"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790002368.002368",
+            "user": "U0PRIYA003",
+            "text": "Need 4 drop 300s for Thursday's job, can someone set them aside?"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    },
+    {
+      "id": "negative-014",
+      "tags": [
+        "negation"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0SAM0001",
+        "messages": [
+          {
+            "ts": "1790002405.002405",
+            "user": "U0SAM0001",
+            "text": "Replaced the customer's own router at Riverside, nothing from our stock"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "Not a stock movement. Any extracted movement is a false positive."
+    }
+  ]
+}
