@@ -179,7 +179,7 @@ Subscribe to `message.channels` (public) and `message.groups` (private). A bot t
   "event_id": "Ev0ACME0001", "event_time": 1790000000,
   "event": {
     "type": "message", "channel": "C0ACME001", "channel_type": "channel",
-    "user": "U0SAM0001", "text": "2 L7 Lite on my truck",
+    "user": "U0SAM0001", "text": "2 Disc 40 on my truck",
     "ts": "1790000000.000100", "event_ts": "1790000000.000100",
     "client_msg_id": "0f0e0d0c-0000-4000-8000-acme00000002"
   }
@@ -224,7 +224,7 @@ A photo with a caption arrives as **one** message event: `subtype: "file_share"`
 ```json
 {
   "type": "message", "subtype": "file_share", "channel": "C0ACME001", "user": "U0SAM0001",
-  "text": "2 L7 Lite on my truck", "ts": "1790000100.000200", "upload": true,
+  "text": "2 Disc 40 on my truck", "ts": "1790000100.000200", "upload": true,
   "files": [{
     "id": "F0ACME0001", "name": "truck_shelf.jpg", "mimetype": "image/jpeg", "filetype": "jpg",
     "size": 1834211, "original_w": 4032, "original_h": 3024,

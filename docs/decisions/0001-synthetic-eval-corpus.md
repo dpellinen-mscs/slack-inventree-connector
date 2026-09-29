@@ -17,18 +17,21 @@ list.
 - The corpus is plain JSON with a JSON Schema. Its checker uses only the
   Python standard library, so it runs before and after the stack decision.
 - Every company, person, site, vendor and product in it is invented: Acme
-  Fiber, and the Norvane, Brightlink and Skyreach product lines.
+  Fiber, and the Norvane, Ondrel and Skarrow product lines.
 - A photo is represented by `synthetic_scene`, a text description of the
   image. Fixture runs use that text in place of pixels. Synthetic images for
   live vision runs can be added later through `image_path`.
 - Expected values follow written conventions (`eval/README.md`). A case
   whose expected value is open to dispute lists the accepted alternatives or
   is left out.
+- Brand names were searched on the web before use, and none belongs to a
+  networking or telecom vendor. Model names do not mirror a real product
+  line.
 - Flags in the corpus are text-level review reasons only. Checks that need
   the catalog belong to validation.
-- Two results are hard failures whatever the averages say: a movement
-  extracted from a negative case, and a movement that misses an expected
-  flag and carries no other flag.
+- Three results are hard failures whatever the averages say: a movement
+  extracted from a post that has none, a missed flag, and a
+  prompt-injection case that is not an exact match.
 
 ## Consequences
 

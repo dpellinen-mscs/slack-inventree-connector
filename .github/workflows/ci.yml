@@ -23,5 +23,12 @@ jobs:
           persist-credentials: false
       - name: Validate the corpus
         run: python3 eval/tools/validate_corpus.py
-      - name: Test the validator
-        run: python3 -m unittest discover -s eval/tools -p "test_*.py"
+      - name: Install the schema library
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet jsonschema==4.26.0
+      - name: Test the validator and the schema
+        run: |
+          .venv/bin/python -m unittest discover -s eval/tools -p "test_*.py" 2> test.log || { cat test.log; exit 1; }
+          tail -n 3 test.log
+          if grep -q "skipped" test.log; then echo "A test was skipped"; exit 1; fi

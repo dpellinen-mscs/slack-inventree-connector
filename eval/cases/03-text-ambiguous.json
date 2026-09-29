@@ -12,7 +12,7 @@
         "user": "U0DANA0004",
         "messages": [
           {
-            "ts": "1790001073.001073",
+            "ts": "1790001295.001295",
             "user": "U0DANA0004",
             "text": "returned 1 switch to receiving"
           }
@@ -30,9 +30,9 @@
                 "match": {
                   "status": "ambiguous",
                   "candidates": [
-                    "SW-BL-5",
                     "SW-NV-16P",
-                    "SW-NV-8P"
+                    "SW-NV-8P",
+                    "SW-OD-5"
                   ]
                 }
               }
@@ -60,7 +60,7 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790001110.001110",
+            "ts": "1790001332.001332",
             "user": "U0SAM0001",
             "text": "grabbed a box of rj45 connectors for truck 1"
           }
@@ -107,7 +107,7 @@
         "user": "U0MIKE0002",
         "messages": [
           {
-            "ts": "1790001147.001147",
+            "ts": "1790001369.001369",
             "user": "U0MIKE0002",
             "text": "put a 12-piece box of splice sleeves on my truck"
           }
@@ -154,7 +154,7 @@
         "user": "U0PRIYA003",
         "messages": [
           {
-            "ts": "1790001184.001184",
+            "ts": "1790001406.001406",
             "user": "U0PRIYA003",
             "text": "12 pieces of cat6 patch 7ft to van 3"
           }
@@ -199,9 +199,9 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790001221.001221",
+            "ts": "1790001443.001443",
             "user": "U0SAM0001",
-            "text": "some zip ties and a few tapcons on my truck"
+            "text": "some zip ties and a few blue screws on my truck"
           }
         ]
       },
@@ -220,12 +220,12 @@
                 }
               },
               {
-                "item_text": "tapcons",
+                "item_text": "blue screws",
                 "quantity": null,
                 "unit": null,
                 "match": {
                   "status": "matched",
-                  "part": "SCR-TAPCON"
+                  "part": "SCR-MASONRY"
                 }
               }
             ],
@@ -254,7 +254,7 @@
         "user": "U0MIKE0002",
         "messages": [
           {
-            "ts": "1790001258.001258",
+            "ts": "1790001480.001480",
             "user": "U0MIKE0002",
             "text": "grabbed a couple of SFPs for oak street"
           }
@@ -264,6 +264,9 @@
         "movements": [
           {
             "movement_type": "take_to_site",
+            "movement_type_accept": [
+              "unclear"
+            ],
             "line_items": [
               {
                 "item_text": "SFPs",
@@ -304,7 +307,7 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790001295.001295",
+            "ts": "1790001517.001517",
             "user": "U0SAM0001",
             "text": "took the radio to the oak tower"
           }
@@ -321,7 +324,7 @@
                 "unit": null,
                 "match": {
                   "status": "matched",
-                  "part": "RAD-SR-PTP5"
+                  "part": "RAD-SK-PTP5"
                 }
               }
             ],
@@ -351,7 +354,7 @@
         "user": "U0MIKE0002",
         "messages": [
           {
-            "ts": "1790001332.001332",
+            "ts": "1790001554.001554",
             "user": "U0MIKE0002",
             "text": "2 ladder racks on my truck"
           }
@@ -395,7 +398,7 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790001369.001369",
+            "ts": "1790001591.001591",
             "user": "U0SAM0001",
             "text": "grabbed stuff for the Smith job"
           }
@@ -433,7 +436,7 @@
         "user": "U0MIKE0002",
         "messages": [
           {
-            "ts": "1790001406.001406",
+            "ts": "1790001628.001628",
             "user": "U0MIKE0002",
             "text": "returned 2 APs"
           }
@@ -451,8 +454,8 @@
                 "match": {
                   "status": "ambiguous",
                   "candidates": [
-                    "AP-NV-L7",
-                    "AP-NV-L7P",
+                    "AP-NV-D40",
+                    "AP-NV-D60",
                     "AP-NV-OD"
                   ]
                 }
@@ -478,7 +481,7 @@
         "user": "U0DANA0004",
         "messages": [
           {
-            "ts": "1790001443.001443",
+            "ts": "1790001665.001665",
             "user": "U0DANA0004",
             "text": "5 on truck 2"
           }
@@ -520,7 +523,7 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790001480.001480",
+            "ts": "1790001702.001702",
             "user": "U0SAM0001",
             "text": "box of 100 rj45s to truck 1"
           }
@@ -567,7 +570,7 @@
         "user": "U0PRIYA003",
         "messages": [
           {
-            "ts": "1790001517.001517",
+            "ts": "1790001739.001739",
             "user": "U0PRIYA003",
             "text": "took 300 ft of cat6 riser cable to riverside"
           }
@@ -613,7 +616,7 @@
         "user": "U0MIKE0002",
         "messages": [
           {
-            "ts": "1790001554.001554",
+            "ts": "1790001776.001776",
             "user": "U0MIKE0002",
             "text": "patch cables on truck 2"
           }
@@ -663,7 +666,7 @@
         "user": "U0DANA0004",
         "messages": [
           {
-            "ts": "1790001591.001591",
+            "ts": "1790001813.001813",
             "user": "U0DANA0004",
             "text": "Priya took 3 patch cables"
           }
@@ -714,7 +717,7 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790001628.001628",
+            "ts": "1790001850.001850",
             "user": "U0SAM0001",
             "text": "took 2-3 patch cables to the Smith job"
           }
@@ -754,6 +757,185 @@
         ]
       },
       "notes": "A range is not a quantity."
+    },
+    {
+      "id": "ambig-017",
+      "tags": [
+        "alias",
+        "unknown-location"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790001887.001887",
+            "user": "U0PRIYA003",
+            "text": "gave 2 drop 150s to Luis"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "unclear",
+            "movement_type_accept": [
+              "take_to_vehicle"
+            ],
+            "line_items": [
+              {
+                "item_text": "drop 150s",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "FBR-DROP-150"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "Luis",
+            "destination_match": {
+              "status": "unmatched"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "A person is not a stock location, and Luis has no vehicle."
+    },
+    {
+      "id": "ambig-018",
+      "tags": [
+        "unknown-location"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0MIKE0002",
+        "messages": [
+          {
+            "ts": "1790001924.001924",
+            "user": "U0MIKE0002",
+            "text": "4 J-arm mounts on truck 7"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "J-arm mounts",
+                "quantity": 4,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "MNT-J-ARM"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "truck 7",
+            "destination_match": {
+              "status": "unmatched"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "There is no Truck 7. The nearest name must not be picked."
+    },
+    {
+      "id": "ambig-019",
+      "tags": [
+        "possessive"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790001961.001961",
+            "user": "U0DANA0004",
+            "text": "loaded 6 ONTs on Priya's van"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "ONTs",
+                "quantity": 6,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "ONT-OD-G1"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "Priya's van",
+            "destination_match": {
+              "status": "matched",
+              "location": "Vehicles/Van 3"
+            },
+            "flags": [
+              "implied_source"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ambig-020",
+      "tags": [
+        "alias",
+        "third-party"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0DANA0004",
+        "messages": [
+          {
+            "ts": "1790001998.001998",
+            "user": "U0DANA0004",
+            "text": "Mike put 2 poe 8 on his truck"
+          }
+        ]
+      },
+      "expected": {
+        "movements": [
+          {
+            "movement_type": "take_to_vehicle",
+            "line_items": [
+              {
+                "item_text": "poe 8",
+                "quantity": 2,
+                "unit": null,
+                "match": {
+                  "status": "matched",
+                  "part": "SW-NV-8P"
+                }
+              }
+            ],
+            "source_text": null,
+            "destination_text": "his truck",
+            "flags": [
+              "actor_not_poster",
+              "implied_source"
+            ]
+          }
+        ]
+      },
+      "notes": "The destination match is not scored: 'his' refers to the actor, not to the poster."
     }
   ]
 }

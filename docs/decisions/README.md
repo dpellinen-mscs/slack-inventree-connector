@@ -7,6 +7,7 @@ editing history.
 | No. | Decision | Status |
 | --- | --- | --- |
 | [0001](0001-synthetic-eval-corpus.md) | The eval corpus is fully synthetic and stack-independent | Accepted |
+| [0002](0002-idempotency-unit.md) | A post can hold several movements, and the request is the unit of idempotency | Accepted |
 
 ## Template
 

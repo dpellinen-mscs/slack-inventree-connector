@@ -2,11 +2,11 @@
   "format_version": 1,
   "parts": [
     {
-      "text": "lite",
-      "part": "AP-NV-L7"
+      "text": "d40",
+      "part": "AP-NV-D40"
     },
     {
-      "text": "flex 8",
+      "text": "poe 8",
       "part": "SW-NV-8P"
     },
     {
@@ -14,8 +14,8 @@
       "part": "FBR-DROP-150"
     },
     {
-      "text": "tapcon",
-      "part": "SCR-TAPCON"
+      "text": "blue screw",
+      "part": "SCR-MASONRY"
     },
     {
       "text": "jarm",
@@ -24,11 +24,11 @@
   ],
   "locations": [
     {
-      "text": "the warehouse",
+      "text": "warehouse",
       "location": "Warehouse/Main Stock"
     },
     {
-      "text": "the shop",
+      "text": "shop",
       "location": "Warehouse/Main Stock"
     }
   ]

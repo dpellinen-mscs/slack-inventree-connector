@@ -13,7 +13,7 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790000518.009518",
+            "ts": "1790000740.009740",
             "user": "U0SAM0001",
             "text": "grabbed three norvain power supplies for the Smith job"
           }
@@ -23,6 +23,9 @@
         "movements": [
           {
             "movement_type": "take_to_site",
+            "movement_type_accept": [
+              "unclear"
+            ],
             "line_items": [
               {
                 "item_text": "norvain power supplies",
@@ -63,7 +66,7 @@
         "user": "U0MIKE0002",
         "messages": [
           {
-            "ts": "1790000555.009555",
+            "ts": "1790000777.009777",
             "user": "U0MIKE0002",
             "text": "two APs on Mikes truck"
           }
@@ -81,8 +84,8 @@
                 "match": {
                   "status": "ambiguous",
                   "candidates": [
-                    "AP-NV-L7",
-                    "AP-NV-L7P",
+                    "AP-NV-D40",
+                    "AP-NV-D60",
                     "AP-NV-OD"
                   ]
                 }
@@ -112,9 +115,9 @@
         "user": "U0PRIYA003",
         "messages": [
           {
-            "ts": "1790000592.009592",
+            "ts": "1790000814.009814",
             "user": "U0PRIYA003",
-            "text": "put a flex 8 in my van"
+            "text": "put a poe 8 in my van"
           }
         ]
       },
@@ -124,7 +127,7 @@
             "movement_type": "take_to_vehicle",
             "line_items": [
               {
-                "item_text": "flex 8",
+                "item_text": "poe 8",
                 "quantity": 1,
                 "unit": null,
                 "match": {
@@ -157,9 +160,9 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790000629.009629",
+            "ts": "1790000851.009851",
             "user": "U0SAM0001",
-            "text": "1x brightlnk ont -> truck 1"
+            "text": "1x ondrl ont -> truck 1"
           }
         ]
       },
@@ -169,12 +172,12 @@
             "movement_type": "take_to_vehicle",
             "line_items": [
               {
-                "item_text": "brightlnk ont",
+                "item_text": "ondrl ont",
                 "quantity": 1,
                 "unit": null,
                 "match": {
                   "status": "matched",
-                  "part": "ONT-BL-G1"
+                  "part": "ONT-OD-G1"
                 }
               }
             ],
@@ -201,7 +204,7 @@
         "user": "U0MIKE0002",
         "messages": [
           {
-            "ts": "1790000666.009666",
+            "ts": "1790000888.009888",
             "user": "U0MIKE0002",
             "text": "took a dozen zip ties for the oak street job"
           }
@@ -211,6 +214,9 @@
         "movements": [
           {
             "movement_type": "take_to_site",
+            "movement_type_accept": [
+              "unclear"
+            ],
             "line_items": [
               {
                 "item_text": "zip ties",
@@ -245,7 +251,7 @@
         "user": "U0DANA0004",
         "messages": [
           {
-            "ts": "1790000703.009703",
+            "ts": "1790000925.009925",
             "user": "U0DANA0004",
             "text": "rcvd 10 sfp+ 10g lr"
           }
@@ -287,9 +293,9 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790000740.009740",
+            "ts": "1790000962.009962",
             "user": "U0SAM0001",
-            "text": "Sam's truck: 2 lites, 1 pro"
+            "text": "Sam's truck: 2 d40s, 1 disc 60"
           }
         ]
       },
@@ -299,21 +305,21 @@
             "movement_type": "take_to_vehicle",
             "line_items": [
               {
-                "item_text": "lites",
+                "item_text": "d40s",
                 "quantity": 2,
                 "unit": null,
                 "match": {
                   "status": "matched",
-                  "part": "AP-NV-L7"
+                  "part": "AP-NV-D40"
                 }
               },
               {
-                "item_text": "pro",
+                "item_text": "disc 60",
                 "quantity": 1,
                 "unit": null,
                 "match": {
                   "status": "matched",
-                  "part": "AP-NV-L7P"
+                  "part": "AP-NV-D60"
                 }
               }
             ],
@@ -341,7 +347,7 @@
         "user": "U0LUIS0005",
         "messages": [
           {
-            "ts": "1790000777.009777",
+            "ts": "1790000999.009999",
             "user": "U0LUIS0005",
             "text": "brought back 2 jarms to the shop"
           }
@@ -387,7 +393,7 @@
         "user": "U0PRIYA003",
         "messages": [
           {
-            "ts": "1790000814.009814",
+            "ts": "1790001036.001036",
             "user": "U0PRIYA003",
             "text": "loaded up van3 w/ 5 drop 150s and 2 drop 300s"
           }
@@ -441,9 +447,9 @@
         "user": "U0MIKE0002",
         "messages": [
           {
-            "ts": "1790000851.009851",
+            "ts": "1790001073.001073",
             "user": "U0MIKE0002",
-            "text": "Used fifteen tapcons at riverside"
+            "text": "Used fifteen blue screws at riverside"
           }
         ]
       },
@@ -453,12 +459,12 @@
             "movement_type": "consume",
             "line_items": [
               {
-                "item_text": "tapcons",
+                "item_text": "blue screws",
                 "quantity": 15,
                 "unit": null,
                 "match": {
                   "status": "matched",
-                  "part": "SCR-TAPCON"
+                  "part": "SCR-MASONRY"
                 }
               }
             ],
@@ -485,9 +491,9 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790000888.009888",
+            "ts": "1790001110.001110",
             "user": "U0SAM0001",
-            "text": "pulled 1 16 port flexswitch for oak hill"
+            "text": "pulled 1 16 port poe switch for oak hill"
           }
         ]
       },
@@ -495,9 +501,12 @@
         "movements": [
           {
             "movement_type": "take_to_site",
+            "movement_type_accept": [
+              "unclear"
+            ],
             "line_items": [
               {
-                "item_text": "16 port flexswitch",
+                "item_text": "16 port poe switch",
                 "quantity": 1,
                 "unit": null,
                 "match": {
@@ -531,9 +540,9 @@
         "user": "U0MIKE0002",
         "messages": [
           {
-            "ts": "1790000925.009925",
+            "ts": "1790001147.001147",
             "user": "U0MIKE0002",
-            "text": "2 wall mounts + 2 lite aps → my truck"
+            "text": "2 wall mounts + 2 d40 aps → my truck"
           }
         ]
       },
@@ -548,16 +557,16 @@
                 "unit": null,
                 "match": {
                   "status": "matched",
-                  "part": "MNT-AP-WALL"
+                  "part": "MNT-WALL"
                 }
               },
               {
-                "item_text": "lite aps",
+                "item_text": "d40 aps",
                 "quantity": 2,
                 "unit": null,
                 "match": {
                   "status": "matched",
-                  "part": "AP-NV-L7"
+                  "part": "AP-NV-D40"
                 }
               }
             ],
@@ -585,7 +594,7 @@
         "user": "U0SAM0001",
         "messages": [
           {
-            "ts": "1790000962.009962",
+            "ts": "1790001184.001184",
             "user": "U0SAM0001",
             "text": "Returned the 24v psu to the warehouse"
           }
@@ -629,7 +638,7 @@
         "user": "U0LUIS0005",
         "messages": [
           {
-            "ts": "1790000999.009999",
+            "ts": "1790001221.001221",
             "user": "U0LUIS0005",
             "text": "took 2 aps on my truck"
           }
@@ -647,8 +656,8 @@
                 "match": {
                   "status": "ambiguous",
                   "candidates": [
-                    "AP-NV-L7",
-                    "AP-NV-L7P",
+                    "AP-NV-D40",
+                    "AP-NV-D60",
                     "AP-NV-OD"
                   ]
                 }
@@ -677,7 +686,7 @@
         "user": "U0PRIYA003",
         "messages": [
           {
-            "ts": "1790001036.001036",
+            "ts": "1790001258.001258",
             "user": "U0PRIYA003",
             "text": "3 3ft patch cables and 7 7ft patch cables to van 3"
           }

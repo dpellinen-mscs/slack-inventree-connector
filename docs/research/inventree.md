@@ -77,7 +77,7 @@ Content-Type: application/json
 {
   "items": [{"pk": 1234, "quantity": 2}],
   "location": 57,
-  "notes": "slack:T0ACME/C0FIELD/1727555555.000100 Sam: 2 L7 Lite on my truck"
+  "notes": "[sic:k7m2q9x4t1b8w3n6p5r0zd:a1] slack C0FIELD/1727555555.000100 by U0SAM0001"
 }
 ```
 
@@ -317,7 +317,7 @@ Sources:
   `assembly`, `purchaseable`, `salable`, `locked`, `has_stock`, `low_stock`, `has_units`, `has_ipn`.
 
 ```http
-GET /api/part/?search=L7%20Lite&active=true&virtual=false&limit=10
+GET /api/part/?search=Disc%2040&active=true&virtual=false&limit=10
 ```
 
 Fields worth using for matching: `name`, `IPN`, `full_name` (server-composed display name),

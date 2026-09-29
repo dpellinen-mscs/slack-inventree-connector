@@ -2,16 +2,16 @@
   "format_version": 1,
   "parts": [
     {
-      "ipn": "AP-NV-L7",
-      "name": "Norvane L7 Lite Access Point",
+      "ipn": "AP-NV-D40",
+      "name": "Norvane Disc 40 Access Point",
       "description": "Indoor Wi-Fi 7 access point, ceiling mount",
       "keywords": "ap wifi wireless",
       "units": null,
       "trackable": true
     },
     {
-      "ipn": "AP-NV-L7P",
-      "name": "Norvane L7 Pro Access Point",
+      "ipn": "AP-NV-D60",
+      "name": "Norvane Disc 60 Access Point",
       "description": "Indoor Wi-Fi 7 access point, high density",
       "keywords": "ap wifi wireless",
       "units": null,
@@ -43,55 +43,55 @@
     },
     {
       "ipn": "SW-NV-8P",
-      "name": "Norvane FlexSwitch 8 PoE",
+      "name": "Norvane S8 PoE Switch",
       "description": "8-port managed PoE switch",
-      "keywords": "switch poe",
+      "keywords": "switch poe 8-port",
       "units": null,
       "trackable": false
     },
     {
       "ipn": "SW-NV-16P",
-      "name": "Norvane FlexSwitch 16 PoE",
+      "name": "Norvane S16 PoE Switch",
       "description": "16-port managed PoE switch",
-      "keywords": "switch poe",
+      "keywords": "switch poe 16-port",
       "units": null,
       "trackable": false
     },
     {
-      "ipn": "SW-BL-5",
-      "name": "Brightlink 5-Port Gigabit Switch",
+      "ipn": "SW-OD-5",
+      "name": "Ondrel 5-Port Gigabit Switch",
       "description": "Unmanaged desktop switch",
       "keywords": "switch",
       "units": null,
       "trackable": false
     },
     {
-      "ipn": "ONT-BL-G1",
-      "name": "Brightlink G1 GPON ONT",
+      "ipn": "ONT-OD-G1",
+      "name": "Ondrel G1 GPON ONT",
       "description": "Single-port GPON optical network terminal",
       "keywords": "ont gpon fiber",
       "units": null,
       "trackable": true
     },
     {
-      "ipn": "RTR-BL-AX",
-      "name": "Brightlink AX3000 Wi-Fi Router",
+      "ipn": "RTR-OD-AX",
+      "name": "Ondrel AX3000 Wi-Fi Router",
       "description": "Residential Wi-Fi 6 router",
       "keywords": "router wifi",
       "units": null,
       "trackable": true
     },
     {
-      "ipn": "RAD-SR-PTP5",
-      "name": "Skyreach PTP 5 GHz Radio",
+      "ipn": "RAD-SK-PTP5",
+      "name": "Skarrow PTP 5 GHz Radio",
       "description": "Point-to-point backhaul radio",
       "keywords": "radio ptp backhaul",
       "units": null,
       "trackable": true
     },
     {
-      "ipn": "ANT-SR-SEC5",
-      "name": "Skyreach 5 GHz Sector Antenna 90 deg",
+      "ipn": "ANT-SK-SEC5",
+      "name": "Skarrow 5 GHz Sector Antenna 90 deg",
       "description": "90 degree sector antenna",
       "keywords": "antenna sector",
       "units": null,
@@ -202,8 +202,8 @@
       "trackable": false
     },
     {
-      "ipn": "MNT-AP-WALL",
-      "name": "AP Wall Mount Bracket",
+      "ipn": "MNT-WALL",
+      "name": "Indoor Wall Mount Bracket",
       "description": "Wall bracket for indoor access points",
       "keywords": "mount bracket wall",
       "units": null,
@@ -238,7 +238,7 @@
       }
     },
     {
-      "ipn": "SCR-TAPCON",
+      "ipn": "SCR-MASONRY",
       "name": "Masonry Screw 1/4 x 1-3/4 in",
       "description": "Hex-head concrete screw",
       "keywords": "screw masonry",
