@@ -458,7 +458,8 @@ request shares it.
 
 - The marker has a fixed length and comes first in the notes. The notes
   hold nothing else except a link to the Slack message and the Slack user
-  id, and they stay under 200 characters.
+  id, and they stay under 200 characters. The server stores notes in a
+  `varchar(512)`, which PostgreSQL enforces (`test_char_notes_length`).
 - The search for a marker reads every page of results and compares the
   whole token, because the server search matches substrings.
 - **A marker that is found proves the write happened. A marker that is not
@@ -487,19 +488,43 @@ connector never has two InvenTree writes in flight and cannot race itself.
    sub-locations. Compare with what the plan was built on. If a source
    holds less than the plan takes from it, or anything relevant changed,
    stop: the request returns to `planned` and the post to review.
-   Otherwise store the snapshot, the exact request body and the move to
-   `applying` in one transaction.
-4. **Write.** Send the request once. InvenTree runs each stock adjustment
-   request in one database transaction, so all lines of a request succeed
-   or fail together.
-5. **Read back.** Find the history entries that carry the marker and check
-   their deltas against the plan. As a second check, compare the
-   quantities per part and location with the snapshot.
+   Also record the ids of the history entries that already exist on each
+   source stock item the request takes from. Otherwise store the snapshot,
+   the exact request body and the move to `applying` in one transaction.
+4. **Write.** Send the request once. A request that InvenTree refuses
+   with a 4xx changes nothing: all lines succeed or fail together
+   (`test_char_multi_item_request_is_atomic`). A 5xx is not that safe. On
+   1.5.6 with PostgreSQL, a request whose history entry fails to save
+   answers 500 after the stock change is committed, and no entry carries
+   the marker (`test_char_overlong_notes_write_without_history`). That is
+   why a 5xx is an unknown outcome and recovery compares quantities.
+5. **Read back.** Three checks, and any failure means `verify_failed`:
+   - the history entries that carry the marker have the deltas of the
+     plan;
+   - the quantities per part and location match the snapshot plus the
+     plan;
+   - the source stock items and the items the request created have no
+     history entry that is missing from the snapshot and lacks this
+     request's marker. Such an entry means another writer touched the
+     same stock during the apply.
 6. **Record.** Move to `verified` and post the receipt.
 
 Another InvenTree user can still change the stock between steps 3 and 4.
 The connector cannot lock InvenTree, so that window cannot be closed, only
 detected by step 5.
+A concurrent write can also make the connector's own request move less
+than it asked for (a transfer of more than an item holds moves the whole
+item), and on 1.4.3 with PostgreSQL two concurrent splits of one item can
+even create stock (`test_char_concurrent_transfers_same_item`). The first
+two checks of step 5 catch the short move (a delta of 1 where the plan says
+4), but not the 1.4.3 lost update: there the connector's own deltas and the
+source and destination quantities all match the plan, and the extra stock
+appears at a third location outside the snapshot. The third check catches
+it, because the other writer's split leaves an entry without the marker on
+the source item. The price is that any concurrent write to the same stock
+items ends in `verify_failed` and goes to the operator, even a harmless
+one. A concurrent writer that touches none of these items cannot be
+detected, and it also cannot corrupt the connector's movement.
 
 ### Unknown outcomes and recovery
 
@@ -665,10 +690,11 @@ the test suite.
 | `test_char_marker_on_every_entry_type` | The notes reach every history entry a request writes |
 | `test_char_marker_visible_after_response` | Whether history is readable as soon as the server has answered |
 | `test_char_marker_search_is_substring` | The history search matches substrings, and `limit` with `offset` pages through it without overlap |
-| `test_char_notes_length` | Notes of 20,000 characters are stored whole (SQLite; PostgreSQL not measured yet) |
+| `test_char_notes_length` | Notes up to 512 characters are stored whole. Longer ones: SQLite stores them, PostgreSQL answers 500 |
+| `test_char_overlong_notes_write_without_history` | PostgreSQL: on 1.5.6 that 500 still commits the stock change, with no history entry. On 1.4.3 it changes nothing |
 | `test_char_multi_item_request_is_atomic` | One bad line fails the whole request |
 | `test_char_restricted_user_can_adjust` | The documented minimum roles are enough |
-| `test_char_concurrent_transfers_same_item` | Two simultaneous transfers never move more than the item held. On SQLite, colliding requests give one 201 and one 5xx that wrote nothing. Requests handled one after the other give two 201s, and the second moves only what was left: a 201 can move less than asked, so read-back must compare the delta with the plan |
+| `test_char_concurrent_transfers_same_item` | Two simultaneous transfers of 4 from an item of 5. SQLite: colliding requests give one 201 and one 5xx that wrote nothing; requests handled one after the other behave like PostgreSQL 1.5.6. PostgreSQL 1.5.6: both 201, the second moves only the 1 left, so a 201 can move less than asked. PostgreSQL 1.4.3: both 201 and stock grows to 9 (a lost update) |
 | `test_char_transfer_does_not_merge` | A transfer to a location that holds the same part leaves separate items (server-wide merge setting off) |
 | `test_char_transfer_merge_setting_on` | The server-wide merge setting does not merge a line that omits `merge` or sends `false`; only `merge: true` merges (1.5.6) |
 | `test_char_stock_list_cascade_false` | A stock list with `cascade=false` leaves out sub-locations |
