@@ -333,6 +333,13 @@ can also steer the gate by what it omits. These rules close that path:
   Anything else is a review reason.
 - **Limits.** A quantity above `policy.max_quantity` is a review reason.
   So is a quantity above the stock on hand, which the resolve step checks.
+- **Where.** `core/validate.py` implements the rules above that need no
+  catalog, and `tests/core/test_validate.py` checks, on every corpus
+  movement with all extractor flags removed, that the rules alone still
+  raise every flag that follows from the fields. A number anywhere in the
+  text grounds a quantity ("Disc 40" grounds 40), so grounding catches
+  invented numbers, not misread ones. The limit applies to every unit,
+  so "300 ft" of cable needs a click at the default of 100.
 - **Matching is deterministic** and takes only the item text, the location
   text and the poster as input (section 10). The extraction prompt never
   contains catalog or alias data, so the model cannot learn part names to
