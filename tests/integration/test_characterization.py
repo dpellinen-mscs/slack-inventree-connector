@@ -6,8 +6,11 @@ pinned version it runs against. When one fails, the design is what changes.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from typing import TYPE_CHECKING, Any
+
+import httpx
 
 if TYPE_CHECKING:
     from conftest import RawApi, Scratch
@@ -194,7 +197,7 @@ def test_char_serialized_quantity_noop(api: RawApi, scratch: Scratch) -> None:
 def test_char_transfer_does_not_merge(api: RawApi, scratch: Scratch) -> None:
     """A transfer to a location that holds the same part leaves separate items, with and without merge=false.
 
-    The case with the server-wide "merge stock on transfer" setting switched on is not covered yet.
+    With the server-wide setting switched on: `test_char_transfer_merge_setting_on`.
     """
     waiting = scratch.stock(4, location=scratch.other)
     for extra in ({}, {"merge": False}):
@@ -204,3 +207,98 @@ def test_char_transfer_does_not_merge(api: RawApi, scratch: Scratch) -> None:
         assert float(scratch.item(waiting["pk"])["quantity"]) == 4
         assert scratch.item(moving["pk"])["location"] == scratch.other
     assert sorted(float(row["quantity"]) for row in api.items(scratch.part, scratch.other)) == [3, 3, 4]
+
+
+MERGE_SETTING = "/api/settings/global/STOCK_MERGE_ON_TRANSFER/"
+MERGE_FROM = 530
+"""Measured: API 511 (1.4.3) has no merge setting and ignores `merge` on a transfer line; API 530 (1.5.6) has both."""
+
+
+def test_char_transfer_merge_setting_on(api: RawApi, scratch: Scratch) -> None:
+    """The server-wide "merge stock on transfer" setting does not change a transfer that omits `merge`.
+
+    Only an explicit `merge: true` merges (API 530): the moving item is deleted, and its history entry, with the
+    notes, is written on the destination item. The connector sends `merge: false` on every line (design section 5).
+    """
+    if api.get("/api/")["apiVersion"] < MERGE_FROM:
+        assert api.status(MERGE_SETTING) == 404
+        waiting = scratch.stock(4, location=scratch.other)
+        moving = scratch.stock(3)
+        line = {"pk": moving["pk"], "quantity": 3, "merge": True}
+        assert api.post("/api/stock/transfer/", {"items": [line], "location": scratch.other}).status_code == 201
+        assert float(scratch.item(waiting["pk"])["quantity"]) == 4  # merge is ignored
+        return
+    switched = api.http.patch(MERGE_SETTING, json={"value": True})
+    switched.raise_for_status()
+    try:
+        waiting = scratch.stock(4, location=scratch.other)
+        for extra in ({}, {"merge": False}):
+            moving = scratch.stock(3)
+            line = {"pk": moving["pk"], "quantity": 3, **extra}
+            assert api.post("/api/stock/transfer/", {"items": [line], "location": scratch.other}).status_code == 201
+            assert float(scratch.item(waiting["pk"])["quantity"]) == 4
+            assert scratch.item(moving["pk"])["location"] == scratch.other
+        moving = scratch.stock(3)
+        marker = f"merge-{uuid.uuid4().hex}"
+        line = {"pk": moving["pk"], "quantity": 3, "merge": True}
+        body = {"items": [line], "location": scratch.other, "notes": marker}
+        assert api.post("/api/stock/transfer/", body).status_code == 201
+        assert api.status(f"/api/stock/{moving['pk']}/") == 404
+        assert float(scratch.item(waiting["pk"])["quantity"]) == 7
+        assert [row["item"] for row in search_rows(api, marker)] == [waiting["pk"]]
+    finally:
+        api.http.patch(MERGE_SETTING, json={"value": False}).raise_for_status()
+
+
+def test_char_notes_length(api: RawApi, scratch: Scratch) -> None:
+    """Notes of 20,000 characters are accepted and stored whole on the history entry (SQLite).
+
+    The connector keeps its notes under 200 characters (design section 7), so it never nears a limit.
+    PostgreSQL is not measured yet.
+    """
+    item = scratch.stock(5)
+    prefix = f"long-{uuid.uuid4().hex}"
+    notes = prefix + "n" * 20_000
+    body = {"items": [{"pk": item["pk"], "quantity": 5}], "location": scratch.other, "notes": notes}
+    assert api.post("/api/stock/transfer/", body).status_code == 201
+    assert search(api, prefix) == [notes]
+
+
+def test_char_concurrent_transfers_same_item(api: RawApi, scratch: Scratch) -> None:
+    """Two simultaneous transfers of 4 from an item of 5 never move more than the item held.
+
+    Measured on SQLite (one server process): one answers 201, the other a 5xx that wrote nothing. A 5xx is an
+    unknown outcome for the connector (design section 7); recovery then finds no marker for it.
+    """
+    item = scratch.stock(5)
+    destinations = {"first": scratch.child, "second": scratch.other}
+    markers = {name: f"race-{name}-{uuid.uuid4().hex}" for name in destinations}
+    statuses: dict[str, int] = {}
+    barrier = threading.Barrier(len(destinations))
+
+    def transfer(name: str) -> None:
+        body = {"items": [{"pk": item["pk"], "quantity": 4}], "location": destinations[name], "notes": markers[name]}
+        with httpx.Client(base_url=api.http.base_url, headers=api.http.headers, timeout=60) as client:
+            barrier.wait()
+            statuses[name] = client.post("/api/stock/transfer/", json=body).status_code
+
+    threads = [threading.Thread(target=transfer, args=(name,)) for name in destinations]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    def held(location: int) -> float:
+        return sum(float(row["quantity"]) for row in api.items(scratch.part, location))
+
+    assert 201 in statuses.values(), statuses
+    moved = {name: held(location) for name, location in destinations.items()}
+    assert held(scratch.parent) + sum(moved.values()) == 5
+    for name, status in statuses.items():
+        if status == 201:
+            assert moved[name] == 4
+            assert search(api, markers[name]) != []
+        else:
+            assert status >= 500, statuses
+            assert moved[name] == 0
+            assert search(api, markers[name]) == []

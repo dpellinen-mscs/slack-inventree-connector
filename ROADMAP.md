@@ -40,7 +40,7 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [ ] Audit store: schema, migrations, append-only log, request keys, marker and snapshot columns
 - [ ] InvenTree test harness: pinned versions in Docker, seeded from `eval/catalog/`, torn down after each run, with one PostgreSQL job
 - [ ] Characterization tests for every InvenTree behavior the design relies on (design section 11)
-- [ ] Characterization of a transfer with the server-wide "merge stock on transfer" setting on
+- [x] Characterization of a transfer with the server-wide "merge stock on transfer" setting on
 - [ ] Fault proxy for delayed, dropped and failed responses
 - [x] InvenTree client: read-only, rejects every method except GET, with API version check at startup ([0007](docs/decisions/0007-inventree-read-client.md))
 - [ ] Threat model, first version
