@@ -24,6 +24,7 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [x] Design document (`docs/design.md`)
 - [x] Roadmap (this file)
 - [x] Eval corpus v0.1 with format, schema and validator (`eval/`)
+- [x] Reference scorer for the corpus (`eval/tools/score.py`)
 - [x] Lean CI for the corpus
 - [ ] First decision bundle answered: shape and stack, default policy, name and license
 - [ ] Docker works on the build machine
