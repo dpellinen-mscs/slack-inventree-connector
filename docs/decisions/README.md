@@ -12,6 +12,7 @@ editing history.
 | [0004](0004-default-write-policy.md) | Clear take-outs apply automatically, everything else is confirmed | Accepted |
 | [0005](0005-project-name.md) | The project is named stockthread | Accepted |
 | [0006](0006-python-tooling.md) | Python tooling: hatchling, ruff, mypy strict, pytest, make | Accepted |
+| [0007](0007-inventree-read-client.md) | The InvenTree read client: httpx, GET only, a tested API range | Accepted |
 | [0008](0008-mit-license.md) | The project is licensed under MIT | Accepted |
 
 ## Template

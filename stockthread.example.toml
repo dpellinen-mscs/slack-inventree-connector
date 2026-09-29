@@ -1,0 +1,45 @@
+# stockthread settings. Copy this file to stockthread.toml and edit it.
+# Check it with: stockthread check-config
+#
+# Secrets never go in this file. Set them as environment variables:
+#   SLACK_BOT_TOKEN       xoxb-...  always
+#   SLACK_APP_TOKEN       xapp-...  for Socket Mode
+#   SLACK_SIGNING_SECRET            for HTTP mode
+#   INVENTREE_TOKEN                 always
+
+[slack]
+transport = "socket"          # "socket" (no public URL needed) or "http"
+workspace_id = "T0ACME01"     # events from any other workspace are dropped
+app_id = "A0STOCK1"           # events for any other app are dropped
+channels = []                 # channel ids to act in. Empty: act nowhere
+approvers = []                # user ids that may approve. Empty: nobody can
+catch_up_hours = 72           # read missed posts this far back after downtime
+group_window_seconds = 5      # join sibling messages from one user
+plan_expiry_hours = 24
+
+[inventree]
+# Use https unless InvenTree runs on the same host or a trusted network:
+# INVENTREE_TOKEN is sent with every request.
+url = "http://inventree.local:8000"
+timeout_seconds = 10
+
+[writes]
+enabled = false               # the switch. Off: every movement is a dry-run
+
+[policy]
+# Movement types that apply without a click when nothing is in doubt.
+# The rest wait for "Apply". [] makes every movement review-first.
+auto_apply = ["take_to_vehicle", "take_to_site"]
+max_quantity = 100            # a larger quantity is a review reason
+# Default source location per movement type. Unset: an implied source is a
+# review reason.
+default_source = {}
+
+[apply]
+settle_seconds = 120          # must be longer than inventree.timeout_seconds
+
+[undo]
+max_age_hours = 168
+
+[storage]
+database = "stockthread.db"

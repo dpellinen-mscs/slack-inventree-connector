@@ -17,6 +17,23 @@ make check     # format check, lint, type check, unit tests, eval corpus tests
 `make check` is the gate that CI runs. Run it before you push.
 `make format` fixes formatting and the lint findings that ruff can fix.
 
+### Integration tests
+
+`make check` skips the tests in `tests/integration/`. They need a
+disposable InvenTree server, which CI starts for every pinned version.
+To run them locally you need Docker:
+
+```sh
+tests/integration/start-inventree.sh inventree/inventree:1.5.6 > .it.env
+set -a; . ./.it.env; set +a
+.venv/bin/pytest tests/integration
+tests/integration/start-inventree.sh --stop
+```
+
+The script starts InvenTree on port 8000 with a throwaway admin account,
+and writes an API token to a file. It never prints the token. The tests
+create and move stock, so never point them at a real server.
+
 ## Ground rules
 
 - A wrong stock write is worse than no write. Code that can write to

@@ -1,0 +1,196 @@
+"""Read-only InvenTree REST client.
+
+The connector reads parts, locations and stock through this client. It can
+only send GET: it has no method for anything else, and a request hook refuses
+any other method before it leaves the process. Stock writes will get their own
+client behind the write gate (design section 6).
+
+Errors never repeat a response body or the token. A body can hold inventory or
+customer data, and the token is a secret.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from types import TracebackType
+from typing import Any
+
+import anyio
+import httpx
+from pydantic import SecretStr
+
+from stockthread.config import InvenTreeSettings
+
+MIN_API_VERSION = 511
+"""InvenTree 1.4.3, the oldest release CI tests. (1.4.4 has the same API version but no Docker image.)"""
+MAX_API_VERSION = 530
+"""InvenTree 1.5.6, the newest release CI tests."""
+
+PAGE_SIZE = 100
+MAX_PAGES = 1000
+"""A list longer than this many pages is refused: it would be a server bug or a loop."""
+MAX_ATTEMPTS = 3
+"""Attempts for one read that gets HTTP 429. Only reads are ever retried."""
+MAX_RETRY_AFTER_SECONDS = 30.0
+_API_PATH = re.compile(r"/api/(?:[A-Za-z0-9_-]+/)*")
+"""Plain segments only: no dots, no percent escapes, no query. Every InvenTree path ends with a slash."""
+
+
+class InvenTreeError(Exception):
+    """A read failed. The message is safe to log: it holds no body and no secret."""
+
+
+class ReadOnlyViolation(InvenTreeError):
+    """Something tried to send a request other than GET through the read-only client."""
+
+
+@dataclass(frozen=True)
+class ServerInfo:
+    version: str
+    api_version: int
+
+
+@dataclass(frozen=True)
+class VersionCheck:
+    info: ServerInfo
+    writes_allowed: bool
+    message: str
+
+
+def check_version(info: ServerInfo) -> VersionCheck:
+    """Writes need an API version that CI has tested. Reads, and so dry-runs, work on any version."""
+    tested = f"API {MIN_API_VERSION} to {MAX_API_VERSION}"
+    if MIN_API_VERSION <= info.api_version <= MAX_API_VERSION:
+        return VersionCheck(info, True, f"InvenTree {info.version} (API {info.api_version}) is tested.")
+    return VersionCheck(
+        info,
+        False,
+        f"InvenTree {info.version} (API {info.api_version}) is outside the tested range ({tested}). "
+        "Stock writes stay off; dry-runs still work.",
+    )
+
+
+async def _only_get(request: httpx.Request) -> None:
+    if request.method != "GET":
+        raise ReadOnlyViolation(f"the read-only InvenTree client refused a {request.method} request")
+
+
+class InvenTreeReader:
+    """GET-only access to the InvenTree REST API with token authentication."""
+
+    def __init__(
+        self,
+        settings: InvenTreeSettings,
+        token: SecretStr,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
+    ) -> None:
+        self._sleep = sleep
+        self._http = httpx.AsyncClient(
+            base_url=settings.url,
+            headers={"Authorization": f"Token {token.get_secret_value()}", "Accept": "application/json"},
+            timeout=settings.timeout_seconds,
+            follow_redirects=False,  # a redirect could carry the token somewhere else
+            event_hooks={"request": [_only_get]},
+            transport=transport,
+        )
+
+    async def __aenter__(self) -> InvenTreeReader:
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+    async def server_info(self) -> ServerInfo:
+        """Read the server name and versions from the API root."""
+        data = await self.get("/api/")
+        if not isinstance(data, dict) or str(data.get("server", "")).lower() != "inventree":
+            raise InvenTreeError("the server at the configured URL is not InvenTree")
+        api_version, version = data.get("apiVersion"), data.get("version")
+        if type(api_version) is not int or not isinstance(version, str):
+            raise InvenTreeError("the InvenTree API root has no valid version fields")
+        return ServerInfo(version=version, api_version=api_version)
+
+    async def get(self, path: str, params: Mapping[str, str | int | bool] | None = None) -> Any:
+        """GET one API path, such as `/api/part/`, and return the decoded JSON."""
+        if not _API_PATH.fullmatch(path):
+            raise InvenTreeError(f"refused to read {path!r}: only plain paths below /api/, ending in a slash")
+        query = {key: str(value).lower() if isinstance(value, bool) else value for key, value in (params or {}).items()}
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                response = await self._http.get(path, params=query)
+            except httpx.HTTPError as exc:
+                # The exception text can quote the URL; the type is enough to act on.
+                raise InvenTreeError(f"GET {path} failed: {type(exc).__name__}") from None
+            if response.status_code == httpx.codes.TOO_MANY_REQUESTS and attempt < MAX_ATTEMPTS:
+                await self._sleep(_retry_after(response, attempt))
+                continue
+            return _decode(path, response)
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def list_all(self, path: str, params: Mapping[str, str | int | bool] | None = None) -> list[dict[str, Any]]:
+        """GET every page of a list endpoint."""
+        results: list[dict[str, Any]] = []
+        count: int | None = None
+        for _ in range(MAX_PAGES):
+            page = await self.get(path, {**(params or {}), "limit": PAGE_SIZE, "offset": len(results)})
+            if (
+                not isinstance(page, dict)
+                or type(page.get("count")) is not int
+                or not isinstance(page.get("results"), list)
+            ):
+                raise InvenTreeError(f"GET {path} did not return a paginated list")
+            batch = page["results"]
+            if not all(isinstance(entry, dict) for entry in batch):
+                raise InvenTreeError(f"GET {path} returned a list entry that is not an object")
+            # Offset paging skips or repeats rows when the list changes between pages. A changed count or an early
+            # empty page shows that happened, and a partial list must never pass for the whole one.
+            if (count is not None and page["count"] != count) or (not batch and len(results) < page["count"]):
+                raise InvenTreeError(f"GET {path}: the list changed while it was read")
+            count = page["count"]
+            results.extend(batch)
+            if len(results) >= count:
+                return results
+        raise InvenTreeError(f"GET {path} returned more than {MAX_PAGES} pages")
+
+    async def locations(self) -> list[dict[str, Any]]:
+        return await self.list_all("/api/stock/location/")
+
+    async def parts(self) -> list[dict[str, Any]]:
+        return await self.list_all("/api/part/", {"active": True})
+
+    async def stock_items(self, part: int, location: int) -> list[dict[str, Any]]:
+        """Stock items of one part in one location, without its sub-locations, that are in stock."""
+        params = {"part": part, "location": location, "cascade": False, "in_stock": True}
+        return await self.list_all("/api/stock/", params)
+
+
+def _retry_after(response: httpx.Response, attempt: int) -> float:
+    try:
+        seconds = float(response.headers.get("Retry-After", ""))
+    except ValueError:
+        seconds = 2.0 ** (attempt - 1)
+    if not math.isfinite(seconds) or seconds < 0:
+        seconds = 2.0 ** (attempt - 1)
+    return min(seconds, MAX_RETRY_AFTER_SECONDS)
+
+
+def _decode(path: str, response: httpx.Response) -> Any:
+    status = response.status_code
+    if status in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
+        raise InvenTreeError(f"InvenTree refused the token for GET {path} (HTTP {status})")
+    if status != httpx.codes.OK:
+        raise InvenTreeError(f"GET {path} returned HTTP {status}")
+    try:
+        return response.json()
+    except ValueError:
+        raise InvenTreeError(f"GET {path} did not return JSON") from None

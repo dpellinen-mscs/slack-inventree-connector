@@ -1,0 +1,58 @@
+{
+  "description": "Someone who is not an approver or the poster clicks Apply.",
+  "kind": "interactive",
+  "transport": "http",
+  "headers": {},
+  "body": {
+    "type": "block_actions",
+    "api_app_id": "A0ACME001",
+    "token": "synthetic-verification-token",
+    "team": {
+      "id": "T0ACME001",
+      "domain": "acmefiber"
+    },
+    "user": {
+      "id": "U0PRIYA003",
+      "username": "u0priya003",
+      "name": "u0priya003",
+      "team_id": "T0ACME001"
+    },
+    "channel": {
+      "id": "C0ACME001",
+      "name": "inventory"
+    },
+    "container": {
+      "type": "message",
+      "message_ts": "1790000200.000300",
+      "channel_id": "C0ACME001",
+      "is_ephemeral": false
+    },
+    "message": {
+      "type": "message",
+      "user": "U0STOCKBOT",
+      "bot_id": "B0STOCKBOT",
+      "text": "Apply this movement?",
+      "ts": "1790000200.000300",
+      "thread_ts": "1790000000.000100"
+    },
+    "trigger_id": "1790000300.0001.synthetic",
+    "response_url": "https://hooks.slack.com/actions/T0ACME001/0000/synthetic",
+    "actions": [
+      {
+        "type": "button",
+        "block_id": "plan_r1",
+        "action_id": "apply",
+        "value": "b7Qm3xT9kLpV2nRz8sWc4yHd",
+        "text": {
+          "type": "plain_text",
+          "text": "Apply"
+        },
+        "action_ts": "1790000300.000400"
+      }
+    ]
+  },
+  "expected": {
+    "action": "drop",
+    "reason": "not_authorized"
+  }
+}

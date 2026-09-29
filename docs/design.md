@@ -247,7 +247,16 @@ needs.
 - **Depletion.** Removing the last unit can delete the stock item together
   with its history, depending on a server setting. Verification treats a
   missing source item as correct only when the plan expected it to reach
-  zero.
+  zero. Measured on 1.4.3 and 1.5.6 (`test_char_deplete_deletes_item_keeps_history`):
+  the item answers 404, but its history entries survive, so the research
+  claim that history is deleted with the item was wrong. The marker of the
+  removal that deleted the item is found by search on 1.5.6 and not on
+  1.4.3. A history query filtered by the deleted item answers 400, not an
+  empty list.
+  The authority for "the item is gone" is `GET /api/stock/<pk>/`
+  answering 404. The 400 only corroborates it, because a malformed id
+  gets a 400 too. Markers are looked up by search, never through the
+  item filter alone.
 - **Serialized stock** always has quantity 1 per stock item, so "2 units"
   means two stock items. The research found that add and remove on a
   serialized item do nothing and still return success. The connector never
@@ -413,7 +422,7 @@ A plan has its own state: `current`, `stale`, `expired`, `applied`,
 | `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present) |
 | `applying` | Intent stored, write about to be sent or sent | `applied`, `failed`, `unknown` |
 | `failed` | InvenTree refused the request. Nothing was written | `approved`, by a human, as a new attempt |
-| `unknown` | The outcome is not known | `applied`, `approved` or `verify_failed`, by recovery |
+| `unknown` | The outcome is not known | `applied`, `failed` (no marker and nothing changed) or `verify_failed`, by recovery |
 | `applied` | InvenTree accepted the request | `verified`, `verify_failed` |
 | `verified` | Read-back agrees with the plan | `undoing` |
 | `verify_failed` | Read-back or recovery found something unexpected | `accepted` or `undoing`, by the operator |
@@ -446,9 +455,12 @@ request shares it.
 - The search for a marker reads every page of results and compares the
   whole token, because the server search matches substrings.
 - **A marker that is found proves the write happened. A marker that is not
-  found proves nothing.** History can be deleted with a depleted stock
-  item, and it is not yet known whether history is always readable at the
-  moment the server answers.
+  found proves nothing.** On 1.4.3 the marker of a removal that deleted
+  its stock item cannot be found (section 5, Depletion), an admin can
+  delete history. History was readable as soon as the server answered
+  in the measured setup (one server process with SQLite,
+  `test_char_marker_visible_after_response`), but that is not assumed
+  for every deployment.
 
 ### Apply protocol
 
@@ -502,7 +514,7 @@ server, so recovery waits before it concludes anything:
 | --- | --- | --- |
 | Found | Match the plan | Continue with read-back, then `verified` |
 | Found | Anything else | `verify_failed` |
-| Not found | Unchanged | The operator may approve a new attempt |
+| Not found | Unchanged | `failed`: the operator may approve a new attempt |
 | Not found | Changed | `verify_failed` |
 
 A new attempt, after a failure or after recovery, gets a new attempt
@@ -636,17 +648,18 @@ the test suite.
 | --- | --- |
 | `test_char_over_quantity_transfer` | A transfer of more than an item holds is not rejected |
 | `test_char_over_quantity_remove` | A remove of more than an item holds stops at zero |
-| `test_char_serialized_quantity_noop` | Add and remove on a serialized item change nothing and return success |
-| `test_char_deplete_deletes_history` | Depletion can delete the stock item and its history |
+| `test_char_serialized_quantity_noop` | Add and remove on a serialized item change nothing, return success, and whether they still write a history entry |
+| `test_char_deplete_deletes_item_keeps_history` | Depletion can delete the stock item. The earlier history survives. The removal's marker is found by search on 1.5.6 but not on 1.4.3 |
 | `test_char_partial_transfer_split` | A partial transfer keeps the source id and creates a new item |
 | `test_char_marker_on_every_entry_type` | The notes reach every history entry a request writes |
 | `test_char_marker_visible_after_response` | Whether history is readable as soon as the server has answered |
-| `test_char_marker_search_is_substring` | The history search matches substrings and is paginated |
+| `test_char_marker_search_is_substring` | The history search matches substrings, and `limit` with `offset` pages through it without overlap |
 | `test_char_notes_length` | What happens to notes beyond the length limit |
 | `test_char_multi_item_request_is_atomic` | One bad line fails the whole request |
 | `test_char_restricted_user_can_adjust` | The documented minimum roles are enough |
 | `test_char_concurrent_transfers_same_item` | What two simultaneous transfers from one item do |
-| `test_char_transfer_does_not_merge` | A transfer to a location that holds the same part leaves separate items, also with the server-wide merge setting on |
+| `test_char_transfer_does_not_merge` | A transfer to a location that holds the same part leaves separate items (server-wide merge setting off) |
+| `test_char_transfer_merge_setting_on` | What a transfer does when the server-wide merge setting is on (not written yet) |
 | `test_char_stock_list_cascade_false` | A stock list with `cascade=false` leaves out sub-locations |
 | `test_char_error_body_format` | The shape of a 4xx answer from InvenTree, which recovery uses to tell it from a proxy |
 
@@ -660,8 +673,12 @@ corrupts responses. It drives the tests for unknown outcomes, including
 
 ## 12. Configuration
 
-One file plus environment variables for secrets. Settings are validated at
-startup, and the connector refuses to start on an unknown key. The startup
+One TOML file plus environment variables for secrets. Settings are
+validated at startup, and the connector refuses to start on an unknown key,
+a value of the wrong type ("yes" is not a boolean) or a secret in the file.
+Errors name the setting and never repeat its value.
+[`stockthread.example.toml`](../stockthread.example.toml) lists every
+setting with its default, and `stockthread check-config` validates a file. The startup
 log prints the effective settings with secrets redacted, and states in one
 line whether writes are on.
 
