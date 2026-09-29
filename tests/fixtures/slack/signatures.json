@@ -1,0 +1,170 @@
+{
+  "format_version": 1,
+  "signing_secret": "synthetic-signing-secret-for-tests",
+  "max_age_seconds": 300,
+  "cases": [
+    {
+      "name": "valid_event",
+      "valid": true,
+      "now": 1790000000,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000",
+        "X-Slack-Signature": "v0=fc20fe1ba3408dc19ce038cde4aabd9a25eea60fb0e373e11959aac9db86fcbf"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "Correct secret, body and time."
+    },
+    {
+      "name": "valid_interactivity_form",
+      "valid": true,
+      "now": 1790000010,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000010",
+        "X-Slack-Signature": "v0=4120888f1c620f5e7bbd3f5a19987d5d30c16745fbbade962ced96dc30f7963a"
+      },
+      "raw_body": "payload=%7B%22type%22%3A%22block_actions%22%2C%22api_app_id%22%3A%22A0ACME001%22%2C%22token%22%3A%22synthetic-verification-token%22%2C%22team%22%3A%7B%22id%22%3A%22T0ACME001%22%2C%22domain%22%3A%22acmefiber%22%7D%2C%22user%22%3A%7B%22id%22%3A%22U0LUIS0005%22%2C%22username%22%3A%22u0luis0005%22%2C%22name%22%3A%22u0luis0005%22%2C%22team_id%22%3A%22T0ACME001%22%7D%2C%22channel%22%3A%7B%22id%22%3A%22C0ACME001%22%2C%22name%22%3A%22inventory%22%7D%2C%22container%22%3A%7B%22type%22%3A%22message%22%2C%22message_ts%22%3A%221790000200.000300%22%2C%22channel_id%22%3A%22C0ACME001%22%2C%22is_ephemeral%22%3Afalse%7D%2C%22message%22%3A%7B%22type%22%3A%22message%22%2C%22user%22%3A%22U0STOCKBOT%22%2C%22bot_id%22%3A%22B0STOCKBOT%22%2C%22text%22%3A%22Apply%20this%20movement%3F%22%2C%22ts%22%3A%221790000200.000300%22%2C%22thread_ts%22%3A%221790000000.000100%22%7D%2C%22trigger_id%22%3A%221790000300.0001.synthetic%22%2C%22response_url%22%3A%22https%3A%2F%2Fhooks.slack.com%2Factions%2FT0ACME001%2F0000%2Fsynthetic%22%2C%22actions%22%3A%5B%7B%22type%22%3A%22button%22%2C%22block_id%22%3A%22plan_r1%22%2C%22action_id%22%3A%22apply%22%2C%22value%22%3A%22b7Qm3xT9kLpV2nRz8sWc4yHd%22%2C%22text%22%3A%7B%22type%22%3A%22plain_text%22%2C%22text%22%3A%22Apply%22%7D%2C%22action_ts%22%3A%221790000300.000400%22%7D%5D%7D",
+      "why": "Interactivity arrives form-encoded. The raw form body is signed, not the decoded JSON."
+    },
+    {
+      "name": "valid_at_the_limit",
+      "valid": true,
+      "now": 1790000300,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000",
+        "X-Slack-Signature": "v0=fc20fe1ba3408dc19ce038cde4aabd9a25eea60fb0e373e11959aac9db86fcbf"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "Exactly 300 seconds old is still accepted (the SDK rejects only above 300)."
+    },
+    {
+      "name": "stale_timestamp",
+      "valid": false,
+      "now": 1790000301,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000",
+        "X-Slack-Signature": "v0=fc20fe1ba3408dc19ce038cde4aabd9a25eea60fb0e373e11959aac9db86fcbf"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "More than 5 minutes old: a possible replay."
+    },
+    {
+      "name": "future_timestamp",
+      "valid": false,
+      "now": 1789999699,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000",
+        "X-Slack-Signature": "v0=fc20fe1ba3408dc19ce038cde4aabd9a25eea60fb0e373e11959aac9db86fcbf"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "More than 5 minutes in the future."
+    },
+    {
+      "name": "wrong_secret",
+      "valid": false,
+      "now": 1790000000,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000",
+        "X-Slack-Signature": "v0=e6ac26d34b3803cd62767fd5ce301fd4a312571fdf95b32cc5499c9450b9249a"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "Signed with another secret."
+    },
+    {
+      "name": "body_changed",
+      "valid": false,
+      "now": 1790000000,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000",
+        "X-Slack-Signature": "v0=fc20fe1ba3408dc19ce038cde4aabd9a25eea60fb0e373e11959aac9db86fcbf"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"9 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "One character of the body changed after signing."
+    },
+    {
+      "name": "body_reserialized",
+      "valid": false,
+      "now": 1790000000,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000",
+        "X-Slack-Signature": "v0=fc20fe1ba3408dc19ce038cde4aabd9a25eea60fb0e373e11959aac9db86fcbf"
+      },
+      "raw_body": "{\n \"token\": \"synthetic-verification-token\",\n \"team_id\": \"T0ACME001\",\n \"api_app_id\": \"A0ACME001\",\n \"event\": {\n  \"type\": \"message\",\n  \"channel\": \"C0ACME001\",\n  \"channel_type\": \"channel\",\n  \"user\": \"U0SAM0001\",\n  \"text\": \"2 Disc 40 on my truck\",\n  \"ts\": \"1790000000.000100\",\n  \"event_ts\": \"1790000000.000100\",\n  \"client_msg_id\": \"0f0e0d0c-0000-4000-8000-000000000100\"\n },\n \"type\": \"event_callback\",\n \"event_id\": \"Ev0ACME0001\",\n \"event_time\": 1790000000,\n \"authorizations\": [\n  {\n   \"enterprise_id\": null,\n   \"team_id\": \"T0ACME001\",\n   \"user_id\": \"U0STOCKBOT\",\n   \"is_bot\": true,\n   \"is_enterprise_install\": false\n  }\n ],\n \"is_ext_shared_channel\": false,\n \"event_context\": \"4-synthetic-Ev0ACME0001\"\n}",
+      "why": "Same JSON, different bytes: verification must use the raw body."
+    },
+    {
+      "name": "timestamp_changed",
+      "valid": false,
+      "now": 1790000001,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000001",
+        "X-Slack-Signature": "v0=fc20fe1ba3408dc19ce038cde4aabd9a25eea60fb0e373e11959aac9db86fcbf"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "The timestamp is part of the signed string."
+    },
+    {
+      "name": "wrong_version",
+      "valid": false,
+      "now": 1790000000,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000",
+        "X-Slack-Signature": "v1=fc20fe1ba3408dc19ce038cde4aabd9a25eea60fb0e373e11959aac9db86fcbf"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "Only v0 exists."
+    },
+    {
+      "name": "uppercase_hex",
+      "valid": false,
+      "now": 1790000000,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000",
+        "X-Slack-Signature": "v0=FC20FE1BA3408DC19CE038CDE4AABD9A25EEA60FB0E373E11959AAC9DB86FCBF"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "The comparison is exact."
+    },
+    {
+      "name": "missing_signature",
+      "valid": false,
+      "now": 1790000000,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "No signature header."
+    },
+    {
+      "name": "missing_timestamp",
+      "valid": false,
+      "now": 1790000000,
+      "headers": {
+        "X-Slack-Signature": "v0=fc20fe1ba3408dc19ce038cde4aabd9a25eea60fb0e373e11959aac9db86fcbf"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "No timestamp header."
+    },
+    {
+      "name": "timestamp_not_a_number",
+      "valid": false,
+      "now": 1790000000,
+      "headers": {
+        "X-Slack-Request-Timestamp": "17900000O0",
+        "X-Slack-Signature": "v0=fc20fe1ba3408dc19ce038cde4aabd9a25eea60fb0e373e11959aac9db86fcbf"
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "A letter O in the timestamp."
+    },
+    {
+      "name": "empty_signature",
+      "valid": false,
+      "now": 1790000000,
+      "headers": {
+        "X-Slack-Request-Timestamp": "1790000000",
+        "X-Slack-Signature": ""
+      },
+      "raw_body": "{\"token\":\"synthetic-verification-token\",\"team_id\":\"T0ACME001\",\"api_app_id\":\"A0ACME001\",\"event\":{\"type\":\"message\",\"channel\":\"C0ACME001\",\"channel_type\":\"channel\",\"user\":\"U0SAM0001\",\"text\":\"2 Disc 40 on my truck\",\"ts\":\"1790000000.000100\",\"event_ts\":\"1790000000.000100\",\"client_msg_id\":\"0f0e0d0c-0000-4000-8000-000000000100\"},\"type\":\"event_callback\",\"event_id\":\"Ev0ACME0001\",\"event_time\":1790000000,\"authorizations\":[{\"enterprise_id\":null,\"team_id\":\"T0ACME001\",\"user_id\":\"U0STOCKBOT\",\"is_bot\":true,\"is_enterprise_install\":false}],\"is_ext_shared_channel\":false,\"event_context\":\"4-synthetic-Ev0ACME0001\"}",
+      "why": "An empty signature header."
+    }
+  ]
+}
