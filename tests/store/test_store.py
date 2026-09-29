@@ -83,6 +83,9 @@ def verified(store: Store, request: RequestKey) -> None:
     store.transition(request, expected=S.APPLIED, target=S.VERIFIED, actor=A.APPLIER)
 
 
+LATEST = len(store_db._migrations())
+
+
 def raw(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(path, isolation_level=None)
     connection.execute("PRAGMA foreign_keys = ON")
@@ -95,7 +98,7 @@ def raw(path: Path) -> sqlite3.Connection:
 def test_open_creates_the_schema_and_is_repeatable(path: Path) -> None:
     Store.open(path).close()
     store = Store.open(path)
-    assert store.schema_version == 1
+    assert store.schema_version == LATEST
     store.close()
 
 
@@ -614,11 +617,11 @@ def test_a_failed_migration_changes_nothing(path: Path, monkeypatch: pytest.Monk
     Store.open(path).close()
     real = store_db._migrations()
     broken = "CREATE TABLE extra (a INTEGER) STRICT;\nCREATE TABLE posts (a INTEGER);\n"
-    monkeypatch.setattr(store_db, "_migrations", lambda: [*real, (2, broken)])
+    monkeypatch.setattr(store_db, "_migrations", lambda: [*real, (LATEST + 1, broken)])
     with pytest.raises(sqlite3.OperationalError, match="already exists"):
         Store.open(path)
     db = raw(path)
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert db.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert db.execute("SELECT count(*) FROM sqlite_master WHERE name = 'extra'").fetchone()[0] == 0
 
 
@@ -639,7 +642,7 @@ def test_processes_opening_a_new_file_at_once_all_succeed(path: Path) -> None:
     for thread in threads:
         thread.join()
     assert errors == []
-    assert raw(path).execute("PRAGMA user_version").fetchone()[0] == 1
+    assert raw(path).execute("PRAGMA user_version").fetchone()[0] == LATEST
 
 
 def test_statements_keep_trigger_bodies_whole() -> None:

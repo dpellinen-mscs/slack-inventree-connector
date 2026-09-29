@@ -241,12 +241,19 @@ class MatchStatus(StrEnum):
 
 
 class MatchRule(StrEnum):
-    """The rule that produced a match (design section 10). Only the first three can authorize a write."""
+    """The rule that produced a match (design section 10). Only exact, normalized and alias can authorize a write."""
 
     EXACT = "exact"
     NORMALIZED = "normalized"
     ALIAS = "alias"
+    WORDS = "words"
+    """Every word of the text is one of the record's words, but the whole text names nothing exactly."""
     FUZZY = "fuzzy"
+    """Like WORDS, but at least one word needed the typo allowance."""
+
+
+_AUTHORIZING_RULES = frozenset({MatchRule.EXACT, MatchRule.NORMALIZED, MatchRule.ALIAS})
+"""An allowlist, so a rule added later cannot authorize a write by default."""
 
 
 @dataclass(frozen=True)
@@ -274,14 +281,15 @@ class Match:
     @property
     def can_authorize_a_write(self) -> bool:
         """True only for one record found by an exact, normalized or alias rule."""
-        return self.status is MatchStatus.MATCHED and self.rule is not MatchRule.FUZZY
+        return self.status is MatchStatus.MATCHED and self.rule in _AUTHORIZING_RULES
 
     def review_reason(self, *, kind: Literal["part", "location"]) -> ReviewReason | None:
         """The review reason this result raises, or None."""
         if self.can_authorize_a_write:
             return None
         if self.status is MatchStatus.MATCHED:
-            return ReviewReason(ReasonCode.FUZZY_MATCH, ReasonSource.RULE, f"{kind} found by a fuzzy rule")
+            rule = self.rule.value if self.rule else "unknown"
+            return ReviewReason(ReasonCode.FUZZY_MATCH, ReasonSource.RULE, f"{kind} found by the {rule} rule")
         codes = {
             ("part", MatchStatus.AMBIGUOUS): ReasonCode.PART_AMBIGUOUS,
             ("part", MatchStatus.UNMATCHED): ReasonCode.PART_UNMATCHED,

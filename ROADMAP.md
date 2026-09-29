@@ -29,8 +29,8 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [x] Shape, stack and default policy decided ([0003](docs/decisions/0003-standalone-python-service.md), [0004](docs/decisions/0004-default-write-policy.md))
 - [x] Name decided: stockthread ([0005](docs/decisions/0005-project-name.md))
 - [x] License decided: MIT ([0008](docs/decisions/0008-mit-license.md))
-- [ ] Origin credit decided (#3)
-- [ ] Docker works on the build machine
+- [x] Attribution decided: none ([0010](docs/decisions/0010-no-attribution.md))
+- [x] Docker works on the build machine (#2)
 
 ## M0: foundations
 
@@ -39,10 +39,10 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [x] Configuration: typed settings from environment and file, validated at startup, secrets redacted in every log and error
 - [ ] Domain model: post, plan revision with input hash, request, line item, match result, review reason, decision
 - [x] Audit store: schema, migrations, append-only log, request keys, marker and snapshot columns ([0009](docs/decisions/0009-audit-store.md))
-- [ ] InvenTree test harness: pinned versions in Docker, seeded from `eval/catalog/`, torn down after each run, with one PostgreSQL job
+- [x] InvenTree test harness: pinned versions in Docker, seeded from `eval/catalog/`, torn down after each run, with one PostgreSQL job
 - [ ] Characterization tests for every InvenTree behavior the design relies on (design section 11)
 - [x] Characterization of a transfer with the server-wide "merge stock on transfer" setting on
-- [ ] Fault proxy for delayed, dropped and failed responses
+- [x] Fault proxy for delayed, dropped and failed responses (`tests/support/faultproxy.py`)
 - [x] InvenTree client: read-only, rejects every method except GET, with API version check at startup ([0007](docs/decisions/0007-inventree-read-client.md))
 - [x] Threat model, first version ([`docs/threat-model.md`](docs/threat-model.md))
 - [ ] `SECURITY.md` (needs a contact, see the threat model), `CONTRIBUTING.md` (done), `CHANGELOG.md` (done)
@@ -57,13 +57,13 @@ can write stock yet: only the test suite has a raw HTTP helper.
 
 - [ ] Slack ingest over Socket Mode and HTTP, with signature verification on HTTP
 - [ ] Workspace and app id checks, channel allowlist, subtype allowlist, bot filtering, deduplication
-- [ ] Durable event queue, and catch-up from channel history after downtime
+- [ ] Durable event queue (store side done: `slack_events`, migration 0002), and catch-up from channel history after downtime
 - [ ] Grouping: photo with caption, sibling messages and threads become one post
 - [x] Rule-based extractor that needs no LLM (`core/extract_rules.py`; one message per post for now, declines the rest)
 - [ ] LLM extractor behind a provider interface, with a strict output schema
 - [ ] Eval runner: scores either extractor against the corpus, using recorded fixtures in CI
 - [ ] Validator: deterministic contradiction checks and text-level review reasons
-- [ ] Matcher: exact, normalized, alias, then fuzzy candidates, for parts and locations
+- [x] Matcher: exact, normalized, alias, then fuzzy candidates, for parts and locations (`core/matching.py`; the catalog snapshot from InvenTree comes with Resolve)
 - [ ] Dry-run reply in the Slack thread: what would change, and every review reason
 - [ ] Slack app manifests and the quickstart
 
