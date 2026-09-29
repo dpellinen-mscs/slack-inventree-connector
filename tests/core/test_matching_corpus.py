@@ -76,5 +76,5 @@ def as_expected(result: Match, kind: str) -> dict[str, Any]:
 
 @pytest.mark.parametrize(("case", "kind", "text", "poster", "expected"), expectations())
 def test_corpus_match(case: str, kind: str, text: str, poster: str, expected: dict[str, Any]) -> None:
-    result = match_part(text, CATALOG) if kind == "part" else match_location(text, CATALOG, poster)
+    result = match_part(text, CATALOG, poster) if kind == "part" else match_location(text, CATALOG, poster)
     assert as_expected(result, kind) == expected

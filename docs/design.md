@@ -627,8 +627,14 @@ Deterministic. The rules run in this order:
   enforces that with an allowlist (`Match.can_authorize_a_write`).
 - Corpus 0.2.0, with the expected text as input (`tests/core/test_matching_corpus.py`):
   part match 100% (109 results) and location match 100% (92 results).
-  Of the single part matches, 77 of 99 came from rule 4 or 5, so they
-  need a confirmation under the current policy.
+  Of the 99 single part matches, 80 came from rule 4 or 5 ("Disc 40",
+  "ONTs"), and so did 20 of the 88 single location matches. Under the
+  current policy all of those need a confirmation.
+- Plural endings are folded only on words without digits at rules 2 and
+  3 ("40S" may be another model). Rules 4 and 5 also fold them on words
+  with digits ("d40s"), and those rules never authorize. Where folding
+  makes two records look the same ("tapes": "Tap" or "Tape"), the result
+  is ambiguous.
 - Template, inactive and virtual parts are never a match. Structural
   locations are never a match.
 - "My truck" resolves through the mapping from Slack user to vehicle.

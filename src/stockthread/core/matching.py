@@ -29,8 +29,9 @@ TYPO_RATIO = 0.8
 """Two words of 4 letters or more count as the same word at this `difflib` similarity (for example "ondrl")."""
 MY_VEHICLE = re.compile(r"^my (truck|van|vehicle|car|trailer)$")
 """Phrases that mean the poster's own vehicle."""
-_WORD = re.compile(r"[a-z0-9]+")
-_LETTERS_DIGITS = re.compile(r"[a-z]+|[0-9]+")
+_WORD = re.compile(r"[^\W_]+")
+"""Letters and digits of any script, so "10\N{MICRO SIGN}F" never loses its unit."""
+_LETTERS_DIGITS = re.compile(r"[^\W\d_]+|\d+")
 
 
 @dataclass(frozen=True)
@@ -83,10 +84,16 @@ def words(text: str) -> list[str]:
     return _WORD.findall(folded)
 
 
-def _forms(word: str, capitals: bool = False) -> set[str]:
-    """The word and its possible singular forms. Numbers, capitalized words ("UPS") and "-ss" words have none."""
+def _forms(word: str, *, loose: bool = False) -> set[str]:
+    """The word and its possible singular forms.
+
+    "-ss" words and words under 3 letters have none. A word with digits has one only when `loose`:
+    "d40s" is probably two "d40", but "40S" may be another model, so only the rules that cannot
+    authorize a write (4 and 5) accept it. The forms may over-reduce ("tapes" -> "tap"), so rules
+    compare form sets, and a collision is ambiguous.
+    """
     forms = {word}
-    if capitals or word.isdigit() or word.endswith("ss") or len(word) < 3:
+    if word.endswith("ss") or len(word) < 3 or (not loose and any(char.isdigit() for char in word)):
         return forms
     if word.endswith("ies"):
         forms.add(word[:-3] + "y")
@@ -97,14 +104,13 @@ def _forms(word: str, capitals: bool = False) -> set[str]:
     return forms
 
 
-def _text_words(text: str) -> list[set[str]]:
-    capitals = {w.lower() for w in re.findall(r"[A-Za-z]+", text) if len(w) > 1 and w.isupper()}
-    return [_forms(w, w in capitals) for w in words(text)]
+def _text_words(text: str, *, loose: bool = False) -> list[set[str]]:
+    return [_forms(word, loose=loose) for word in words(text)]
 
 
-def _normal(text: str) -> tuple[str, ...]:
-    """A canonical form for rules 2 and 3: every word reduced to its shortest singular form."""
-    return tuple(min(forms, key=lambda form: (len(form), form)) for forms in _text_words(text))
+def _same(text: list[set[str]], name: list[set[str]]) -> bool:
+    """Rules 2 and 3: the same number of words, and each pair of words shares a form."""
+    return bool(text) and len(text) == len(name) and all(a & b for a, b in zip(text, name, strict=True))
 
 
 def _vocabulary(texts: Iterable[str]) -> set[str]:
@@ -148,36 +154,53 @@ def _match(
 ) -> Match:
     """Rules 1 to 5 over `records` (pk -> the texts that name it exactly)."""
     stripped = text.strip()
-    if not stripped:
+    wanted = _text_words(stripped)
+    if not wanted:  # punctuation, emoji or nothing: no word to match
         return Match(MatchStatus.UNMATCHED)
     exact = (pk for pk, names in records.items() if stripped in names)
     if decided := _decide(exact, MatchRule.EXACT):
         return decided
-    normal = _normal(stripped)
-    normalized = (pk for pk, names in records.items() if normal in {_normal(name) for name in names})
+    normalized = (pk for pk, names in records.items() if any(_same(wanted, _text_words(name)) for name in names))
     if decided := _decide(normalized, MatchRule.NORMALIZED):
         return decided
-    by_alias = (alias.record for alias in aliases if alias.record in records and _normal(alias.text) == normal)
+    by_alias = (alias.record for alias in aliases if alias.record in records and _same(wanted, _text_words(alias.text)))
     if decided := _decide(by_alias, MatchRule.ALIAS):
         return decided
-    wanted = _text_words(stripped)
+    loose = _text_words(stripped, loose=True)
     for rule, typos in ((MatchRule.WORDS, False), (MatchRule.FUZZY, True)):
-        hits = (pk for pk in records if all(_found(forms, vocabulary(pk), typos) for forms in wanted))
+        hits = (pk for pk in records if all(_found(forms, vocabulary(pk), typos) for forms in loose))
         if decided := _decide(hits, rule):
             return decided
     return Match(MatchStatus.UNMATCHED)
 
 
-def match_part(text: str, catalog: Catalog) -> Match:
-    """Match item text to a part. Inactive, template and virtual parts are never a match."""
+def _names(*texts: str) -> tuple[str, ...]:
+    return tuple(text for text in texts if text.strip())
+
+
+def stale_aliases(catalog: Catalog) -> list[Alias]:
+    """Aliases that point to a part or location that can no longer match. They are ignored, and reported."""
+    parts = {p.pk for p in catalog.parts if p.active and not p.template and not p.virtual}
+    locations = {loc.pk for loc in catalog.locations if not loc.structural}
+    return [a for a in catalog.part_aliases if a.record not in parts] + [
+        a for a in catalog.location_aliases if a.record not in locations
+    ]
+
+
+def match_part(text: str, catalog: Catalog, poster: str | None = None) -> Match:
+    """Match item text to a part. Inactive, template and virtual parts are never a match.
+
+    Aliases of a user other than `poster` do not apply.
+    """
     parts = {p.pk: p for p in catalog.parts if p.active and not p.template and not p.virtual}
-    aliases = {pk: [a.text for a in catalog.part_aliases if a.record == pk] for pk in parts}
+    aliases = [a for a in catalog.part_aliases if a.user is None or a.user == poster]
+    alias_texts = {pk: [a.text for a in aliases if a.record == pk] for pk in parts}
 
     def vocabulary(pk: int) -> set[str]:
         part = parts[pk]
-        return _vocabulary([part.name, part.keywords, *aliases[pk]])
+        return _vocabulary([part.name, part.keywords, *alias_texts[pk]])
 
-    return _match(text, {pk: (p.ipn, p.name) for pk, p in parts.items()}, catalog.part_aliases, vocabulary)
+    return _match(text, {pk: _names(p.ipn, p.name) for pk, p in parts.items()}, aliases, vocabulary)
 
 
 def match_location(text: str, catalog: Catalog, poster: str) -> Match:
@@ -192,12 +215,12 @@ def match_location(text: str, catalog: Catalog, poster: str) -> Match:
         if vehicle in locations:
             return Match(MatchStatus.MATCHED, rule=MatchRule.ALIAS, record=vehicle)
         return Match(MatchStatus.UNMATCHED)
-    aliases = [a for a in catalog.location_aliases if a.user in (None, poster)]
+    aliases = [a for a in catalog.location_aliases if a.user is None or a.user == poster]
     alias_texts = {pk: [a.text for a in aliases if a.record == pk] for pk in locations}
 
     def vocabulary(pk: int) -> set[str]:
         location = locations[pk]
         return _vocabulary([location.path.replace("/", " "), location.description, *alias_texts[pk]])
 
-    names = {pk: (loc.path, loc.name) for pk, loc in locations.items()}
+    names = {pk: _names(loc.path, loc.name) for pk, loc in locations.items()}
     return _match(text, names, aliases, vocabulary)

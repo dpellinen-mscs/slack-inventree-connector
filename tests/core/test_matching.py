@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from stockthread.core.matching import Alias, Catalog, LocationRecord, PartRecord, match_location, match_part, words
+from stockthread.core.matching import (
+    Alias,
+    Catalog,
+    LocationRecord,
+    PartRecord,
+    match_location,
+    match_part,
+    stale_aliases,
+    words,
+)
 from stockthread.core.model import Match, MatchRule, MatchStatus
 
 PARTS = (
@@ -39,7 +48,8 @@ def test_words_fold_case_punctuation_and_possessives() -> None:
 def test_rules_run_in_order() -> None:
     assert match_part("AP-NV-D40", CATALOG) == matched(1, MatchRule.EXACT)
     assert match_part("norvane disc 40 access points", CATALOG) == matched(1, MatchRule.NORMALIZED)
-    assert match_part("D40s", CATALOG) == matched(1, MatchRule.ALIAS)
+    assert match_part("D40", CATALOG) == matched(1, MatchRule.ALIAS)
+    assert match_part("D40s", CATALOG) == matched(1, MatchRule.WORDS)  # a plural with digits never authorizes
     assert match_part("disc 40", CATALOG) == matched(1, MatchRule.WORDS)
     assert match_part("norvain disc 40", CATALOG) == matched(1, MatchRule.FUZZY)
 
@@ -106,3 +116,47 @@ def test_structural_locations_never_match() -> None:
 def test_a_typo_is_tried_only_when_no_record_has_every_word() -> None:
     # "disc 60" names part 2 without a typo, so the typo allowance never widens it to part 1.
     assert match_part("disc 60", CATALOG) == matched(2, MatchRule.WORDS)
+
+
+def _catalog(*names: str, ipn: str = "") -> Catalog:
+    return Catalog(
+        parts=tuple(PartRecord(pk, ipn, name) for pk, name in enumerate(names, start=1)), locations=LOCATIONS
+    )
+
+
+def test_text_without_words_never_matches_a_blank_ipn() -> None:
+    catalog = _catalog("Disc 40")
+    for text in ("-", "???", "'s", "\N{DELIVERY TRUCK}", ""):
+        assert match_part(text, catalog).status is MatchStatus.UNMATCHED, text
+    assert match_location("---", CATALOG, "U0SAM").status is MatchStatus.UNMATCHED
+
+
+def test_a_letter_after_digits_is_never_folded_by_an_authorizing_rule() -> None:
+    catalog = _catalog("Disc 40")
+    for text in ("Disc 40S", "disc 40s", "disc 40es"):
+        result = match_part(text, catalog)
+        assert not result.can_authorize_a_write, text
+
+
+def test_plural_collisions_are_ambiguous() -> None:
+    assert match_part("wire tapes", _catalog("Wire Tap", "Wire Tape")).status is MatchStatus.AMBIGUOUS
+    assert match_part("ups battery", _catalog("UP Battery", "UPS Battery")).status is MatchStatus.AMBIGUOUS
+    assert match_part("wire tape", _catalog("Wire Tap", "Wire Tape")) == matched(2, MatchRule.NORMALIZED)
+
+
+def test_letters_outside_ascii_are_words() -> None:
+    catalog = _catalog("10\N{MICRO SIGN}F Cap", "10 Pipe")
+    assert match_part("10 F Cap", catalog).status is MatchStatus.UNMATCHED
+    assert match_part("\N{LATIN CAPITAL LETTER O WITH STROKE}10 pipe", catalog).status is MatchStatus.UNMATCHED
+    assert match_part("10\N{GREEK SMALL LETTER MU}f cap", catalog) == matched(1, MatchRule.NORMALIZED)
+
+
+def test_part_aliases_of_another_user_do_not_apply() -> None:
+    catalog = Catalog(parts=PARTS, locations=LOCATIONS, part_aliases=(Alias("my spare", 2, user="U0SAM"),))
+    assert match_part("my spare", catalog, poster="U0SAM") == matched(2, MatchRule.ALIAS)
+    assert match_part("my spare", catalog, poster="U0MIKE").status is MatchStatus.UNMATCHED
+    assert match_part("my spare", catalog).status is MatchStatus.UNMATCHED
+
+
+def test_aliases_to_records_that_cannot_match_are_reported() -> None:
+    assert stale_aliases(CATALOG) == [Alias("old kit", 4)]
