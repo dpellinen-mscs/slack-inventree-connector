@@ -222,11 +222,28 @@ async def test_list_all_reads_every_page(total: int) -> None:
     assert len(recorder.requests) == max(1, -(-total // PAGE_SIZE))
 
 
-async def test_list_all_stops_when_the_server_returns_an_empty_page() -> None:
+async def test_list_all_refuses_an_empty_page_before_the_count_is_reached() -> None:
+    # Rows deleted between two pages shift the offsets. A short list must not pass for the whole catalog.
     client, recorder = reader(respond(body={"count": 50, "results": []}))
     async with client:
-        assert await client.parts() == []
+        with pytest.raises(InvenTreeError, match="changed while it was read"):
+            await client.parts()
     assert len(recorder.requests) == 1
+
+
+@pytest.mark.parametrize("second_count", [PAGE_SIZE + 1, PAGE_SIZE + 5])
+async def test_list_all_refuses_a_count_that_changes_between_pages(second_count: int) -> None:
+    counts = iter([PAGE_SIZE + 3, second_count])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        count = next(counts)
+        size = PAGE_SIZE if request.url.params["offset"] == "0" else 3
+        return httpx.Response(200, json={"count": count, "results": [{"pk": 1}] * size})
+
+    client, _ = reader(handler)
+    async with client:
+        with pytest.raises(InvenTreeError, match="changed while it was read"):
+            await client.parts()
 
 
 @pytest.mark.parametrize(
