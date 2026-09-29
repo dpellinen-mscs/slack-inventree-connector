@@ -36,11 +36,15 @@ def test_char_over_quantity_remove(api: RawApi, scratch: Scratch) -> None:
 def test_char_deplete_deletes_history(api: RawApi, scratch: Scratch) -> None:
     """Removing the last unit of an item marked delete_on_deplete deletes it, and its history with it."""
     item = scratch.stock(3, delete_on_deplete=True)
-    assert api.get("/api/stock/track/", item=item["pk"])  # creating the item wrote history
+    entries = [row["pk"] for row in api.get("/api/stock/track/", item=item["pk"])]
+    assert entries  # creating the item wrote history
     response = api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 3}], "notes": "d"})
     assert response.status_code == 201, response.text[:500]
     assert api.status(f"/api/stock/{item['pk']}/") == 404
-    assert api.get("/api/stock/track/", item=item["pk"]) == []
+    for entry in entries:
+        assert api.status(f"/api/stock/track/{entry}/") == 404
+    # Recovery cannot ask for the history of a deleted item: the filter refuses an unknown item.
+    assert api.status(f"/api/stock/track/?item={item['pk']}") == 400
 
 
 def test_char_partial_transfer_split(api: RawApi, scratch: Scratch) -> None:

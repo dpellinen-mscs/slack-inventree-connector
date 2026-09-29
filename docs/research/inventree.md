@@ -555,7 +555,8 @@ Sources:
 ## 10. InvenTree in Docker for integration tests
 
 - Image: `inventree/inventree` on Docker Hub. Tags: `stable` (latest release), `latest` (master
-  development build), and exact versions such as `1.5.6`, `1.4.4`. Architectures amd64 and arm64.
+  development build), and exact versions such as `1.5.6`. Checked 2026-09-29: the 1.4 line ends at
+  `1.4.3` on Docker Hub (there is no `1.4.4` image), and 1.4.3 is also API 511. Architectures amd64 and arm64.
   Compressed size about 500 to 520 MB.
 - Production compose (`contrib/container/`: `docker-compose.yml`, `.env`, `Caddyfile`) runs five
   services: PostgreSQL 17, Redis, server (gunicorn), worker (django-q), Caddy proxy. Too heavy for CI.
