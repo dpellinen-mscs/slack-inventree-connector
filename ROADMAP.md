@@ -33,8 +33,8 @@ Safety invariants apply from the first line of code, and each one has tests:
 
 ## M0: foundations
 
-- [ ] Project scaffold: package layout, formatter, linter, type checker, test runner
-- [ ] CI: format, lint, types and unit tests on every PR, with dependency caching
+- [x] Project scaffold: package layout, formatter, linter, type checker, test runner ([0006](docs/decisions/0006-python-tooling.md))
+- [x] CI: format, lint, types and unit tests on every PR, with dependency caching
 - [ ] Configuration: typed settings from environment and file, validated at startup, secrets redacted in every log and error
 - [ ] Domain model: post, plan revision with input hash, request, line item, match result, review reason, decision
 - [ ] Audit store: schema, migrations, append-only log, request keys, marker and snapshot columns
