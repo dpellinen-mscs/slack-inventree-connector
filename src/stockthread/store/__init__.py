@@ -2,8 +2,11 @@
 
 from stockthread.store.db import (
     Attempt,
+    EventKind,
+    EventStatus,
     InstanceLocked,
     LockLost,
+    QueuedEvent,
     RequestRow,
     SchemaTooNew,
     StateConflict,
@@ -14,8 +17,11 @@ from stockthread.store.db import (
 
 __all__ = [
     "Attempt",
+    "EventKind",
+    "EventStatus",
     "InstanceLocked",
     "LockLost",
+    "QueuedEvent",
     "RequestRow",
     "SchemaTooNew",
     "StateConflict",

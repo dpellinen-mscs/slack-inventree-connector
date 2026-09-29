@@ -277,7 +277,8 @@ def test_a_thousands_separator_states_the_whole_number() -> None:
         "ft drop cable", "1050", movement_type=MovementType.COUNT, source_text=None, destination_text="truck 2"
     )
     assert ReasonCode.QUANTITY_NOT_IN_TEXT not in codes(count, "truck 2 count: 1,050 ft drop cable")
-    assert codes(take(quantity="3"), "took 2,3 Disc 40 from main stock to truck 1") == set()
+    # A comma between digits is never a list comma: "2,3" may be a decimal, so it states nothing.
+    assert ReasonCode.QUANTITY_NOT_IN_TEXT in codes(take(quantity="3"), "took 2,3 Disc 40 from main stock to truck 1")
 
 
 @pytest.mark.parametrize(
@@ -290,3 +291,55 @@ def test_a_thousands_separator_states_the_whole_number() -> None:
 )
 def test_someone_else_named_anywhere_is_not_the_poster(text: str) -> None:
     assert ReasonCode.ACTOR_NOT_POSTER in codes(take(), text)
+
+
+def test_one_mention_grounds_one_line() -> None:
+    twice = take(line_items=(LineItem("ONTs", Decimal(2)), LineItem("ONTs", Decimal(2))), source_text="shop")
+    assert ReasonCode.ITEM_NOT_IN_TEXT in codes(twice, "took 2 ONTs from shop to truck 1")
+    both = take(line_items=(LineItem("ONTs", Decimal(2)), LineItem("ONTs", Decimal(3))), source_text="shop")
+    assert codes(both, "took 2 ONTs and 3 ONTs from shop to truck 1") == set()
+
+
+@pytest.mark.parametrize(
+    ("item", "quantity", "text"),
+    [
+        ("ONTs", "5", "took sixty five ONTs from shop to truck 1"),
+        ("ONTs", "2", "took seventy 2 ONTs from shop to truck 1"),
+        ("ONTs", "5", "took 1,5 ONTs from shop to truck 1"),
+        ("SFPs", "2", "took 2 ONTs 3 SFPs from shop to truck 1"),
+        ("ft cat6", "10", "took 10 \N{VULGAR FRACTION ONE HALF} ft cat6 from shop to truck 1"),
+        ("1\N{FRACTION SLASH}2 ft cat6", "10", "took 10 \N{VULGAR FRACTION ONE HALF} ft cat6 from shop to truck 1"),
+        ("3 ONTs", "2", "took 2 x 3 ONTs from shop to truck 1"),
+        ("ONTs", "3", "took 2 x 3 ONTs from shop to truck 1"),
+        ("ONTs", "2", "took 2.000 ONTs from shop to truck 1"),
+        ("ONTs", "2", "took 2 million ONTs from shop to truck 1"),
+        ("ONTs", "2", "took 2 grand worth of ONTs from shop to truck 1"),
+    ],
+)
+def test_adversarial_quantities_are_not_grounded(item: str, quantity: str, text: str) -> None:
+    assert ReasonCode.QUANTITY_NOT_IN_TEXT in codes(take(item, quantity, source_text="shop"), text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Mike Smith took 2 Disc 40 from main stock to truck 1",
+        "Mike just took 2 Disc 40 from main stock to truck 1",
+        "<@U1> just took 2 Disc 40 from main stock to truck 1",
+        "<@U1|sam> also took 2 Disc 40 from main stock to truck 1",
+        "@sam took 2 Disc 40 from main stock to truck 1",
+        "fyi, mike took 2 Disc 40 from main stock to truck 1",
+        "the new guy took 2 Disc 40 from main stock to truck 1",
+        "Mike picked up 2 Disc 40 from main stock to truck 1",
+        "took 2 Disc 40 from main stock to truck 1 cc <@U1>",
+    ],
+)
+def test_other_actors_in_more_shapes(text: str) -> None:
+    assert ReasonCode.ACTOR_NOT_POSTER in codes(take(), text)
+
+
+@pytest.mark.parametrize(
+    "text", ["I just took 2 Disc 40 from main stock to truck 1", "ok I took 2 Disc 40 from main stock to truck 1"]
+)
+def test_the_poster_is_not_another_actor(text: str) -> None:
+    assert ReasonCode.ACTOR_NOT_POSTER not in codes(take(), text)

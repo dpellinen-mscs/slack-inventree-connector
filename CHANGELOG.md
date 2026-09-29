@@ -25,6 +25,8 @@ Nothing is released yet. The connector cannot write stock in this state.
   negations, hedges and instructions in the text.
 - The dry-run reply renderer: what would change, and every review reason in words, with post
   text escaped so it can never become a Slack mention or link.
+- The durable Slack event queue in the store (migration 0002): store before acknowledging,
+  pick up unfinished events at startup, and stop retrying an event that keeps failing.
 - Integration tests against real InvenTree 1.4.3 and 1.5.6 in Docker, including characterization tests
   of the server behavior the design depends on.
 - A threat model, first version (`docs/threat-model.md`).

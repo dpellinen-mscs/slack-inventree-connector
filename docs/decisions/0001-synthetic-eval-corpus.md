@@ -7,7 +7,7 @@
 ## Context
 
 Extraction and matching need a test oracle before any code exists, and the
-stack is not decided yet. The project is a clean-room build, so no real
+stack is not decided yet. The project ships only synthetic data, so no real
 message, name or inventory record may enter the repository. Real vendor and
 product names would also make the corpus look like somebody's actual stock
 list.

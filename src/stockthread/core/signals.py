@@ -32,7 +32,7 @@ PLAN_OR_CONDITION = re.compile(
 )
 NEGATION = re.compile(
     r"\b(not|never|nothing|no longer|didn't|didnt|did not|don't|dont|wasn't|haven't|scratch that|actually no"
-    r"|put (them|it) back|nvm|never ?mind|cancel(led)?|wrong|oops|undo)\b",
+    r"|put (them|it) back|nvm|never ?mind|cancel(led)?|wrong|oops|undo)\b(?!-)",
     re.IGNORECASE,
 )
 VAGUE = re.compile(
@@ -44,18 +44,25 @@ VAGUE = re.compile(
 CORRECTION = re.compile(r"\b(actually|correction|make that|i mean|sorry|wait)\b|(^|\s)\*\w", re.IGNORECASE)
 """A later message or phrase that changes a stated value."""
 _WHEN = r"(?:then|yesterday|today|earlier|this morning|also|so)"
+_ADVERB = r"(?:\s+(?:just|also|already|then|finally))?"
+_SOMEONE = r"(?!(?:i|we)\b)[a-z']+"
 THIRD_PERSON = re.compile(
-    rf"(?:(?:^|[.!\n]\s*)(?:{_WHEN},?\s+)?(?!(?:i|we|just|and|finally|already|{_WHEN})\b)[a-z]+|<@\w+(?:\|[^>]*)?>)"
-    r" (took|grabbed|put|loaded|moved|returned|brought|used|installed|received|dropped|pulled|counted)\b",
+    rf"(?:(?:^|[.!\n]\s*)(?:(?:fyi|btw|ok|{_WHEN}),?\s+)?(?!(?:just|and|finally|already|{_WHEN})\b)"
+    rf"{_SOMEONE}(?:\s+{_SOMEONE}){{0,2}}?{_ADVERB}|<@\w+(?:\|[^>]*)?>{_ADVERB}|(?<![\w@])@\w+{_ADVERB})"
+    r"\s+(took|grabbed|put|loaded|moved|returned|brought|used|installed|received|dropped|pulled|picked up|counted)\b",
     re.IGNORECASE,
 )
-"""Someone other than the poster did it: "Mike put 2 poe 8 on his truck", "Then Mike took", "<@U04ABC> grabbed"."""
+"""Someone other than the poster did it: "Mike put 2 poe 8 on his truck", "Then Mike Smith just took",
+"<@U04ABC> grabbed", "fyi, the new guy took"."""
+MENTION = re.compile(r"<@\w+(?:\|[^>]*)?>|(?<![\w@])@\w+")
+"""A person named by a Slack mention: they may be the one who moved the stock."""
 HEDGE = re.compile(r"\b(i think|maybe|probably|i guess|not sure|might have|might be|or so|ish)\b", re.IGNORECASE)
 
 NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
     "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
-    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+    "seventy": 70, "eighty": 80, "ninety": 90,
 }  # fmt: skip
 CONTAINERS = frozenset({"box", "bag", "pack", "case", "roll", "spool", "bundle", "carton", "pallet"})
 CONTAINER_WORDS = re.compile(

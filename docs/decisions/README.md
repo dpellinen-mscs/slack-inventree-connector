@@ -15,6 +15,7 @@ editing history.
 | [0007](0007-inventree-read-client.md) | The InvenTree read client: httpx, GET only, a tested API range | Accepted |
 | [0008](0008-mit-license.md) | The project is licensed under MIT | Accepted |
 | [0009](0009-audit-store.md) | The audit store: stdlib sqlite3, SQL migrations, guards in the database | Accepted |
+| [0010](0010-no-attribution.md) | No attribution of prior work or users | Accepted |
 
 ## Template
 

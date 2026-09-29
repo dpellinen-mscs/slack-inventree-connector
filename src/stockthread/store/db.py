@@ -13,6 +13,7 @@ request body, marker, state `applying`) is on disk before the write is sent.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import sqlite3
 import time
@@ -20,9 +21,10 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from stockthread.core.marker import MAX_ATTEMPT, AttemptKind, Marker, new_marker_id
 from stockthread.core.model import Operation, PostKey, RequestKey
@@ -88,6 +90,28 @@ class RequestRow:
 class Attempt:
     id: int
     marker: Marker
+
+
+EventKind = Literal["event", "interactive"]
+
+
+class EventStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    DONE = "done"
+    DROPPED = "dropped"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class QueuedEvent:
+    id: int
+    key: str
+    """The event id for events; for clicks, a key the listener derives from the payload."""
+    kind: EventKind
+    body: str | None
+    """The raw payload, or None once retention expired it."""
+    attempts: int
 
 
 def new_lock_owner() -> str:
@@ -492,6 +516,97 @@ class Store:
             )
             if cursor.rowcount != 1:
                 raise LockLost("another instance took over the lock")
+
+    # The Slack event queue
+
+    def enqueue_event(self, key: str, kind: EventKind, body: str) -> bool:
+        """Store a raw payload before it is acknowledged. False when the key is already stored (a Slack retry)."""
+        with self._transaction():
+            if self._db.execute("SELECT 1 FROM slack_events WHERE event_key = ?", (key,)).fetchone():
+                return False
+            cursor = self._db.execute(
+                "INSERT INTO slack_events (event_key, kind, received_at, body) VALUES (?, ?, ?, ?)",
+                (key, kind, self._now(), body),
+            )
+            self._audit("ingest", "event_stored", slack_event_id=int(cursor.lastrowid or 0))
+            return True
+
+    def claim_events(self, owner: str, *, limit: int = 10) -> list[QueuedEvent]:
+        """The oldest pending events, now processing by `owner`, which must hold the instance lock.
+
+        Delivery is at least once: if another instance takes the lock over, it runs the event again, and
+        this instance learns it only at `finish_event`. Processing must check the lock before any write.
+        """
+        if limit < 1:
+            raise ValueError("claim at least one event")
+        with self._transaction():
+            self._check_lock(owner)
+            rows = self._db.execute(
+                "SELECT id, event_key, kind, body, attempts FROM slack_events WHERE status = 'pending'"
+                " ORDER BY id LIMIT ?",
+                (limit,),
+            ).fetchall()
+            for row in rows:
+                self._db.execute(
+                    "UPDATE slack_events SET status = 'processing', attempts = attempts + 1, claimed_by = ?"
+                    " WHERE id = ?",
+                    (owner, row[0]),
+                )
+            return [QueuedEvent(row[0], row[1], row[2], row[3], row[4] + 1) for row in rows]
+
+    def finish_event(self, owner: str, event_id: int, status: EventStatus, outcome: str = "") -> None:
+        """Record how processing ended. `outcome` is a drop reason or an error class, never message text."""
+        if status not in (EventStatus.DONE, EventStatus.DROPPED, EventStatus.FAILED):
+            raise ValueError("an event finishes as done, dropped or failed")
+        if outcome and not re.fullmatch(r"[a-z0-9_]{1,64}", outcome):
+            raise ValueError("an outcome is a short code such as a drop reason, never text")
+        with self._transaction():
+            self._check_lock(owner)
+            cursor = self._db.execute(
+                "UPDATE slack_events SET status = ?, outcome = ? WHERE id = ? AND status = 'processing'"
+                " AND claimed_by = ?",
+                (status.value, outcome or None, event_id, owner),
+            )
+            if cursor.rowcount != 1:
+                raise StateConflict("the event is not being processed by this instance")
+            self._audit("ingest", f"event_{status.value}", slack_event_id=event_id)
+
+    def requeue_unfinished(self, owner: str, *, max_attempts: int = 3) -> int:
+        """At startup, put events that an earlier instance left processing back in the queue.
+
+        Events claimed by `owner` itself are left alone: they are still being processed. An event claimed
+        `max_attempts` times fails, so one bad payload cannot crash the connector in a loop. Returns how many
+        events went back to pending.
+        """
+        with self._transaction():
+            self._check_lock(owner)
+            rows = self._db.execute(
+                "SELECT id, attempts FROM slack_events WHERE status = 'processing' AND claimed_by IS NOT ?", (owner,)
+            ).fetchall()
+            requeued = 0
+            for event_id, attempts in rows:
+                if attempts >= max_attempts:
+                    self._db.execute(
+                        "UPDATE slack_events SET status = 'failed', outcome = 'too_many_attempts' WHERE id = ?",
+                        (event_id,),
+                    )
+                    self._audit("ingest", "event_failed", slack_event_id=event_id)
+                else:
+                    self._db.execute(
+                        "UPDATE slack_events SET status = 'pending', claimed_by = NULL WHERE id = ?", (event_id,)
+                    )
+                    self._audit("ingest", "event_requeued", slack_event_id=event_id)
+                    requeued += 1
+            return requeued
+
+    def event_status(self, event_id: int) -> tuple[EventStatus, int, str | None]:
+        """Status, attempts and outcome of a stored event."""
+        row = self._db.execute(
+            "SELECT status, attempts, outcome FROM slack_events WHERE id = ?", (event_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(event_id)
+        return EventStatus(row[0]), int(row[1]), row[2]
 
     def release_lock(self, owner: str) -> None:
         with self._transaction():
