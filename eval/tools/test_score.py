@@ -223,6 +223,17 @@ class ScoreTest(unittest.TestCase):
                 report = score.score(predict(sample_001=[got]), cases=cases, corpus_version=VERSION)
                 self.assertEqual(report.failed_cases, ["sample-001"])
 
+    def test_only_a_missing_or_null_serials_field_means_no_serials(self) -> None:
+        got = movement()
+        for serials in (None, []):
+            with self.subTest(serials):
+                got["line_items"][0]["serials"] = serials
+                self.assertEqual(run(predict(sample_001=[got])).failed_cases, [])
+        for serials in (0, False, ""):
+            with self.subTest(serials):
+                got["line_items"][0]["serials"] = serials
+                self.assertEqual(run(predict(sample_001=[got])).failed_cases, ["sample-001"])
+
     def test_source_text_and_match(self) -> None:
         want = movement(
             source_text="main stock",
@@ -480,7 +491,7 @@ class ScoreTest(unittest.TestCase):
     def test_an_extra_movement_without_flags_is_a_false_movement(self) -> None:
         invented = movement(flags=[], destination_text="van 3")
         invented["line_items"] = [{"item_text": "switches", "quantity": 5, "unit": None}]
-        for flags in ([], None, "implied_source", [3]):
+        for flags in ([], None, "implied_source", [3], [""], ["ok"]):
             with self.subTest(flags):
                 invented["flags"] = flags
                 report = run(predict(sample_001=[movement(), invented]))
