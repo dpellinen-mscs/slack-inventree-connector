@@ -17,3 +17,7 @@ Turn informal Slack stock posts ("2 APs on Sam's truck") into verified, auditabl
 - [Eval corpus](eval/): synthetic Slack posts with expected results
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md): set up the project and run the checks
+
+## License
+
+[MIT](LICENSE).

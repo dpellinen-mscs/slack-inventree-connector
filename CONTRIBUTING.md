@@ -45,3 +45,5 @@ create and move stock, so never point them at a real server.
   inventory data, names or credentials.
 - Significant choices get a decision record in
   [`docs/decisions/`](docs/decisions/).
+- By contributing, you agree that your contribution is licensed under the
+  project's [MIT license](LICENSE).
