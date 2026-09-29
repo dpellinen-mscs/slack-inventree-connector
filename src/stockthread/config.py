@@ -46,7 +46,8 @@ class _Section(BaseModel):
 
 class SlackSettings(_Section):
     transport: Literal["socket", "http"] = "socket"
-    workspace_id: str = Field(pattern=r"^[TE][A-Z0-9]{2,}$")
+    workspace_id: str = Field(pattern=r"^T[A-Z0-9]{2,}$")
+    """A workspace id. Enterprise Grid org installs (E...) are not supported yet."""
     app_id: str = Field(pattern=r"^A[A-Z0-9]{2,}$")
     channels: tuple[SlackChannelId, ...] = Field(default=(), strict=False)
     """Channel allowlist. Empty means the connector acts nowhere."""

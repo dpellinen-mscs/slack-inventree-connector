@@ -26,6 +26,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
 
+from stockthread.core.grouping import Arrival, Placed, choose_post, seconds
 from stockthread.core.marker import MAX_ATTEMPT, AttemptKind, Marker, new_marker_id
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import (
@@ -112,6 +113,10 @@ class QueuedEvent:
     body: str | None
     """The raw payload, or None once retention expired it."""
     attempts: int
+
+
+_SLACK_TS = re.compile(r"\d{1,10}\.\d{6}")
+"""A Slack message timestamp as Slack sends it."""
 
 
 def new_lock_owner() -> str:
@@ -247,7 +252,10 @@ class Store:
         return None if row is None else int(row[0])
 
     def create_post(self, key: PostKey) -> int:
-        """Create the post, or return the id of the existing one. The key is fixed from here on."""
+        """Create the post, or return the id of the existing one. The key is fixed from here on.
+
+        This bypasses grouping and the lock: the pipeline uses `place_message`. For tests and tools only.
+        """
         with self._transaction():
             existing = self._post_id(key)
             if existing is not None:
@@ -259,6 +267,96 @@ class Store:
             post_id = int(cursor.lastrowid or 0)
             self._audit(Actor.PLANNER, "post_created", post_id=post_id)
             return post_id
+
+    def place_message(
+        self, owner: str, message: PostKey, *, user_id: str, thread_ts: str | None, window_seconds: int
+    ) -> tuple[PostKey, bool]:
+        """Put a message in its post (design section 4, "Grouping"): the post key, and whether the post is new.
+
+        `message` is the message's own key. A message is placed once: a redelivery gets the same post, with
+        `False`. After a crash the first placement may have committed without a plan, so callers plan on
+        every placement, not only when the post is new. `owner` must hold the instance lock, so two
+        instances never group the same channel differently. Timestamps must be in Slack's exact form
+        ("1790000000.000100"): keys are compared as strings.
+        """
+        if not user_id or window_seconds < 0:
+            raise ValueError("a message needs a user, and the window cannot be negative")
+        thread_ts = thread_ts or None
+        for ts in (message.ts, thread_ts or message.ts):
+            if not _SLACK_TS.fullmatch(ts):
+                raise ValueError(f"not a Slack timestamp: {ts!r}")
+        at = seconds(message.ts)
+        root = thread_ts or message.ts
+        workspace, channel = message.workspace_id, message.channel_id
+        with self._transaction():
+            self._check_lock(owner)
+            # The window is found by a float range with a second of margin, then decided exactly in Decimal.
+            rows = self._db.execute(
+                "SELECT m.ts, m.user_id, m.thread_ts, p.ts, p.siblings_closed_at IS NULL"
+                " FROM post_messages m JOIN posts p ON p.id = m.post_id"
+                " WHERE m.workspace_id = ? AND m.channel_id = ?"
+                " AND (m.ts IN (?, ?) OR (m.user_id = ? AND CAST(m.ts AS REAL) BETWEEN ? AND ?))",
+                (
+                    workspace,
+                    channel,
+                    message.ts,
+                    root,
+                    user_id,
+                    float(at) - window_seconds - 1,
+                    float(at) + window_seconds + 1,
+                ),
+            ).fetchall()
+            placed = [Placed(row[0], row[1], row[2], row[3], bool(row[4])) for row in rows]
+            keys = {
+                row[0]
+                for row in self._db.execute(
+                    "SELECT ts FROM posts WHERE workspace_id = ? AND channel_id = ? AND ts IN (?, ?)",
+                    (workspace, channel, message.ts, root),
+                )
+            }
+            key = PostKey(
+                workspace, channel, choose_post(Arrival(message.ts, user_id, thread_ts), placed, keys, window_seconds)
+            )
+            if any(row.ts == message.ts for row in placed):
+                return key, False
+            post_id = self._post_id(key)
+            created = post_id is None
+            if post_id is None:
+                cursor = self._db.execute(
+                    "INSERT INTO posts (workspace_id, channel_id, ts, created_at) VALUES (?, ?, ?, ?)",
+                    (workspace, channel, key.ts, self._now()),
+                )
+                post_id = int(cursor.lastrowid or 0)
+                self._audit(Actor.PLANNER, "post_created", post_id=post_id)
+            self._db.execute(
+                "INSERT INTO post_messages (post_id, workspace_id, channel_id, ts, user_id, thread_ts, added_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (post_id, workspace, channel, message.ts, user_id, thread_ts, self._now()),
+            )
+            self._audit(Actor.PLANNER, "message_grouped", post_id=post_id)
+            return key, created
+
+    def post_messages(self, key: PostKey) -> list[str]:
+        """The timestamps of the messages in a post, oldest first."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        rows = self._db.execute("SELECT ts FROM post_messages WHERE post_id = ?", (post_id,)).fetchall()
+        return sorted((row[0] for row in rows), key=seconds)
+
+    def close_siblings(self, owner: str, key: PostKey) -> None:
+        """No more siblings join the post: its dry-run reply is posted. Thread replies still join. Idempotent."""
+        with self._transaction():
+            self._check_lock(owner)
+            post_id = self._post_id(key)
+            if post_id is None:
+                raise KeyError("no such post")
+            cursor = self._db.execute(
+                "UPDATE posts SET siblings_closed_at = ? WHERE id = ? AND siblings_closed_at IS NULL",
+                (self._now(), post_id),
+            )
+            if cursor.rowcount:
+                self._audit(Actor.PLANNER, "siblings_closed", post_id=post_id)
 
     def create_plan(self, post: PostKey, input_hash: str, operations: Sequence[Operation]) -> int:
         """Store a new plan revision with one planned request per operation, and return its revision.

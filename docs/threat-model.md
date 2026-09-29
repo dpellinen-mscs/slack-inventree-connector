@@ -80,9 +80,11 @@ Slack (workspace, users, bots) ──► connector ──► InvenTree REST API
 
 ## Open questions
 
-- InvenTree roles: the smallest set of permissions the connector's
-  InvenTree user needs. `test_char_restricted_user_can_adjust` is not
-  written yet.
+- InvenTree roles: the smallest set is measured (view on Part and Stock
+  Location, view and add on Stock Item), but InvenTree grants "change" on
+  Stock Item together with "add", so the connector's token can also edit
+  stock item fields. That is broader than the connector needs, and only
+  the client's own path and method checks narrow it.
 - A security contact and disclosure process for `SECURITY.md`. This
   depends on how and when the project goes public.
 - Photo handling: what is stored, for how long, and what is sent to a

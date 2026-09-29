@@ -131,8 +131,9 @@ Default permission classes are `IsAuthenticated`, `ModelPermission`, `RolePermis
 `POST -> add`, `GET -> view`, `PUT/PATCH -> change`, `DELETE -> delete` and resolves the role from the
 view's queryset model. The adjustment views declare `queryset = StockItem...` and no `role_required`,
 and `stock_stockitem` belongs to the `stock` ruleset. So the token's user needs the **Stock Item role
-with "add"** (plus "view" on Stock Item, Stock Location and Part for lookups) [inferred]. Confirm with
-a restricted test user. If "Stock Ownership Control" is enabled, owner checks may also apply [unverified].
+with "add"** (plus "view" on Stock Item, Stock Location and Part for lookups). Measured on 1.4.3 and
+1.5.6 with a restricted user (`tests/integration/test_char_roles.py`); the server also stores "change"
+whenever "add" is set on Stock Item. If "Stock Ownership Control" is enabled, owner checks may also apply [unverified].
 
 Sources:
 - https://github.com/inventree/InvenTree/blob/master/src/backend/InvenTree/stock/api.py
