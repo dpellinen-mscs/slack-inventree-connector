@@ -29,8 +29,8 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [x] Shape, stack and default policy decided ([0003](docs/decisions/0003-standalone-python-service.md), [0004](docs/decisions/0004-default-write-policy.md))
 - [x] Name decided: stockthread ([0005](docs/decisions/0005-project-name.md))
 - [x] License decided: MIT ([0008](docs/decisions/0008-mit-license.md))
-- [ ] Origin credit decided (#3)
-- [ ] Docker works on the build machine
+- [x] Attribution decided: none ([0010](docs/decisions/0010-no-attribution.md))
+- [x] Docker works on the build machine (#2)
 
 ## M0: foundations
 
