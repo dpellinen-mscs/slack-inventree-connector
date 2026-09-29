@@ -413,7 +413,7 @@ A plan has its own state: `current`, `stale`, `expired`, `applied`,
 | `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present) |
 | `applying` | Intent stored, write about to be sent or sent | `applied`, `failed`, `unknown` |
 | `failed` | InvenTree refused the request. Nothing was written | `approved`, by a human, as a new attempt |
-| `unknown` | The outcome is not known | `applied`, `approved` or `verify_failed`, by recovery |
+| `unknown` | The outcome is not known | `applied`, `failed` (no marker and nothing changed) or `verify_failed`, by recovery |
 | `applied` | InvenTree accepted the request | `verified`, `verify_failed` |
 | `verified` | Read-back agrees with the plan | `undoing` |
 | `verify_failed` | Read-back or recovery found something unexpected | `accepted` or `undoing`, by the operator |
@@ -502,7 +502,7 @@ server, so recovery waits before it concludes anything:
 | --- | --- | --- |
 | Found | Match the plan | Continue with read-back, then `verified` |
 | Found | Anything else | `verify_failed` |
-| Not found | Unchanged | The operator may approve a new attempt |
+| Not found | Unchanged | `failed`: the operator may approve a new attempt |
 | Not found | Changed | `verify_failed` |
 
 A new attempt, after a failure or after recovery, gets a new attempt

@@ -1,0 +1,118 @@
+"""The state machine of a request: one InvenTree write and its undo (design section 7).
+
+This module only decides which transitions are allowed and who may make
+them. The store applies a transition as a compare-and-set update, so two
+workers that race for the same request cannot both succeed.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from enum import StrEnum
+
+
+class RequestState(StrEnum):
+    PLANNED = "planned"
+    APPROVED = "approved"
+    APPLYING = "applying"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+    APPLIED = "applied"
+    VERIFIED = "verified"
+    VERIFY_FAILED = "verify_failed"
+    ACCEPTED = "accepted"
+    UNDOING = "undoing"
+    UNDO_FAILED = "undo_failed"
+    UNDO_UNKNOWN = "undo_unknown"
+    UNDONE = "undone"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class Actor(StrEnum):
+    """Who makes a transition."""
+
+    HUMAN = "human"
+    """An authorized Slack user, by button: approve, reject, undo, accept, retry."""
+    POLICY = "policy"
+    """The write policy, when it applies a movement without a click (ADR 0004)."""
+    PLANNER = "planner"
+    """The pipeline, when a plan becomes stale or expires."""
+    APPLIER = "applier"
+    """The apply and undo protocol, including the read-back."""
+    RECOVERY = "recovery"
+    """Recovery of an unknown outcome, after the settle time."""
+
+
+S = RequestState
+A = Actor
+
+TRANSITIONS: dict[tuple[RequestState, RequestState], frozenset[Actor]] = {
+    (S.PLANNED, S.APPROVED): frozenset({A.HUMAN, A.POLICY}),
+    (S.PLANNED, S.REJECTED): frozenset({A.HUMAN}),
+    (S.PLANNED, S.CANCELLED): frozenset({A.PLANNER}),
+    (S.PLANNED, S.EXPIRED): frozenset({A.PLANNER}),
+    (S.APPROVED, S.APPLYING): frozenset({A.APPLIER}),
+    (S.APPROVED, S.PLANNED): frozenset({A.APPLIER}),  # a precondition failed: back to review
+    (S.APPROVED, S.VERIFY_FAILED): frozenset({A.APPLIER}),  # the marker is already present
+    (S.APPLYING, S.APPLIED): frozenset({A.APPLIER}),
+    (S.APPLYING, S.FAILED): frozenset({A.APPLIER}),
+    (S.APPLYING, S.UNKNOWN): frozenset({A.APPLIER}),
+    (S.FAILED, S.APPROVED): frozenset({A.HUMAN}),  # a new attempt, never automatic
+    (S.UNKNOWN, S.APPLIED): frozenset({A.RECOVERY}),
+    (S.UNKNOWN, S.FAILED): frozenset({A.RECOVERY}),  # no marker, nothing changed: a human may try again
+    (S.UNKNOWN, S.VERIFY_FAILED): frozenset({A.RECOVERY}),
+    (S.APPLIED, S.VERIFIED): frozenset({A.APPLIER}),
+    (S.APPLIED, S.VERIFY_FAILED): frozenset({A.APPLIER}),
+    (S.VERIFIED, S.UNDOING): frozenset({A.HUMAN}),
+    (S.VERIFY_FAILED, S.ACCEPTED): frozenset({A.HUMAN}),
+    (S.VERIFY_FAILED, S.UNDOING): frozenset({A.HUMAN}),
+    (S.UNDOING, S.UNDONE): frozenset({A.APPLIER}),
+    (S.UNDOING, S.UNDO_FAILED): frozenset({A.APPLIER}),
+    (S.UNDOING, S.UNDO_UNKNOWN): frozenset({A.APPLIER}),
+    (S.UNDO_FAILED, S.UNDOING): frozenset({A.HUMAN}),  # a new attempt, never automatic
+    (S.UNDO_UNKNOWN, S.UNDONE): frozenset({A.RECOVERY}),
+    (S.UNDO_UNKNOWN, S.VERIFIED): frozenset({A.RECOVERY}),
+    (S.UNDO_UNKNOWN, S.VERIFY_FAILED): frozenset({A.RECOVERY}),
+}
+
+FINAL: frozenset[RequestState] = frozenset({S.ACCEPTED, S.UNDONE, S.REJECTED, S.CANCELLED, S.EXPIRED})
+
+LEFT_NO_CHANGE: frozenset[RequestState] = frozenset({S.UNDONE, S.REJECTED, S.CANCELLED, S.EXPIRED, S.FAILED})
+"""States in which a request left no stock change behind. `failed` counts: InvenTree refused it."""
+
+UNSETTLED: frozenset[RequestState] = frozenset({S.APPLYING, S.UNKNOWN, S.UNDOING, S.UNDO_UNKNOWN})
+"""States in which a write may be in flight. Nothing else may be sent for the post."""
+
+
+class IllegalTransition(Exception):
+    """A transition that the state machine does not allow, or not for this actor."""
+
+
+def check_transition(current: RequestState, target: RequestState, actor: Actor) -> None:
+    """Raise IllegalTransition unless `actor` may move a request from `current` to `target`."""
+    allowed = TRANSITIONS.get((current, target))
+    if allowed is None:
+        raise IllegalTransition(f"a request cannot go from {current} to {target}")
+    if actor not in allowed:
+        who = ", ".join(sorted(allowed))
+        raise IllegalTransition(f"{current} to {target} is made by {who}, not by {actor}")
+
+
+def next_states(current: RequestState, actor: Actor | None = None) -> frozenset[RequestState]:
+    """The states that `current` can move to, by anyone or by one actor."""
+    return frozenset(
+        target
+        for (source, target), actors in TRANSITIONS.items()
+        if source == current and (actor is None or actor in actors)
+    )
+
+
+def may_approve_new_revision(earlier: Iterable[RequestState]) -> bool:
+    """True if a new plan revision may be approved, given the states of the earlier revision's requests.
+
+    Every earlier request must have left no stock change behind. After `accepted`, the post is
+    closed, so that also returns False.
+    """
+    return all(state in LEFT_NO_CHANGE for state in earlier)
