@@ -20,8 +20,9 @@ claim is tagged where it matters:
 3. **The server does not reject over-quantity requests** [src 1.0.0, inferred for 1.5.x]. Transfer of
    more than the item holds moves the whole item; remove of more than it holds clamps to zero. The
    connector must pre-check quantity itself and re-read afterwards.
-4. Removing to zero can **delete** the stock item (`delete_on_deplete`, default on), which also deletes
-   its tracking history (FK cascade). Read-back by pk can then return 404.
+4. Removing to zero can **delete** the stock item (`delete_on_deplete`, default on). Read-back by pk
+   then returns 404. **Measured 2026-09-29 on 1.4.3 and 1.5.6: the tracking history is NOT deleted**
+   (this note first said it was), and `track/?item=<deleted pk>` answers 400.
 5. Serialized stock items always have quantity 1. add/remove on them is a silent no-op that still
    returns 201; they can only be moved whole.
 6. There is **no native idempotency support**. Best available mechanism: put a unique key in the
@@ -240,8 +241,9 @@ Note that a partial transfer does **not** emit code 20; filter on 40/42.
 Workable. After a write: `GET /api/stock/track/?item=<source pk>&limit=5`, match on the notes key and
 code, and for partial transfers take the new item pk from `deltas.stockitem` of the code-42 entry.
 Then `GET /api/stock/<pk>/` for both items to confirm quantity and location. Caveat: a deleted
-(depleted) item takes its tracking rows with it (`on_delete=CASCADE`). Docs also mention a setting to
-delete old tracking entries.
+(depleted) item takes its tracking rows with it (`on_delete=CASCADE`). **Wrong, measured on 1.4.3 and
+1.5.6: the rows survive, and the `item` filter answers 400 for a deleted item.** Docs also mention a
+setting to delete old tracking entries.
 
 ### Where to store an external reference
 
@@ -555,7 +557,8 @@ Sources:
 ## 10. InvenTree in Docker for integration tests
 
 - Image: `inventree/inventree` on Docker Hub. Tags: `stable` (latest release), `latest` (master
-  development build), and exact versions such as `1.5.6`, `1.4.4`. Architectures amd64 and arm64.
+  development build), and exact versions such as `1.5.6`. Checked 2026-09-29: the 1.4 line ends at
+  `1.4.3` on Docker Hub (there is no `1.4.4` image), and 1.4.3 is also API 511. Architectures amd64 and arm64.
   Compressed size about 500 to 520 MB.
 - Production compose (`contrib/container/`: `docker-compose.yml`, `.env`, `Caddyfile`) runs five
   services: PostgreSQL 17, Redis, server (gunicorn), worker (django-q), Caddy proxy. Too heavy for CI.

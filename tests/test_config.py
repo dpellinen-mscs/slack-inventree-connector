@@ -265,6 +265,14 @@ def test_every_problem_is_reported_at_once() -> None:
     assert "SLACK_BOT_TOKEN: Field required" not in message
 
 
+@pytest.mark.parametrize("value", [" inv-SPOT", "inv-SPOT\n", "inv-SP\nOT", "inv-SP OT", "inv-SPÖT", "inv-SP\x00OT"])
+def test_a_secret_with_spaces_control_characters_or_non_ascii_is_refused(value: str) -> None:
+    message = rejected(base(), {**ENV, "INVENTREE_TOKEN": value})
+    assert "INVENTREE_TOKEN: does not look valid" in message
+    assert "SPOT" not in message
+    assert "inv-" not in message
+
+
 def test_url_may_have_a_port_or_an_ip_address() -> None:
     for url in ("http://inventree.local:8000", "http://192.0.2.10/", "http://[2001:db8::10]:8000/"):
         assert parse_settings(with_changes("inventree", url=url), ENV).inventree.url == url

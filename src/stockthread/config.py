@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, f
 
 REDACTED = "***"
 _TOML_POSITION = re.compile(r"\(at (line \d+, column \d+)\)")
+_SECRET_TEXT = re.compile(r"[\x21-\x7e]+")
 
 MovementType = Literal["take_to_vehicle", "take_to_site", "return", "transfer", "receive", "consume", "count"]
 """Movement types a policy can name. `unclear` is not one: it never applies."""
@@ -181,9 +182,12 @@ def parse_settings(data: Mapping[str, Any], environ: Mapping[str, str]) -> Setti
         value = environ.get(env_name, "")
         if not value:
             continue
-        if not value.startswith(prefix) or value != value.strip():
-            expected = f"start with {prefix!r}" if prefix else "have no surrounding whitespace"
-            problems[env_name] = f"{env_name}: does not look valid (it must {expected})"
+        # A control character would end up in an HTTP header error, which quotes the header value.
+        if not _SECRET_TEXT.fullmatch(value):
+            problems[env_name] = f"{env_name}: does not look valid (it must be printable ASCII without spaces)"
+            continue
+        if not value.startswith(prefix):
+            problems[env_name] = f"{env_name}: does not look valid (it must start with {prefix!r})"
             continue
         secrets[field] = value
     try:

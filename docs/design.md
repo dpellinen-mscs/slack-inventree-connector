@@ -247,7 +247,14 @@ needs.
 - **Depletion.** Removing the last unit can delete the stock item together
   with its history, depending on a server setting. Verification treats a
   missing source item as correct only when the plan expected it to reach
-  zero.
+  zero. Measured on 1.4.3 and 1.5.6 (`test_char_deplete_deletes_item_keeps_history`):
+  the item answers 404, but its history entries survive, so the research
+  claim that history is deleted with the item was wrong. The marker of the
+  removal that deleted the item is found by search on 1.5.6 and not on
+  1.4.3. A history query filtered by the deleted item answers 400, not an
+  empty list.
+  Verification and recovery must read that 400 as "the item is gone", and
+  look markers up by search, never through the item filter alone.
 - **Serialized stock** always has quantity 1 per stock item, so "2 units"
   means two stock items. The research found that add and remove on a
   serialized item do nothing and still return success. The connector never
@@ -446,9 +453,10 @@ request shares it.
 - The search for a marker reads every page of results and compares the
   whole token, because the server search matches substrings.
 - **A marker that is found proves the write happened. A marker that is not
-  found proves nothing.** History can be deleted with a depleted stock
-  item, and it is not yet known whether history is always readable at the
-  moment the server answers.
+  found proves nothing.** On 1.4.3 the marker of a removal that deleted
+  its stock item cannot be found (section 5, Depletion), an admin can
+  delete history, and it is not yet known whether history is always
+  readable at the moment the server answers.
 
 ### Apply protocol
 
@@ -637,7 +645,7 @@ the test suite.
 | `test_char_over_quantity_transfer` | A transfer of more than an item holds is not rejected |
 | `test_char_over_quantity_remove` | A remove of more than an item holds stops at zero |
 | `test_char_serialized_quantity_noop` | Add and remove on a serialized item change nothing and return success |
-| `test_char_deplete_deletes_history` | Depletion can delete the stock item and its history |
+| `test_char_deplete_deletes_item_keeps_history` | Depletion can delete the stock item. Its history, and the marker of the removal, survive |
 | `test_char_partial_transfer_split` | A partial transfer keeps the source id and creates a new item |
 | `test_char_marker_on_every_entry_type` | The notes reach every history entry a request writes |
 | `test_char_marker_visible_after_response` | Whether history is readable as soon as the server has answered |
