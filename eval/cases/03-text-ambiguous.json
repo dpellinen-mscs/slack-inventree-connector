@@ -192,6 +192,7 @@
     {
       "id": "ambig-005",
       "tags": [
+        "alias",
         "vague-quantity"
       ],
       "post": {
@@ -804,7 +805,7 @@
           }
         ]
       },
-      "notes": "A person is not a stock location, and Luis has no vehicle."
+      "notes": "A person is not a stock location."
     },
     {
       "id": "ambig-018",

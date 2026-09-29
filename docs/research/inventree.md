@@ -77,7 +77,7 @@ Content-Type: application/json
 {
   "items": [{"pk": 1234, "quantity": 2}],
   "location": 57,
-  "notes": "[sic:k7m2q9x4t1b8w3n6p5r0zd:a1] slack C0FIELD/1727555555.000100 by U0SAM0001"
+  "notes": "[sic:k7m2q9x4t1b8w3n6p5r0zd:a01] slack C0FIELD/1727555555.000100 by U0SAM0001"
 }
 ```
 

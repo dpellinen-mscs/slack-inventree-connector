@@ -172,7 +172,7 @@ Movement flags:
 | `quantity_from_photo` | A quantity was counted or read from a photo | |
 | `serial_unconfirmed` | A serial was read from a photo | |
 | `photo_text_mismatch` | The photo and the text disagree. The text is extracted | |
-| `corrected_in_thread` | A later message changed the movement | |
+| `corrected_in_thread` | A later message by a person corrected a stated value. An answer to a clarifying question is not a correction | |
 | `actor_not_poster` | The post reports what someone else did | |
 
 Post flags:

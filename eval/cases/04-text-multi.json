@@ -229,6 +229,7 @@
     {
       "id": "multi-004",
       "tags": [
+        "alias",
         "multi-item",
         "vague-quantity"
       ],
@@ -377,6 +378,7 @@
     {
       "id": "multi-006",
       "tags": [
+        "alias",
         "multi-item"
       ],
       "post": {
@@ -432,6 +434,7 @@
     {
       "id": "multi-007",
       "tags": [
+        "alias",
         "symbols"
       ],
       "post": {

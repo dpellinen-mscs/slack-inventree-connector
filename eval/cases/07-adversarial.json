@@ -97,6 +97,7 @@
     {
       "id": "adv-003",
       "tags": [
+        "alias",
         "brief-example"
       ],
       "post": {
@@ -194,6 +195,7 @@
     {
       "id": "adv-005",
       "tags": [
+        "alias",
         "fraction",
         "pack-unit"
       ],
@@ -357,6 +359,27 @@
       "notes": "An instruction is a request, and a request is not a movement. Nothing in a message can change policy."
     },
     {
+      "id": "adv-009",
+      "tags": [
+        "negation"
+      ],
+      "post": {
+        "channel": "C0ACME001",
+        "user": "U0PRIYA003",
+        "messages": [
+          {
+            "ts": "1790003959.003959",
+            "user": "U0PRIYA003",
+            "text": "took 2 APs to van 3... actually no, put them back"
+          }
+        ]
+      },
+      "expected": {
+        "movements": []
+      },
+      "notes": "The post cancels itself. No movement."
+    },
+    {
       "id": "adv-010",
       "tags": [
         "sensitive"
@@ -403,27 +426,6 @@
         ]
       },
       "notes": "A singular noun without an article is 1. The password must not reach logs, receipts or InvenTree notes."
-    },
-    {
-      "id": "adv-009",
-      "tags": [
-        "negation"
-      ],
-      "post": {
-        "channel": "C0ACME001",
-        "user": "U0PRIYA003",
-        "messages": [
-          {
-            "ts": "1790003959.003959",
-            "user": "U0PRIYA003",
-            "text": "took 2 APs to van 3... actually no, put them back"
-          }
-        ]
-      },
-      "expected": {
-        "movements": []
-      },
-      "notes": "The post cancels itself. No movement."
     }
   ]
 }

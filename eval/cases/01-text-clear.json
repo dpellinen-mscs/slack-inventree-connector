@@ -520,7 +520,9 @@
     },
     {
       "id": "clear-013",
-      "tags": [],
+      "tags": [
+        "alias"
+      ],
       "post": {
         "channel": "C0ACME001",
         "user": "U0LUIS0005",

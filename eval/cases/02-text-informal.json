@@ -532,6 +532,7 @@
     {
       "id": "informal-012",
       "tags": [
+        "alias",
         "plural",
         "symbols"
       ],
@@ -587,6 +588,7 @@
       "id": "informal-013",
       "tags": [
         "abbreviation",
+        "alias",
         "article-quantity"
       ],
       "post": {
