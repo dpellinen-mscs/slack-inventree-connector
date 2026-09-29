@@ -1,0 +1,15 @@
+{
+  "description": "The handshake when the Request URL is set. Answered with the challenge, never processed.",
+  "kind": "event",
+  "transport": "http",
+  "headers": {},
+  "body": {
+    "token": "synthetic-verification-token",
+    "challenge": "3eZbrw1aBm2rZgRNFdxV2595E9CY3gmdALWMmHkvFXO7tYXAYM8P",
+    "type": "url_verification"
+  },
+  "expected": {
+    "action": "challenge",
+    "challenge": "3eZbrw1aBm2rZgRNFdxV2595E9CY3gmdALWMmHkvFXO7tYXAYM8P"
+  }
+}

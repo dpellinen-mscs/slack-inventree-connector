@@ -1,0 +1,41 @@
+{
+  "description": "A reply in the thread of a post. It joins that post (design section 4, grouping).",
+  "kind": "event",
+  "transport": "http",
+  "headers": {},
+  "body": {
+    "token": "synthetic-verification-token",
+    "team_id": "T0ACME001",
+    "api_app_id": "A0ACME001",
+    "event": {
+      "type": "message",
+      "channel": "C0ACME001",
+      "channel_type": "channel",
+      "user": "U0SAM0001",
+      "text": "to van 3 actually",
+      "ts": "1790000150.000300",
+      "event_ts": "1790000150.000300",
+      "client_msg_id": "0f0e0d0c-0000-4000-8000-000150000300",
+      "thread_ts": "1790000000.000100",
+      "parent_user_id": "U0SAM0001"
+    },
+    "type": "event_callback",
+    "event_id": "Ev0ACME0003",
+    "event_time": 1790000150,
+    "authorizations": [
+      {
+        "enterprise_id": null,
+        "team_id": "T0ACME001",
+        "user_id": "U0STOCKBOT",
+        "is_bot": true,
+        "is_enterprise_install": false
+      }
+    ],
+    "is_ext_shared_channel": false,
+    "event_context": "4-synthetic-Ev0ACME0003"
+  },
+  "expected": {
+    "action": "process",
+    "thread_of": "1790000000.000100"
+  }
+}
