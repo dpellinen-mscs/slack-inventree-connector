@@ -31,6 +31,15 @@ code must not be able to free a key or rewrite what was sent.
   reject changes to key columns, to the recorded intent of an attempt, a
   second outcome of an attempt, and any update or delete of `audit_log`
   and of rows that carry a key.
+- Triggers also refuse an insert that collides with an existing row, because
+  `REPLACE` deletes the old row without firing delete triggers. Connections
+  also turn on `recursive_triggers`.
+- `begin_attempt` is the only way to start a write. In one transaction it
+  checks that this process holds the instance lock, that no other request
+  of the post is in flight or not yet read back, and, for an apply, that
+  the plan is current, earlier revisions left no change and earlier
+  requests of the plan are verified (or rejected). Then it stores the
+  snapshot, the request body and the marker, and moves the request.
 - The first migration holds only what the apply protocol needs: posts,
   plans, requests, request attempts, the instance lock and the audit log.
   The other tables of section 8 arrive with the features that fill them.

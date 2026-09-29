@@ -419,7 +419,7 @@ A plan has its own state: `current`, `stale`, `expired`, `applied`,
 | State | Meaning | Next |
 | --- | --- | --- |
 | `planned` | Part of a current plan | `approved`, `rejected`, `cancelled` (plan became stale), `expired` |
-| `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present) |
+| `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present), `cancelled` (plan became stale) |
 | `applying` | Intent stored, write about to be sent or sent | `applied`, `failed`, `unknown` |
 | `failed` | InvenTree refused the request. Nothing was written | `approved`, by a human, as a new attempt |
 | `unknown` | The outcome is not known | `applied`, `failed` (no marker and nothing changed) or `verify_failed`, by recovery |

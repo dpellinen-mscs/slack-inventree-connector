@@ -17,7 +17,7 @@ ID_LENGTH = 22
 """22 characters of 5 bits: 110 random bits."""
 MAX_ATTEMPT = 99
 
-MARKER_RE = re.compile(rf"\[sic:([{ALPHABET}]{{{ID_LENGTH}}}):([au])(\d{{2}})\]")
+MARKER_RE = re.compile(rf"\[sic:([{ALPHABET}]{{{ID_LENGTH}}}):([au])([0-9]{{2}})\]")
 
 
 class AttemptKind(StrEnum):

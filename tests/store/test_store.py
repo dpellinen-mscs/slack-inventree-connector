@@ -14,12 +14,14 @@ from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, IllegalTransition, RequestState
 from stockthread.store import InstanceLocked, LockLost, SchemaTooNew, StateConflict, Store, WriteBlocked
+from stockthread.store import db as store_db
 
 S = RequestState
 A = Actor
 POST = PostKey("T0ACME", "C0STOCK", "1727600000.000100")
 HASH = "0" * 64
 SNAPSHOT = {"items": [{"pk": 7, "location": 3, "quantity": "10"}]}
+OWNER = "test-instance"
 BODY = {"items": [{"pk": 7, "quantity": "2"}], "location": 4, "notes": "marker goes here"}
 
 
@@ -44,6 +46,7 @@ def clock() -> Clock:
 @pytest.fixture
 def store(path: Path, clock: Clock) -> Iterator[Store]:
     opened = Store.open(path, clock=clock)
+    opened.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
     yield opened
     opened.close()
 
@@ -67,6 +70,7 @@ def begin(store: Store, request: RequestKey, kind: AttemptKind = AttemptKind.APP
         "actor": A.APPLIER,
         "snapshot": SNAPSHOT,
         "request_body": BODY,
+        "lock_owner": OWNER,
     }
     options.update(kwargs)
     return store.begin_attempt(request, kind, **options).marker  # type: ignore[arg-type]
@@ -136,18 +140,18 @@ def test_a_plan_needs_a_post_and_a_request(store: Store) -> None:
 def test_the_database_enforces_the_request_key(store: Store, path: Path) -> None:
     plan(store)
     db = raw(path)
-    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+    with pytest.raises(sqlite3.IntegrityError, match=r"UNIQUE|taken"):
         db.execute(
             "INSERT INTO requests (plan_id, sequence, operation, state, marker_id, updated_at)"
             " VALUES (1, 1, 'add', 'planned', ?, 'now')",
             ("x" * 22,),
         )
-    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+    with pytest.raises(sqlite3.IntegrityError, match=r"UNIQUE|taken"):
         db.execute(
             "INSERT INTO plans (post_id, revision, input_hash, state, created_at) VALUES (1, 1, ?, 'current', 'now')",
             (HASH,),
         )
-    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+    with pytest.raises(sqlite3.IntegrityError, match=r"UNIQUE|taken"):
         db.execute(
             "INSERT INTO posts (workspace_id, channel_id, ts, created_at) VALUES (?, ?, ?, 'now')",
             (POST.workspace_id, POST.channel_id, POST.ts),
@@ -341,8 +345,36 @@ def test_a_new_revision_makes_the_old_one_stale(store: Store) -> None:
     store.create_plan(POST, "1" * 64, [Operation.TRANSFER])
     assert store.request(key(1, 1)).plan_state == "stale"
     assert store.request(key(1, 2)).state is S.CANCELLED
-    # The approved request of the stale plan stays approved, but can never be applied.
-    assert store.request(key(1, 1)).state is S.APPROVED
+    # An approval of a stale plan is withdrawn, so it cannot block the new revision.
+    assert store.request(key(1, 1)).state is S.CANCELLED
+    approve(store, key(2, 1))
+    begin(store, key(2, 1))
+
+
+def test_a_failed_request_of_a_stale_plan_cannot_be_approved_again(store: Store) -> None:
+    plan(store)
+    approve(store, key())
+    begin(store, key())
+    store.transition(key(), expected=S.APPLYING, target=S.FAILED, actor=A.APPLIER)
+    store.create_plan(POST, "1" * 64, [Operation.TRANSFER])
+    with pytest.raises(WriteBlocked, match="stale"):
+        store.transition(key(), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
+    assert store.request(key()).state is S.FAILED
+
+
+def test_begin_attempt_checks_earlier_revisions_itself(store: Store, path: Path) -> None:
+    plan(store)
+    verified(store, key(1, 1))
+    store.create_plan(POST, "1" * 64, [Operation.TRANSFER])
+    raw(path).execute("UPDATE requests SET state = 'approved' WHERE id = ?", (store.request(key(2, 1)).id,))
+    with pytest.raises(WriteBlocked, match="earlier revision"):
+        begin(store, key(2, 1))
+
+
+def test_begin_attempt_refuses_a_stale_plan_itself(store: Store, path: Path) -> None:
+    plan(store)
+    store.create_plan(POST, "1" * 64, [Operation.TRANSFER])
+    raw(path).execute("UPDATE requests SET state = 'approved' WHERE id = ?", (store.request(key(1, 1)).id,))
     with pytest.raises(WriteBlocked, match="stale"):
         begin(store, key(1, 1))
 
@@ -374,6 +406,7 @@ def test_a_stale_revision_cannot_be_approved(store: Store) -> None:
 
 
 def test_a_second_instance_is_refused_while_the_first_is_alive(store: Store, clock: Clock) -> None:
+    store.release_lock(OWNER)
     store.acquire_lock("first", stale_after=timedelta(seconds=60))
     with pytest.raises(InstanceLocked):
         store.acquire_lock("second", stale_after=timedelta(seconds=60))
@@ -385,6 +418,7 @@ def test_a_second_instance_is_refused_while_the_first_is_alive(store: Store, clo
 
 
 def test_a_stale_lock_is_taken_over_and_the_old_owner_learns_it(store: Store, clock: Clock) -> None:
+    store.release_lock(OWNER)
     store.acquire_lock("first", stale_after=timedelta(seconds=60))
     clock.now += timedelta(seconds=61)
     store.acquire_lock("second", stale_after=timedelta(seconds=60))
@@ -395,3 +429,227 @@ def test_a_stale_lock_is_taken_over_and_the_old_owner_learns_it(store: Store, cl
         store.acquire_lock("third", stale_after=timedelta(seconds=60))
     store.release_lock("second")
     store.acquire_lock("third", stale_after=timedelta(seconds=60))
+
+
+def test_only_the_lock_holder_starts_a_write(store: Store, clock: Clock) -> None:
+    plan(store)
+    approve(store, key())
+    with pytest.raises(LockLost):
+        begin(store, key(), lock_owner="someone-else")
+    clock.now += timedelta(seconds=61)  # this instance stalls, and another one takes over
+    store.acquire_lock("new-instance", stale_after=timedelta(seconds=60))
+    with pytest.raises(LockLost):
+        begin(store, key())
+    assert store.request(key()).state is S.APPROVED
+    begin(store, key(), lock_owner="new-instance")
+
+
+def test_lock_owners_are_unique() -> None:
+    assert len({store_db.new_lock_owner() for _ in range(100)}) == 100
+
+
+def test_a_naive_clock_is_refused(path: Path) -> None:
+    store = Store.open(path, clock=lambda: datetime(2026, 9, 29, 12, 0))
+    with pytest.raises(ValueError, match="aware"):
+        store.create_post(POST)
+    store.close()
+
+
+# More write guards
+
+
+@pytest.mark.parametrize("state", [S.APPLYING, S.UNKNOWN, S.APPLIED])
+def test_an_unread_apply_blocks_an_undo_of_the_post(store: Store, state: RequestState) -> None:
+    plan(store, Operation.TRANSFER, Operation.REMOVE)
+    verified(store, key(1, 1))
+    approve(store, key(1, 2))
+    begin(store, key(1, 2))
+    if state is not S.APPLYING:
+        store.transition(key(1, 2), expected=S.APPLYING, target=state, actor=A.APPLIER)
+    with pytest.raises(WriteBlocked, match="in flight or not read back"):
+        begin(store, key(1, 1), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+
+
+@pytest.mark.parametrize("state", [S.UNDOING, S.UNDO_UNKNOWN])
+def test_an_unsettled_undo_blocks_another_undo_of_the_post(store: Store, state: RequestState) -> None:
+    plan(store, Operation.TRANSFER, Operation.REMOVE)
+    verified(store, key(1, 1))
+    verified(store, key(1, 2))
+    begin(store, key(1, 1), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+    if state is S.UNDO_UNKNOWN:
+        store.transition(key(1, 1), expected=S.UNDOING, target=state, actor=A.APPLIER)
+    with pytest.raises(WriteBlocked, match="in flight"):
+        begin(store, key(1, 2), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+
+
+def test_an_undo_failed_request_is_retried_through_begin_attempt(store: Store) -> None:
+    plan(store)
+    verified(store, key())
+    begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+    store.transition(key(), expected=S.UNDOING, target=S.UNDO_FAILED, actor=A.APPLIER)
+    marker = begin(store, key(), AttemptKind.UNDO, expected=S.UNDO_FAILED, actor=A.HUMAN)
+    assert (marker.kind, marker.attempt) == (AttemptKind.UNDO, 2)
+
+
+@pytest.mark.parametrize(
+    ("first", "allowed"),
+    [(S.APPROVED, False), (S.FAILED, False), (S.VERIFIED, True), (S.REJECTED, True)],
+)
+def test_requests_of_a_plan_run_in_order_and_stop_at_a_failure(
+    store: Store, first: RequestState, allowed: bool
+) -> None:
+    plan(store, Operation.TRANSFER, Operation.REMOVE)
+    if first is S.REJECTED:
+        store.transition(key(1, 1), expected=S.PLANNED, target=S.REJECTED, actor=A.HUMAN)
+    elif first is S.VERIFIED:
+        verified(store, key(1, 1))
+    else:
+        approve(store, key(1, 1))
+        if first is S.FAILED:
+            begin(store, key(1, 1))
+            store.transition(key(1, 1), expected=S.APPLYING, target=S.FAILED, actor=A.APPLIER)
+    approve(store, key(1, 2))
+    if allowed:
+        begin(store, key(1, 2))
+    else:
+        with pytest.raises(WriteBlocked, match="not verified"):
+            begin(store, key(1, 2))
+
+
+def test_two_requests_of_a_post_racing_start_one_write(store: Store, path: Path, clock: Clock) -> None:
+    plan(store, Operation.TRANSFER, Operation.REMOVE)
+    verified(store, key(1, 1))
+    verified(store, key(1, 2))
+    barrier = threading.Barrier(8)
+    results: list[str] = []
+
+    def run(sequence: int) -> None:
+        worker = Store.open(path, clock=clock)
+        try:
+            barrier.wait()
+            begin(worker, key(1, sequence), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+            results.append("started")
+        except (StateConflict, WriteBlocked):
+            results.append("refused")
+        finally:
+            worker.close()
+
+    threads = [threading.Thread(target=run, args=(1 + n % 2,)) for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(results) == ["refused"] * 7 + ["started"]
+
+
+def test_the_attempt_limit(store: Store) -> None:
+    plan(store)
+    approve(store, key())
+    for _ in range(99):
+        begin(store, key())
+        store.transition(key(), expected=S.APPLYING, target=S.FAILED, actor=A.APPLIER)
+        store.transition(key(), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
+    with pytest.raises(WriteBlocked, match="limit"):
+        begin(store, key())
+
+
+# REPLACE deletes a row without firing DELETE triggers (unless recursive_triggers is on, which a
+# plain connection does not have). The schema must refuse it by itself.
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("INSERT OR REPLACE INTO audit_log (id, at, actor, event) VALUES (1, 'x', 'x', 'forged')", "append-only"),
+        (
+            "REPLACE INTO requests (id, plan_id, sequence, operation, state, marker_id, updated_at)"
+            " SELECT id, plan_id, sequence, operation, 'approved', marker_id, updated_at FROM requests",
+            "taken",
+        ),
+        (
+            "REPLACE INTO request_attempts (id, request_id, kind, attempt, marker, snapshot, request_body, started_at)"
+            " SELECT id, request_id, kind, attempt, marker, '{}', '{}', started_at FROM request_attempts",
+            "taken",
+        ),
+        (
+            "REPLACE INTO posts (id, workspace_id, channel_id, ts, created_at)"
+            " SELECT id, 'T9', 'C9', '1.0', 'x' FROM posts",
+            "taken",
+        ),
+        (
+            "REPLACE INTO plans (id, post_id, revision, input_hash, state, created_at)"
+            " SELECT id, post_id, 7, input_hash, 'current', 'x' FROM plans",
+            "taken",
+        ),
+        ("UPDATE posts SET id = 50", "never changes"),
+        ("UPDATE plans SET id = 50", "never changes"),
+        ("UPDATE requests SET id = 50", "never changes"),
+        ("UPDATE request_attempts SET id = 50", "never changes"),
+        ("UPDATE requests SET marker_id = 'iiiiiiiiiiiiiiiiiiiiii'", "CHECK|never changes"),
+    ],
+)
+def test_replace_and_id_changes_are_refused(store: Store, path: Path, statement: str, message: str) -> None:
+    plan(store)
+    verified(store, key())
+    db = raw(path)
+    assert db.execute("PRAGMA recursive_triggers").fetchone()[0] == 0
+    with pytest.raises(sqlite3.IntegrityError, match=message):
+        db.execute(statement)
+    assert store.request(key()).state is S.VERIFIED
+
+
+def test_a_bad_marker_id_is_refused_on_insert(store: Store, path: Path) -> None:
+    plan(store)
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        raw(path).execute(
+            "INSERT INTO requests (plan_id, sequence, operation, state, marker_id, updated_at)"
+            " VALUES (1, 9, 'add', 'planned', 'iiiiiiiiiiiiiiiiiiiiii', 'now')"
+        )
+
+
+# Migrations
+
+
+def test_a_failed_migration_changes_nothing(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    Store.open(path).close()
+    real = store_db._migrations()
+    broken = "CREATE TABLE extra (a INTEGER) STRICT;\nCREATE TABLE posts (a INTEGER);\n"
+    monkeypatch.setattr(store_db, "_migrations", lambda: [*real, (2, broken)])
+    with pytest.raises(sqlite3.OperationalError, match="already exists"):
+        Store.open(path)
+    db = raw(path)
+    assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert db.execute("SELECT count(*) FROM sqlite_master WHERE name = 'extra'").fetchone()[0] == 0
+
+
+def test_processes_opening_a_new_file_at_once_all_succeed(path: Path) -> None:
+    barrier = threading.Barrier(6)
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        barrier.wait()
+        try:
+            Store.open(path).close()
+        except BaseException as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=run) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert raw(path).execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+def test_statements_keep_trigger_bodies_whole() -> None:
+    script = (
+        "CREATE TABLE t (a);\n-- a comment\n"
+        "CREATE TRIGGER x BEFORE DELETE ON t\nBEGIN SELECT RAISE(ABORT, 'no'); END;\n"
+    )
+    assert [part.strip() for part in store_db._statements(script)] == [
+        "CREATE TABLE t (a);",
+        "-- a comment\nCREATE TRIGGER x BEFORE DELETE ON t\nBEGIN SELECT RAISE(ABORT, 'no'); END;",
+    ]
+    with pytest.raises(RuntimeError, match="incomplete"):
+        list(store_db._statements("CREATE TABLE t (a)"))

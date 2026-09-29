@@ -13,7 +13,9 @@ request body, marker, state `applying`) is on disk before the write is sent.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -46,6 +48,10 @@ OUTCOMES: dict[RequestState, str] = {
     S.UNDO_UNKNOWN: "unknown",
 }
 """The outcome of the open attempt, by the state a request leaves `applying` or `undoing` for."""
+
+NOT_READ_BACK: frozenset[RequestState] = UNSETTLED | {S.APPLIED}
+"""While a request of a post is in one of these, no other write of the post may start: its read-back
+compares quantities with its snapshot, and another write would change them."""
 
 
 class SchemaTooNew(Exception):
@@ -84,8 +90,38 @@ class Attempt:
     marker: Marker
 
 
+def new_lock_owner() -> str:
+    """A random owner id for the instance lock, new for every process."""
+    return secrets.token_hex(16)
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _statements(script: str) -> Iterator[str]:
+    """Split a migration into statements. Trigger bodies hold semicolons, so split on complete statements."""
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            yield buffer
+            buffer = ""
+    if buffer.strip() and not all(part.strip().startswith("--") or not part.strip() for part in buffer.splitlines()):
+        raise RuntimeError("a migration ends with an incomplete statement")
+
+
+def _set_wal(connection: sqlite3.Connection) -> None:
+    """Switch to WAL. Two processes opening a new file at once can see SQLITE_BUSY here; retry briefly."""
+    for _ in range(50):
+        try:
+            connection.execute("PRAGMA journal_mode = WAL")
+            return
+        except sqlite3.OperationalError as error:
+            if "locked" not in str(error) and "busy" not in str(error):
+                raise
+            time.sleep(0.1)
+    connection.execute("PRAGMA journal_mode = WAL")
 
 
 def _migrations() -> list[tuple[int, str]]:
@@ -112,7 +148,9 @@ class Store:
         connection = sqlite3.connect(path, isolation_level=None, timeout=10)
         try:
             connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA journal_mode = WAL")
+            # REPLACE fires DELETE triggers only with this on. The schema also refuses REPLACE by itself.
+            connection.execute("PRAGMA recursive_triggers = ON")
+            _set_wal(connection)
             connection.execute("PRAGMA synchronous = FULL")
             store = cls(connection, clock)
             store._migrate()
@@ -130,34 +168,41 @@ class Store:
 
     def _migrate(self) -> None:
         migrations = _migrations()
-        if self.schema_version > len(migrations):
-            raise SchemaTooNew(
-                f"the database has schema version {self.schema_version}; this version knows {len(migrations)}"
-            )
         for version, script in migrations:
-            if version <= self.schema_version:
-                continue
-            # executescript runs the whole file; the transaction and the version bump are in the script,
-            # so a failed migration leaves the previous version in place.
-            try:
-                self._db.executescript(f"BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
-            except BaseException:
-                if self._db.in_transaction:
-                    self._db.execute("ROLLBACK")
-                raise
+            # The version is read again inside the transaction, so two processes that open a new file at
+            # once do not both run a migration. A failed migration rolls back with its version bump.
+            with self._transaction():
+                current = self.schema_version
+                if current > len(migrations):
+                    raise SchemaTooNew(
+                        f"the database has schema version {current}; this version knows {len(migrations)}"
+                    )
+                if version <= current:
+                    continue
+                for statement in _statements(script):
+                    self._db.execute(statement)
+                self._db.execute(f"PRAGMA user_version = {version:d}")
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         self._db.execute("BEGIN IMMEDIATE")
         try:
             yield self._db
+            self._db.execute("COMMIT")
         except BaseException:
-            self._db.execute("ROLLBACK")
+            # SQLite may have rolled back by itself (disk full, I/O error). Do not hide the first error.
+            if self._db.in_transaction:
+                self._db.execute("ROLLBACK")
             raise
-        self._db.execute("COMMIT")
+
+    def _clock_now(self) -> datetime:
+        now = self._clock()
+        if now.tzinfo is None:
+            raise ValueError("the store clock must return an aware datetime")
+        return now
 
     def _now(self) -> str:
-        return self._clock().astimezone(UTC).isoformat(timespec="microseconds")
+        return self._clock_now().astimezone(UTC).isoformat(timespec="microseconds")
 
     def _audit(self, actor: str, event: str, **ids: Any) -> None:
         columns = ["at", "actor", "event", *ids]
@@ -194,9 +239,8 @@ class Store:
     def create_plan(self, post: PostKey, input_hash: str, operations: Sequence[Operation]) -> int:
         """Store a new plan revision with one planned request per operation, and return its revision.
 
-        The earlier current revision becomes stale, and its planned requests are cancelled. Its
-        approved requests stay approved but can no longer start an attempt, because only a current
-        plan can be applied.
+        The earlier current revision becomes stale, and its planned and approved requests are
+        cancelled. Requests that already started a write keep their state.
         """
         if not operations:
             raise ValueError("a plan revision holds at least one request")
@@ -212,10 +256,11 @@ class Store:
             ).fetchall():
                 self._db.execute("UPDATE plans SET state = 'stale' WHERE id = ?", (plan_id,))
                 self._audit(Actor.PLANNER, "plan_stale", post_id=post_id, plan_id=plan_id)
-                for (request_id,) in self._db.execute(
-                    "SELECT id FROM requests WHERE plan_id = ? AND state = 'planned'", (plan_id,)
+                for request_id, state in self._db.execute(
+                    "SELECT id, state FROM requests WHERE plan_id = ? AND state IN ('planned', 'approved')",
+                    (plan_id,),
                 ).fetchall():
-                    self._set_state(request_id, S.PLANNED, S.CANCELLED, Actor.PLANNER)
+                    self._set_state(request_id, S(state), S.CANCELLED, Actor.PLANNER)
             revision = int(last) + 1
             cursor = self._db.execute(
                 "INSERT INTO plans (post_id, revision, input_hash, state, created_at) VALUES (?, ?, ?, 'current', ?)",
@@ -286,14 +331,14 @@ class Store:
             to_state=target.value,
         )
 
-    def _post_states(self, post_id: int, *, exclude: int) -> list[tuple[int, RequestState]]:
-        """(revision, state) of every other request of the post."""
+    def _post_states(self, post_id: int, *, exclude: int) -> list[tuple[int, int, RequestState]]:
+        """(revision, sequence, state) of every other request of the post."""
         rows = self._db.execute(
-            "SELECT p.revision, r.state FROM requests r JOIN plans p ON p.id = r.plan_id"
+            "SELECT p.revision, r.sequence, r.state FROM requests r JOIN plans p ON p.id = r.plan_id"
             " WHERE p.post_id = ? AND r.id <> ?",
             (post_id, exclude),
         ).fetchall()
-        return [(int(revision), S(state)) for revision, state in rows]
+        return [(int(revision), int(sequence), S(state)) for revision, sequence, state in rows]
 
     def transition(self, key: RequestKey, *, expected: RequestState, target: RequestState, actor: Actor) -> None:
         """Move a request from `expected` to `target`, or raise and change nothing.
@@ -313,7 +358,9 @@ class Store:
                 if row.plan_state != "current":
                     raise WriteBlocked(f"plan revision {key.revision} is {row.plan_state}")
                 earlier = [
-                    state for revision, state in self._post_states(post_id, exclude=row.id) if revision < key.revision
+                    state
+                    for revision, _, state in self._post_states(post_id, exclude=row.id)
+                    if revision < key.revision
                 ]
                 if not may_approve_new_revision(earlier):
                     raise WriteBlocked("an earlier revision of this post left a stock change behind")
@@ -341,32 +388,45 @@ class Store:
         actor: Actor,
         snapshot: Mapping[str, Any],
         request_body: Mapping[str, Any],
+        lock_owner: str,
     ) -> Attempt:
         """Store the intent of a write, and move the request to `applying` or `undoing`, in one transaction.
 
         Returns the marker to write into the notes. The caller sends the write only after this returns.
-        Raises StateConflict if someone else moved the request first, and WriteBlocked if the post or
-        plan forbids a write now: another write of the post may be in flight, a read-back found
-        something unexpected (apply only), or the plan is no longer current (apply only).
+        Raises LockLost unless `lock_owner` holds the instance lock, StateConflict if someone else
+        moved the request first, and WriteBlocked if the post or plan forbids a write now:
+
+        - another write of the post is in flight or not yet read back (`applied`);
+        - for an apply: the plan is not current, a read-back of the post found something unexpected,
+          an earlier revision left a stock change behind, or an earlier request of the plan is not
+          verified (requests run in order and stop at the first failure; rejected ones are skipped).
         """
         target = S.APPLYING if kind is AttemptKind.APPLY else S.UNDOING
         check_transition(expected, target, actor)
         with self._transaction():
+            self._check_lock(lock_owner)
             row, _, post_id = self._request(key)
             if row.state != expected:
                 raise StateConflict(f"request {key} is {row.state}, not {expected}")
             everything = self._post_states(post_id, exclude=row.id)
-            others = [state for _, state in everything]
-            if any(state in UNSETTLED for state in others):
-                raise WriteBlocked("another write of this post may be in flight")
+            others = [state for _, _, state in everything]
+            if any(state in NOT_READ_BACK for state in others):
+                raise WriteBlocked("another write of this post is in flight or not read back yet")
             if kind is AttemptKind.APPLY:
                 if row.plan_state != "current":
                     raise WriteBlocked(f"plan revision {key.revision} is {row.plan_state}")
                 if S.VERIFY_FAILED in others:
                     raise WriteBlocked("a read-back of this post found something unexpected")
-                earlier = [state for revision, state in everything if revision < key.revision]
+                earlier = [state for revision, _, state in everything if revision < key.revision]
                 if not may_approve_new_revision(earlier):
                     raise WriteBlocked("an earlier revision of this post left a stock change behind")
+                before = [
+                    state
+                    for revision, sequence, state in everything
+                    if revision == key.revision and sequence < key.sequence
+                ]
+                if any(state not in (S.VERIFIED, S.REJECTED) for state in before):
+                    raise WriteBlocked("an earlier request of this plan is not verified")
             (count,) = self._db.execute(
                 "SELECT count(*) FROM request_attempts WHERE request_id = ? AND kind = ?", (row.id, kind.value)
             ).fetchone()
@@ -401,12 +461,21 @@ class Store:
 
     # The single-instance lock
 
+    def _check_lock(self, owner: str) -> None:
+        row = self._db.execute("SELECT owner FROM instance_lock WHERE id = 1").fetchone()
+        if row is None or row[0] != owner:
+            raise LockLost("this instance does not hold the lock")
+
     def acquire_lock(self, owner: str, *, stale_after: timedelta) -> None:
-        """Take the lock, or take it over when its heartbeat is older than `stale_after`."""
+        """Take the lock, or take it over when its heartbeat is older than `stale_after`.
+
+        `owner` must be unique per process: use `new_lock_owner()`. Two processes with the same owner
+        would both hold the lock.
+        """
         with self._transaction():
             row = self._db.execute("SELECT owner, heartbeat_at FROM instance_lock WHERE id = 1").fetchone()
             if row is not None and row[0] != owner:
-                age = self._clock() - datetime.fromisoformat(row[1])
+                age = self._clock_now() - datetime.fromisoformat(row[1])
                 if age < stale_after:
                     raise InstanceLocked("another instance is running on this database")
                 self._audit("instance", "lock_taken_over")

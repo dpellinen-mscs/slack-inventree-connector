@@ -4,6 +4,8 @@
 --
 -- The idempotency keys are unique constraints. Key columns never change after insert, and rows that
 -- carry a key are never deleted: triggers reject both, so a bug in the application cannot free a key.
+-- REPLACE (and INSERT OR REPLACE) deletes a conflicting row without firing DELETE triggers, so every
+-- protected table also refuses an insert that would collide with an existing row.
 
 CREATE TABLE posts (
     id INTEGER PRIMARY KEY,
@@ -37,7 +39,9 @@ CREATE TABLE requests (
             'accepted', 'undoing', 'undo_failed', 'undo_unknown', 'undone', 'rejected', 'cancelled', 'expired'
         )
     ),
-    marker_id TEXT NOT NULL UNIQUE CHECK (length(marker_id) = 22),
+    marker_id TEXT NOT NULL UNIQUE CHECK (
+        length(marker_id) = 22 AND marker_id NOT GLOB '*[^0123456789abcdefghjkmnpqrstvwxyz]*'
+    ),
     updated_at TEXT NOT NULL,
     UNIQUE (plan_id, sequence)
 ) STRICT;
@@ -81,30 +85,56 @@ BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
 CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log
 BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
 
-CREATE TRIGGER posts_keep_key BEFORE UPDATE OF workspace_id, channel_id, ts ON posts
+CREATE TRIGGER posts_keep_key BEFORE UPDATE OF id, workspace_id, channel_id, ts ON posts
 BEGIN SELECT RAISE(ABORT, 'a post key never changes'); END;
 CREATE TRIGGER posts_no_delete BEFORE DELETE ON posts
 BEGIN SELECT RAISE(ABORT, 'posts are never deleted'); END;
 
-CREATE TRIGGER plans_keep_key BEFORE UPDATE OF post_id, revision, input_hash ON plans
+CREATE TRIGGER plans_keep_key BEFORE UPDATE OF id, post_id, revision, input_hash ON plans
 BEGIN SELECT RAISE(ABORT, 'a plan revision never changes its key or input'); END;
 CREATE TRIGGER plans_no_delete BEFORE DELETE ON plans
 BEGIN SELECT RAISE(ABORT, 'plans are never deleted'); END;
 
-CREATE TRIGGER requests_keep_key BEFORE UPDATE OF plan_id, sequence, operation, marker_id ON requests
+CREATE TRIGGER requests_keep_key BEFORE UPDATE OF id, plan_id, sequence, operation, marker_id ON requests
 BEGIN SELECT RAISE(ABORT, 'a request never changes its key, operation or marker'); END;
 CREATE TRIGGER requests_no_delete BEFORE DELETE ON requests
 BEGIN SELECT RAISE(ABORT, 'requests are never deleted'); END;
 
 -- An attempt records what was sent. Only its outcome may be filled in, once.
 CREATE TRIGGER attempts_keep_intent
-BEFORE UPDATE OF request_id, kind, attempt, marker, snapshot, request_body, started_at ON request_attempts
+BEFORE UPDATE OF id, request_id, kind, attempt, marker, snapshot, request_body, started_at ON request_attempts
 BEGIN SELECT RAISE(ABORT, 'an attempt never changes what it recorded before the write'); END;
 CREATE TRIGGER attempts_outcome_once BEFORE UPDATE OF outcome, finished_at ON request_attempts
 WHEN OLD.outcome IS NOT NULL
 BEGIN SELECT RAISE(ABORT, 'an attempt outcome is recorded once'); END;
 CREATE TRIGGER attempts_no_delete BEFORE DELETE ON request_attempts
 BEGIN SELECT RAISE(ABORT, 'attempts are never deleted'); END;
+
+CREATE TRIGGER audit_log_no_replace BEFORE INSERT ON audit_log
+WHEN EXISTS (SELECT 1 FROM audit_log WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+CREATE TRIGGER posts_no_replace BEFORE INSERT ON posts
+WHEN EXISTS (
+    SELECT 1 FROM posts
+    WHERE id = NEW.id OR (workspace_id = NEW.workspace_id AND channel_id = NEW.channel_id AND ts = NEW.ts)
+)
+BEGIN SELECT RAISE(ABORT, 'a post key is taken'); END;
+CREATE TRIGGER plans_no_replace BEFORE INSERT ON plans
+WHEN EXISTS (SELECT 1 FROM plans WHERE id = NEW.id OR (post_id = NEW.post_id AND revision = NEW.revision))
+BEGIN SELECT RAISE(ABORT, 'a plan revision key is taken'); END;
+CREATE TRIGGER requests_no_replace BEFORE INSERT ON requests
+WHEN EXISTS (
+    SELECT 1 FROM requests
+    WHERE id = NEW.id OR (plan_id = NEW.plan_id AND sequence = NEW.sequence) OR marker_id = NEW.marker_id
+)
+BEGIN SELECT RAISE(ABORT, 'a request key is taken'); END;
+CREATE TRIGGER attempts_no_replace BEFORE INSERT ON request_attempts
+WHEN EXISTS (
+    SELECT 1 FROM request_attempts
+    WHERE id = NEW.id OR (request_id = NEW.request_id AND kind = NEW.kind AND attempt = NEW.attempt)
+        OR marker = NEW.marker
+)
+BEGIN SELECT RAISE(ABORT, 'an attempt key is taken'); END;
 
 CREATE INDEX plans_by_post ON plans (post_id);
 CREATE INDEX requests_by_state ON requests (state);

@@ -9,6 +9,7 @@ from stockthread.store.db import (
     StateConflict,
     Store,
     WriteBlocked,
+    new_lock_owner,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "StateConflict",
     "Store",
     "WriteBlocked",
+    "new_lock_owner",
 ]
