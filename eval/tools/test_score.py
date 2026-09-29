@@ -87,28 +87,42 @@ class NormalizeTest(unittest.TestCase):
         self.assertEqual(score.normalize("?"), "")
 
     def test_plural_endings(self) -> None:
-        same = {
+        pairs = {
             "Patch Cables": "patch cable",
-            "ONTs": "ont",
-            "ONT's": "ont",
+            "ONTs": "ONT",
+            "ONT's": "ONT",
             "drop 150s": "drop 150",
             "switches": "switch",
             "boxes": "box",
             "batteries": "battery",
             "buses": "bus",
+            "lenses": "lens",
+            "hoses": "hose",
+            "fuses": "fuse",
+            "cases": "case",
+            "zip-ties": "zip-tie",
+            "zip ties": "zip tie",
         }
-        for text, expected in same.items():
-            with self.subTest(text):
-                self.assertEqual(score.normalize(text), expected)
+        for plural, single in pairs.items():
+            with self.subTest(plural):
+                self.assertTrue(score.text_matches(plural, single, None))
+                self.assertTrue(score.text_matches(single, plural, None))
+
+    def test_plural_rule_ignores_letter_case(self) -> None:
+        for predicted, expected in (("ups", "UPS"), ("Ups", "UPS"), ("ONTS", "ONTs"), ("onts", "ONTS")):
+            with self.subTest(predicted):
+                self.assertTrue(score.text_matches(predicted, expected, None))
 
     def test_words_that_are_not_plurals(self) -> None:
-        kept = {"UPS": "ups", "UPS 600": "ups 600", "glass": "glass", "as": "as", "chassis mounts": "chassis mount"}
-        for text, expected in kept.items():
+        different = {"UPS": "UP", "glass": "glas", "as": "a", "tape": "tap", "Disc 40": "Disc 4"}
+        for text, other in different.items():
             with self.subTest(text):
-                self.assertEqual(score.normalize(text), expected)
+                self.assertFalse(score.text_matches(text, other, None))
+                self.assertTrue(score.text_matches(text, text, None))
 
     def test_plural_rule_can_be_turned_off(self) -> None:
-        self.assertEqual(score.normalize("rolls", plural=False), "rolls")
+        self.assertFalse(score.text_matches("rolls", "roll", None, plural=False))
+        self.assertTrue(score.text_matches("Roll", "roll", None, plural=False))
 
     def test_text_matches(self) -> None:
         self.assertTrue(score.text_matches("Switches", "switch", None))
@@ -203,7 +217,7 @@ class ScoreTest(unittest.TestCase):
         got = movement()
         got["line_items"][0]["serials"] = ["SN-1", "SN-2"]
         self.assertEqual(score.score(predict(sample_001=[got]), cases=cases, corpus_version=VERSION).failed_cases, [])
-        for serials in (["SN-1"], "SN-1", 5, ["SN-1", 2], None):
+        for serials in (["SN-1"], "SN-1", 5, ["SN-1", 2], None, []):
             with self.subTest(serials):
                 got["line_items"][0]["serials"] = serials
                 report = score.score(predict(sample_001=[got]), cases=cases, corpus_version=VERSION)
@@ -273,6 +287,27 @@ class ScoreTest(unittest.TestCase):
         self.assertEqual(report.movement_type.value, 0.0)
         self.assertEqual(report.location_text.as_dict(), {"correct": 1, "total": 2, "value": 0.5})
         self.assertEqual(len(report.missed_flags), 2)
+
+    def test_items_with_the_same_text_pair_by_quantity(self) -> None:
+        want = movement()
+        want["line_items"] = [
+            {"item_text": "ONTs", "quantity": 2, "unit": None},
+            {"item_text": "ONTs", "quantity": 3, "unit": None},
+        ]
+        got = movement()
+        got["line_items"] = [{"item_text": "ONTs", "quantity": 3, "unit": None}]
+        cases = [case("sample-001", [want])]
+        report = score.score(predict(sample_001=[got]), cases=cases, corpus_version=VERSION)
+        counts = (report.line_items.true_positive, report.line_items.false_positive, report.line_items.false_negative)
+        self.assertEqual(counts, (1, 0, 1))
+
+    def test_a_field_that_is_left_out_is_read_as_null(self) -> None:
+        want = movement(flags=[], destination_text=None)
+        del want["destination_match"]
+        want["line_items"] = [{"item_text": "ONTs", "quantity": 2, "unit": None}]
+        got = {"movement_type": "take_to_vehicle", "line_items": [{"item_text": "ONT", "quantity": 2}]}
+        report = score.score(predict(sample_001=[got]), cases=[case("sample-001", [want])], corpus_version=VERSION)
+        self.assertEqual(report.failed_cases, [])
 
     def test_a_repeated_item_is_used_once(self) -> None:
         got = movement()
@@ -440,6 +475,19 @@ class ScoreTest(unittest.TestCase):
         report = run(predict(sample_001=[movement(), movement()]))
         self.assertEqual(report.failed_cases, ["sample-001"])
         self.assertEqual(report.line_items.false_positive, 2)
+        self.assertEqual(report.false_movements, [])  # the extra movement carries review reasons
+
+    def test_an_extra_movement_without_flags_is_a_false_movement(self) -> None:
+        invented = movement(flags=[], destination_text="van 3")
+        invented["line_items"] = [{"item_text": "switches", "quantity": 5, "unit": None}]
+        for flags in ([], None, "implied_source", [3]):
+            with self.subTest(flags):
+                invented["flags"] = flags
+                report = run(predict(sample_001=[movement(), invented]))
+                self.assertEqual(report.false_movements, ["sample-001"])
+                self.assertEqual(report.hard_failures, 1)
+        report = run(predict(sample_001=[movement(), invented, copy.deepcopy(invented)]))
+        self.assertEqual(report.false_movements, ["sample-001"])  # listed once per case
 
     def test_malformed_predictions_do_not_crash(self) -> None:
         got = {"movement_type": None, "line_items": None, "flags": None}
@@ -527,6 +575,13 @@ class ShippedCorpusTest(unittest.TestCase):
             self.assertEqual(score.main([str(predictions)]), 2)
             predictions.write_text("{", encoding="utf-8")
             self.assertEqual(score.main([str(predictions)]), 2)
+            predictions.write_text(json.dumps(self.oracle()), encoding="utf-8")
+            unwritable = Path(directory) / "no-such-directory" / "report.json"
+            self.assertEqual(score.main([str(predictions), "--json", str(unwritable)]), 2)
+            odd = self.oracle()
+            odd["extractor"] = "\ud800"
+            predictions.write_text(json.dumps(odd), encoding="utf-8")
+            self.assertEqual(score.main([str(predictions)]), 0)
 
 
 if __name__ == "__main__":
