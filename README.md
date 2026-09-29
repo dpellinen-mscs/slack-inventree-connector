@@ -15,3 +15,7 @@ Turn informal Slack stock posts ("2 APs on Sam's truck") into verified, auditabl
 - [Research notes](docs/research/): InvenTree, Slack, prior art
 - [Eval corpus](eval/): synthetic Slack posts with expected results
 - [Contributing](CONTRIBUTING.md): set up the project and run the checks
+
+## License
+
+[MIT](LICENSE).

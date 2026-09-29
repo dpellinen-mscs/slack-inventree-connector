@@ -7,6 +7,8 @@ name = "stockthread"
 version = "0.0.0"
 description = "Slack to InvenTree stock movements, with a human in the loop where it matters."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = []
 

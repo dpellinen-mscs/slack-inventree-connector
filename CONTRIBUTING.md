@@ -28,3 +28,5 @@ make check     # format check, lint, type check, unit tests, eval corpus tests
   inventory data, names or credentials.
 - Significant choices get a decision record in
   [`docs/decisions/`](docs/decisions/).
+- By contributing, you agree that your contribution is licensed under the
+  project's [MIT license](LICENSE).
