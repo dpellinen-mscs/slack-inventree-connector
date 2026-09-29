@@ -1,0 +1,53 @@
+{
+  "description": "A photo with a caption: one event, subtype file_share, caption in text.",
+  "kind": "event",
+  "transport": "http",
+  "headers": {},
+  "body": {
+    "token": "synthetic-verification-token",
+    "team_id": "T0ACME001",
+    "api_app_id": "A0ACME001",
+    "event": {
+      "type": "message",
+      "channel": "C0ACME001",
+      "channel_type": "channel",
+      "user": "U0SAM0001",
+      "text": "grabbed these for the Smith job",
+      "ts": "1790000100.000200",
+      "event_ts": "1790000100.000200",
+      "client_msg_id": "0f0e0d0c-0000-4000-8000-000100000200",
+      "subtype": "file_share",
+      "upload": true,
+      "files": [
+        {
+          "id": "F0ACME0001",
+          "name": "truck_shelf.jpg",
+          "mimetype": "image/jpeg",
+          "filetype": "jpg",
+          "size": 1834211,
+          "original_w": 4032,
+          "original_h": 3024,
+          "url_private": "https://files.slack.com/files-pri/T0ACME001-F0ACME0001/truck_shelf.jpg",
+          "url_private_download": "https://files.slack.com/files-pri/T0ACME001-F0ACME0001/download/truck_shelf.jpg"
+        }
+      ]
+    },
+    "type": "event_callback",
+    "event_id": "Ev0ACME0002",
+    "event_time": 1790000100,
+    "authorizations": [
+      {
+        "enterprise_id": null,
+        "team_id": "T0ACME001",
+        "user_id": "U0STOCKBOT",
+        "is_bot": true,
+        "is_enterprise_install": false
+      }
+    ],
+    "is_ext_shared_channel": false,
+    "event_context": "4-synthetic-Ev0ACME0002"
+  },
+  "expected": {
+    "action": "process"
+  }
+}

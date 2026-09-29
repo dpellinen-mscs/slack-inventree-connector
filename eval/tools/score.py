@@ -11,7 +11,7 @@ The predictions file names the corpus version it was produced for and holds
 one entry per case id:
 
     {
-      "corpus_version": "0.1.0",
+      "corpus_version": "0.2.0",
       "extractor": "rules-0.1",
       "predictions": [
         {"id": "clear-001", "movements": [ ...same shape as expected.movements... ], "post_flags": []}
@@ -44,38 +44,56 @@ EVAL_DIR = Path(__file__).resolve().parent.parent
 # Above this number of movements in one post, movements are paired in order.
 MAX_PAIRING_SIZE = 6
 
+# The movement flags the corpus schema defines. Only these count as review reasons.
+MOVEMENT_FLAGS = frozenset(
+    json.loads((EVAL_DIR / "schema" / "case-file.schema.json").read_text(encoding="utf-8"))["$defs"]["flag"]["enum"]
+)
+
 _EDGE_PUNCTUATION = " \t\n\r.,;:!?\"'()[]{}<>-"
-_LEADING_ARTICLE = re.compile(r"^the\s+")
 _WHITESPACE = re.compile(r"\s+")
 _ES_ENDINGS = ("ses", "xes", "zes", "ches", "shes")
 
 
-def singular(word: str, original: str) -> str:
-    """Drop a plural ending from a lower-case word. `original` is the word as written."""
-    if original.isupper() or len(word) < 3:
-        return word  # "UPS" and "as" are not plurals
+def singular_forms(word: str, original: str) -> set[str]:
+    """Return what a lower-case word can stand for without a plural ending. `original` is the word as written."""
+    forms = {word}
+    if original.isupper() or len(word) < 3 or word.endswith("ss"):
+        return forms  # "UPS", "as" and "glass" are not plurals
     if word.endswith("'s"):
-        return word[:-2]
-    if word.endswith("ies") and len(word) > 4:
-        return word[:-3] + "y"
-    if word.endswith(_ES_ENDINGS):
-        return word[:-2]
-    if word.endswith("s") and not word.endswith("ss"):
-        return word[:-1]
-    return word
+        forms.add(word[:-2])
+    elif word.endswith("ies") and len(word) > 4:
+        forms.update({word[:-3] + "y", word[:-1]})  # batteries, zip-ties
+    elif word.endswith(_ES_ENDINGS):
+        forms.update({word[:-2], word[:-1]})  # boxes, hoses
+    elif word.endswith("s"):
+        forms.add(word[:-1])
+    return forms
 
 
-def normalize(text: str, plural: bool = True) -> str:
-    """Normalize text for comparison, as defined in eval/README.md. The result can be empty."""
-    value = unicodedata.normalize("NFKC", text).replace("’", "'").replace("‘", "'")
+def normalize(text: str) -> str:
+    """Normalize text for comparison, as defined in eval/README.md. The result can be empty.
+
+    The scorer compares `text_forms`, which builds on the same words. This is the reference form
+    the README documents, and the tests pin it.
+    """
+    return " ".join(word.lower() for word in _words(text))
+
+
+def _words(text: str) -> list[str]:
+    value = unicodedata.normalize("NFKC", text).replace("\u2019", "'").replace("\u2018", "'")
     value = _WHITESPACE.sub(" ", value).strip(_EDGE_PUNCTUATION)
     words = value.split(" ") if value else []
-    lowered = [word.lower() for word in words]
-    if lowered and lowered[0] == "the":
-        words, lowered = words[1:], lowered[1:]
-    if plural and lowered:
-        lowered[-1] = singular(lowered[-1], words[-1])
-    return " ".join(lowered)
+    return words[1:] if words and words[0].lower() == "the" else words
+
+
+def text_forms(text: str, plural: bool = True) -> set[str]:
+    """Return the normalized text, and with `plural` also its forms without a plural ending."""
+    words = _words(text)
+    if not words:
+        return {""}
+    head = " ".join(word.lower() for word in words[:-1])
+    last = singular_forms(words[-1].lower(), words[-1]) if plural else {words[-1].lower()}
+    return {f"{head} {form}".strip() for form in last}
 
 
 def text_matches(predicted: Any, expected: str | None, accept: list[str] | None, plural: bool = True) -> bool:
@@ -84,8 +102,10 @@ def text_matches(predicted: Any, expected: str | None, accept: list[str] | None,
         return expected is None
     if not isinstance(predicted, str):
         return False
-    allowed = {normalize(value, plural) for value in [expected, *(accept or [])] if value is not None}
-    return normalize(predicted, plural) in allowed
+    got = text_forms(predicted, plural)
+    if got == {""}:
+        return False  # an empty text is not null, and it is not a value
+    return any(got & text_forms(value, plural) for value in [expected, *(accept or [])] if value is not None)
 
 
 def same_number(predicted: Any, expected: Any) -> bool:
@@ -105,6 +125,11 @@ def string_list(value: Any) -> list[str] | None:
     if isinstance(value, list) and all(isinstance(entry, str) for entry in value):
         return value
     return None
+
+
+def has_review_reason(flags: Any) -> bool:
+    """Return whether a list of movement flags holds at least one flag the schema defines."""
+    return bool(set(string_list(flags) or ()) & MOVEMENT_FLAGS)
 
 
 def match_equal(predicted: Any, expected: dict) -> bool:
@@ -237,18 +262,21 @@ class Report:
 
 
 def pair_line_items(predicted: list[Any], expected: list[dict]) -> list[tuple[dict, dict]]:
-    """Pair items by item_text. Each item is used once. An exact quantity is preferred."""
-    pairs = []
+    """Pair items by item_text. Each item is used once. Items that also agree on the quantity pair first."""
+    pairs: list[tuple[dict, dict]] = []
     unused = [item for item in predicted if isinstance(item, dict)]
-    for want in expected:
-        same_text = [
-            got for got in unused if text_matches(got.get("item_text"), want["item_text"], want.get("item_text_accept"))
-        ]
-        same_quantity = [got for got in same_text if same_number(got.get("quantity"), want["quantity"])]
-        chosen = (same_quantity or same_text or [None])[0]
-        if chosen is not None:
-            pairs.append((chosen, want))
-            unused.remove(chosen)
+    open_items = list(expected)
+    for need_quantity in (True, False):
+        for want in list(open_items):
+            for got in unused:
+                if not text_matches(got.get("item_text"), want["item_text"], want.get("item_text_accept")):
+                    continue
+                if need_quantity and not same_number(got.get("quantity"), want["quantity"]):
+                    continue
+                pairs.append((got, want))
+                unused = [item for item in unused if item is not got]
+                open_items = [item for item in open_items if item is not want]
+                break
     return pairs
 
 
@@ -286,7 +314,8 @@ def score_movement(report: Report, where: str, got: dict | None, want: dict) -> 
             and text_matches(got_item.get("unit"), want_item["unit"], None, plural=False)
             and same_number(got_item.get("pack_size"), want_item.get("pack_size"))
         )
-        serials = string_list(got_item.get("serials", []))
+        got_serials = got_item.get("serials")
+        serials = string_list(got_serials if got_serials is not None else [])
         ok &= serials is not None and sorted(serials) == sorted(want_item.get("serials", []))
         if report.matching and "match" in want_item:
             ok &= report.part_match.add(paired and match_equal(got_item.get("match"), want_item["match"]))
@@ -359,11 +388,14 @@ def score_case(report: Report, case: dict, predicted: list[dict], post_flags: An
         got = predicted[partner[index]] if index in partner else None
         ok &= score_movement(report, f"{case_id} movement {index}", got, want)
     # A predicted movement without a partner is made up, with everything in it.
+    # Without a review reason it would be proposed as a write, so it is a false movement.
     paired = set(partner.values())
     for index, got in enumerate(predicted):
         if index not in paired:
             report.line_items.false_positive += len(line_items_of(got))
             score_flags(report, None, got.get("flags"), [])
+            if expected and not has_review_reason(got.get("flags")) and case_id not in report.false_movements:
+                report.false_movements.append(case_id)
 
     ok &= score_flags(report, f"{case_id} post", post_flags, case["expected"].get("post_flags", []))
 
@@ -417,7 +449,7 @@ def score(
         by_id[case_id] = movements
         post_flags[case_id] = entry.get("post_flags")
 
-    extractor = str(predictions.get("extractor", "unknown"))
+    extractor = str(predictions.get("extractor", "unknown")).encode("utf-8", "replace").decode("utf-8")
     report = Report(corpus_version=corpus_version, extractor=extractor, matching=matching)
     for case in cases:
         score_case(report, case, by_id.get(case["id"], []), post_flags.get(case["id"]))
@@ -470,13 +502,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         predictions = json.loads(args.predictions.read_text(encoding="utf-8"))
         report = score(predictions, matching=not args.skip_matching)
-    except (OSError, ValueError) as exc:
-        print(f"ERROR {exc}", file=sys.stderr)
+        if args.json_out:
+            args.json_out.write_text(json.dumps(report.as_dict(), indent=2) + "\n", encoding="utf-8")
+    except (OSError, ValueError, RecursionError) as exc:
+        print(f"ERROR {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 
     print(render(report))
-    if args.json_out:
-        args.json_out.write_text(json.dumps(report.as_dict(), indent=2) + "\n", encoding="utf-8")
     if args.fail_on_hard and report.hard_failures:
         return 1
     return 0

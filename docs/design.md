@@ -291,6 +291,9 @@ needs.
 
 ## 6. Safety model
 
+The threats these controls answer, and the status of each control, are in
+[`threat-model.md`](threat-model.md).
+
 ### The write gate
 
 A write happens only if all three are true. Each one is evaluated

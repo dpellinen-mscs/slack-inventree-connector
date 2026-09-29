@@ -1,0 +1,23 @@
+# Changelog
+
+All notable changes to this project are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions will
+follow [Semantic Versioning](https://semver.org/) from the first release.
+
+## [Unreleased]
+
+Nothing is released yet. The connector cannot write stock in this state.
+
+### Added
+
+- Design, roadmap and architecture decisions (`docs/`).
+- A synthetic eval corpus with a schema, a validator and a reference scorer (`eval/`).
+- The Python package scaffold with one-command checks (`make check`).
+- Typed configuration from a TOML file and environment variables, with a `check-config` command.
+  Secrets in the file are refused, and secrets are redacted everywhere.
+- The core domain model and the request state machine of the apply protocol.
+- Synthetic Slack payload fixtures and signature test vectors.
+- A read-only InvenTree client (GET only), with an API version check.
+- Integration tests against real InvenTree 1.4.3 and 1.5.6 in Docker, including characterization tests
+  of the server behavior the design depends on.
+- A threat model, first version (`docs/threat-model.md`).
