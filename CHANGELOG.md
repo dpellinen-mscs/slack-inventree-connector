@@ -23,6 +23,8 @@ Nothing is released yet. The connector cannot write stock in this state.
 - A validator that derives review reasons by rule: flags that follow from the fields, grounding of
   items and quantities in the text, the quantity limit, contradictions, and questions, plans,
   negations, hedges and instructions in the text.
+- The dry-run reply renderer: what would change, and every review reason in words, with post
+  text escaped so it can never become a Slack mention or link.
 - Integration tests against real InvenTree 1.4.3 and 1.5.6 in Docker, including characterization tests
   of the server behavior the design depends on.
 - A threat model, first version (`docs/threat-model.md`).

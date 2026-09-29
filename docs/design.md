@@ -178,6 +178,12 @@ needs.
 - **After apply,** an edit, a deletion or a correction never writes by
   itself. It creates a review item that offers an undo. A revised plan can
   be approved only after the undo has been verified.
+- **Replies.** The dry-run reply (`slack/replies.py`) lists each movement
+  with the matched part and location names next to the words as written,
+  then every review reason in plain words. Text from the post and from the
+  catalog is escaped, so neither can become a mention or a link. Candidate
+  lists are capped at 5 in the display, and long sections are cut to fit
+  Slack's limits.
 - **Interactivity.** Questions and receipts use Block Kit in the thread.
   A button carries only a random id of at least 128 bits that points to a
   row in the connector's database. The handler checks that the channel and
