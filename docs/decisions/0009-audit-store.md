@@ -43,6 +43,12 @@ code must not be able to free a key or rewrite what was sent.
 - The first migration holds only what the apply protocol needs: posts,
   plans, requests, request attempts, the instance lock and the audit log.
   The other tables of section 8 arrive with the features that fill them.
+- An attempt's `outcome` records what was known when the write returned,
+  and is then frozen. An attempt that ended `unknown` keeps that outcome
+  after recovery resolves the request (for example, recovery finds the
+  marker and moves the request to `applied`). The resolution lives in the
+  request's later audit rows. Code that explains a marker (M3) reads the
+  request state and its audit rows, never the attempt outcome alone.
 - SQLite 3.37 or later (STRICT tables). Every supported Python on current
   Linux and macOS ships a newer one.
 
