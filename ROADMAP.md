@@ -63,7 +63,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 - [ ] LLM extractor behind a provider interface, with a strict output schema
 - [ ] Eval runner: scores either extractor against the corpus, using recorded fixtures in CI
 - [ ] Validator: deterministic contradiction checks and text-level review reasons
-- [ ] Matcher: exact, normalized, alias, then fuzzy candidates, for parts and locations
+- [x] Matcher: exact, normalized, alias, then fuzzy candidates, for parts and locations (`core/matching.py`; the catalog snapshot from InvenTree comes with Resolve)
 - [ ] Dry-run reply in the Slack thread: what would change, and every review reason
 - [ ] Slack app manifests and the quickstart
 
