@@ -167,8 +167,20 @@ needs.
 - **Filtering.** The first check in every listener is the channel
   allowlist. An empty allowlist means the connector acts nowhere. Message
   subtypes are handled by allowlist: plain messages, file shares and thread
-  broadcasts. Any message with a `bot_id` is dropped, which also stops the
-  connector from reacting to its own posts.
+  broadcasts, plus edits and deletions, which become their own values and
+  never write by themselves. Any message with a `bot_id`, or an edit of
+  one, is dropped, which also stops the connector from reacting to its own
+  posts. `slack/ingest.py` implements these checks as a pure function that
+  gives every drop a reason. The deduplication there is in memory; the
+  durable queue takes it over.
+- **Shared channels.** A message or click from a user of another
+  organization (Slack Connect) is dropped as `wrong_workspace`. Enterprise
+  Grid org installs are not supported yet: `workspace_id` must be a `T` id.
+- **Clicks at ingest.** Only the connector's own buttons on a message are
+  accepted. Only an approver may click Apply, and ingest drops any other
+  user's Apply click. Other buttons (answers, corrections, Undo)
+  may come from the poster, so ingest passes them on with the user id, and
+  review checks the user against the stored button row.
 - **Catch-up after downtime.** Slack does not replay events that were
   missed while the connector was down. At startup and after a reconnect,
   the connector reads the history of each allowlisted channel from the last
@@ -181,7 +193,17 @@ needs.
   exactly one post. The post key is fixed when the post is created and is
   never recomputed, because Slack does not guarantee the order of events.
   Sibling grouping closes when the dry-run reply is posted. A thread
-  reply after that creates a new plan revision.
+  reply after that creates a new plan revision. The rule is
+  `core/grouping.py`; `Store.place_message` runs it inside one transaction
+  under the instance lock. A reply that arrives before its thread root
+  creates the post keyed on the root's timestamp, and the root joins it
+  when it arrives. The window is compared exactly, to the microsecond.
+  The window is measured from the nearest placed message, so siblings
+  chain (0 s, 4 s, 8 s is one post). Which messages end up together can
+  therefore depend on arrival order (0, 8, 4 gives two posts; a sibling
+  whose reply arrived before it keys its own post), but a message never
+  changes post once placed, and a reply always joins its root. Timestamps
+  must be in Slack's exact form, because keys compare as strings.
 - **Plan revisions.** Every plan has a revision number and a hash of the
   messages it was built from. An edit, a deletion or a new message in the
   thread makes the revision stale: its buttons are removed and a new plan
@@ -285,8 +307,12 @@ needs.
   cannot hold stock and are never a match.
 - **Least privilege.** InvenTree tokens carry the full permissions of
   their user, so the docs describe a dedicated user with the smallest set
-  of roles that allows stock adjustments. The setup check reads the roles
-  of the token's user and reports what is missing or excessive. According
+  of roles that allows stock adjustments: view on Part and Stock Location,
+  and view and add on Stock Item (`test_char_restricted_user_can_adjust`).
+  InvenTree stores "change" together with "add" on Stock Item, so that
+  user can also edit stock items; it cannot delete them. The setup check
+  reads the roles of the token's user and reports what is missing or
+  excessive. According
   to the research, tokens expire after one year by default. Where the API
   exposes the expiry, the connector reports it at startup.
 - **Pack units.** A container unit or a stated pack size is always a
@@ -618,7 +644,7 @@ and needs no extra service.
 | --- | --- |
 | `slack_events` | Raw events with a processing status, unique on `event_id` |
 | `posts` | One row per post, unique on post key |
-| `post_messages` | Messages of a post, unique on `(workspace, channel, ts)` |
+| `post_messages` | Which post each message belongs to, unique on `(workspace, channel, ts)`: ids, author and thread, never text (migration 0003) |
 | `plans` | Plan revisions with the hash of their input messages |
 | `extractions` | Extractor name and version, prompt version, raw output |
 | `candidates` | Candidate movements and line items |
@@ -767,7 +793,8 @@ the test suite.
 | `test_char_notes_length` | Notes up to 512 characters are stored whole. Longer ones: SQLite stores them, PostgreSQL answers 500 |
 | `test_char_overlong_notes_write_without_history` | PostgreSQL: on 1.5.6 that 500 still commits the stock change, with no history entry. On 1.4.3 it changes nothing |
 | `test_char_multi_item_request_is_atomic` | One bad line fails the whole request |
-| `test_char_restricted_user_can_adjust` | The documented minimum roles are enough |
+| `test_char_restricted_user_can_adjust` | View on Part and Stock Location plus view and add on Stock Item allow transfer, add, remove and count. The server adds "change" to "add"; delete stays refused |
+| `test_char_user_without_stock_add_cannot_adjust` | Without "add" on Stock Item every adjustment is a 403 that changes nothing, even with "change" |
 | `test_char_concurrent_transfers_same_item` | Two simultaneous transfers of 4 from an item of 5. SQLite: colliding requests give one 201 and one 5xx that wrote nothing; requests handled one after the other behave like PostgreSQL 1.5.6. PostgreSQL 1.5.6: both 201, the second moves only the 1 left, so a 201 can move less than asked. PostgreSQL 1.4.3: both 201 and stock grows to 9 (a lost update) |
 | `test_char_transfer_does_not_merge` | A transfer to a location that holds the same part leaves separate items (server-wide merge setting off) |
 | `test_char_transfer_merge_setting_on` | The server-wide merge setting does not merge a line that omits `merge` or sends `false`; only `merge: true` merges (1.5.6) |
