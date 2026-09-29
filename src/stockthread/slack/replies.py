@@ -18,6 +18,8 @@ MAX_SECTION = 2900
 """Slack allows 3000 characters in a section block. Longer text is cut, with a marker."""
 MAX_CANDIDATES = 5
 """How many candidates a line shows. The result keeps all of them; only the display is capped."""
+MAX_MOVEMENTS = 20
+"""How many movements a reply shows. Slack refuses more than 50 blocks; each movement takes 2."""
 
 TYPE_LABELS = {
     MovementType.TAKE_TO_VEHICLE: "Take to a vehicle",
@@ -93,7 +95,7 @@ def _number(value: Decimal) -> str:
 
 def _named(text: str | None, match: Match | None, names: Mapping[int, str], what: str) -> str:
     written = f"“{escape(text)}”" if text else "(not stated)"
-    if match is None or text is None:
+    if match is None:
         return written
     if match.status is MatchStatus.MATCHED and match.record is not None:
         return f"*{escape(names.get(match.record, f'#{match.record}'))}* ({written})"
@@ -113,6 +115,52 @@ def _line(movement: CandidateMovement, index: int, match: Match, parts: Mapping[
     return f"• {quantity}{unit}{pack} \N{MULTIPLICATION SIGN} {_named(item.item_text, match, parts, 'part')}"
 
 
+_NEEDS_SOURCE = frozenset(MovementType) - {MovementType.RECEIVE, MovementType.COUNT}
+_NEEDS_DESTINATION = frozenset(MovementType) - {MovementType.CONSUME}
+
+
+def gate_reasons(view: MovementView) -> set[tuple[ReasonCode, str]]:
+    """The caller's reasons, plus every reason the view itself shows.
+
+    A line or place without a match that can authorize a write, a missing quantity or item, a needed place
+    that is missing: so the reply never says "could apply" next to "no part found".
+    """
+    found = {(reason.code, reason.detail) for reason in view.reasons}
+    movement = view.movement
+    if movement.movement_type is MovementType.UNCLEAR:
+        found.add((ReasonCode.MOVEMENT_UNCLEAR, ""))
+    for n, (item, part) in enumerate(zip(movement.line_items, view.items, strict=True), start=1):
+        if item.item_text is None:
+            found.add((ReasonCode.ITEMS_MISSING, f"line {n}"))
+        if item.quantity is None:
+            found.add((ReasonCode.QUANTITY_MISSING, f"line {n}"))
+        if reason := part.review_reason(kind="part"):
+            found.add((reason.code, f"line {n}"))
+    for side, text, match, needed, implied in (
+        ("source", movement.source_text, view.source, _NEEDS_SOURCE, ReasonCode.IMPLIED_SOURCE),
+        (
+            "destination",
+            movement.destination_text,
+            view.destination,
+            _NEEDS_DESTINATION,
+            ReasonCode.IMPLIED_DESTINATION,
+        ),
+    ):
+        if match is not None:
+            if reason := match.review_reason(kind="location"):
+                found.add((reason.code, side))
+        elif text is not None:
+            found.add((ReasonCode.LOCATION_UNMATCHED, side))
+        elif movement.movement_type in needed:
+            found.add((implied, ""))
+    return found
+
+
+def _reason_line(code: ReasonCode, details: list[str]) -> str:
+    where = f" ({', '.join(escape(detail) for detail in details)})" if details else ""
+    return f"• {REASONS[code]}{where}"
+
+
 def _cut(text: str) -> str:
     return text if len(text) <= MAX_SECTION else text[: MAX_SECTION - 1].rstrip() + "…"
 
@@ -128,7 +176,7 @@ def dry_run_reply(
     if not views:
         raise ValueError("a dry-run reply shows at least one movement")
     blocks: list[dict[str, Any]] = [_section("*Dry run.* Nothing was changed in inventory.")]
-    for number, view in enumerate(views, start=1):
+    for number, view in enumerate(views[:MAX_MOVEMENTS], start=1):
         movement = view.movement
         heading = TYPE_LABELS[movement.movement_type]
         if len(views) > 1:
@@ -139,11 +187,18 @@ def dry_run_reply(
             f" to {_named(movement.destination_text, view.destination, locations, 'location')}"
         )
         blocks.append(_section("\n".join([f"*{heading}*", *lines, places])))
-        codes = sorted({reason.code for reason in view.reasons}, key=lambda code: code.value)
-        if codes:
-            needs = "\n".join(f"• {REASONS[code]}" for code in codes)
+        details: dict[ReasonCode, list[str]] = {}
+        for code, detail in sorted(gate_reasons(view), key=lambda reason: (reason[0].value, reason[1])):
+            details.setdefault(code, [])
+            if detail:
+                details[code].append(detail)
+        if details:
+            needs = "\n".join(_reason_line(code, found) for code, found in details.items())
             blocks.append(_section(f"*Needs a human before it could apply:*\n{needs}"))
         else:
             blocks.append(_section("Nothing needs a human. With writes on, this could apply."))
+    if len(views) > MAX_MOVEMENTS:
+        hidden = len(views) - MAX_MOVEMENTS
+        blocks.append(_section(f"…and {hidden} more movements, not shown here."))
     count = f"{len(views)} movements" if len(views) > 1 else "1 movement"
     return {"text": f"Dry run: {count}, nothing changed.", "blocks": blocks}

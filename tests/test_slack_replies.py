@@ -18,7 +18,17 @@ from stockthread.core.model import (
     ReasonSource,
     ReviewReason,
 )
-from stockthread.slack.replies import MAX_CANDIDATES, MAX_SECTION, REASONS, MovementView, dry_run_reply, escape
+from stockthread.slack.replies import (
+    MAX_CANDIDATES,
+    MAX_MOVEMENTS,
+    MAX_SECTION,
+    REASONS,
+    MovementView,
+    dry_run_reply,
+    escape,
+)
+
+COULD_APPLY = "With writes on, this could apply."
 
 PARTS = {1: "Norvane Disc 40 Access Point", 2: "Norvane Disc 60 Access Point", 3: "UPS 600 VA"}
 LOCATIONS = {10: "Warehouse/Main Stock", 11: "Vehicles/Truck 1"}
@@ -106,6 +116,8 @@ def test_a_long_reply_stays_inside_slack_limits() -> None:
     body = dry_run_reply([long], PARTS, LOCATIONS)
     assert all(len(block["text"]["text"]) <= MAX_SECTION for block in body["blocks"])
     assert text_of(body).count("…") == 1
+    assert COULD_APPLY not in text_of(body)
+    assert REASONS[ReasonCode.PART_UNMATCHED] in text_of(body)
 
 
 def test_quantities_are_shown_as_written() -> None:
@@ -116,6 +128,9 @@ def test_quantities_are_shown_as_written() -> None:
     assert "0.5 box \N{MULTIPLICATION SIGN}" in shown
     assert "? \N{MULTIPLICATION SIGN}" in shown
     assert "From (not stated)" in shown
+    assert f"{REASONS[ReasonCode.QUANTITY_MISSING]} (line 2)" in shown
+    assert f"{REASONS[ReasonCode.LOCATION_UNMATCHED]} (destination)" in shown
+    assert COULD_APPLY not in shown
 
 
 def test_several_movements_are_numbered() -> None:
@@ -129,3 +144,52 @@ def test_a_reply_needs_a_movement_and_one_match_per_line() -> None:
         dry_run_reply([], PARTS, LOCATIONS)
     with pytest.raises(ValueError, match="one match per line"):
         view(items=())
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"items": (Match(MatchStatus.UNMATCHED),)},
+        {"items": (Match(MatchStatus.AMBIGUOUS, MatchRule.FUZZY, candidates=(1, 2)),)},
+        {"items": (Match(MatchStatus.MATCHED, MatchRule.FUZZY, 1),)},
+        {"source": Match(MatchStatus.MATCHED, MatchRule.FUZZY, 10)},
+        {"destination": Match(MatchStatus.UNMATCHED)},
+        {"source": None},
+    ],
+)
+def test_the_reply_never_says_could_apply_next_to_what_needs_a_human(fields: dict[str, Any]) -> None:
+    shown = text_of(dry_run_reply([view(**fields)], PARTS, LOCATIONS))  # the caller passed no reasons
+    assert COULD_APPLY not in shown
+    assert "Needs a human before it could apply" in shown
+
+
+def test_a_missing_source_is_a_reason_only_when_the_movement_needs_one() -> None:
+    movement = CandidateMovement(MovementType.RECEIVE, (LineItem("Disc 40", Decimal(2)),), None, "receiving")
+    shown = text_of(dry_run_reply([MovementView(movement, (matched(1),), None, matched(10), ())], PARTS, LOCATIONS))
+    assert COULD_APPLY in shown
+    take = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "my truck")
+    shown = text_of(dry_run_reply([MovementView(take, (matched(1),), None, matched(11), ())], PARTS, LOCATIONS))
+    assert REASONS[ReasonCode.IMPLIED_SOURCE] in shown
+    assert COULD_APPLY not in shown
+
+
+def test_a_location_resolved_without_words_is_shown() -> None:
+    movement = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "my truck")
+    one = MovementView(movement, (matched(1),), matched(10), matched(11), ())
+    assert "From *Warehouse/Main Stock* ((not stated))" in text_of(dry_run_reply([one], PARTS, LOCATIONS))
+
+
+def test_many_movements_stay_inside_the_block_limit() -> None:
+    body = dry_run_reply([view()] * (MAX_MOVEMENTS + 15), PARTS, LOCATIONS)
+    assert len(body["blocks"]) <= 50
+    assert "…and 15 more movements, not shown here." in text_of(body)
+    assert body["text"] == f"Dry run: {MAX_MOVEMENTS + 15} movements, nothing changed."
+
+
+def test_a_reason_says_which_line_or_side() -> None:
+    reasons = (
+        ReviewReason(ReasonCode.QUANTITY_ABOVE_LIMIT, ReasonSource.RULE, "line 2"),
+        ReviewReason(ReasonCode.QUANTITY_ABOVE_LIMIT, ReasonSource.MODEL, "line 1"),
+    )
+    shown = text_of(dry_run_reply([view(reasons=reasons)], PARTS, LOCATIONS))
+    assert f"{REASONS[ReasonCode.QUANTITY_ABOVE_LIMIT]} (line 1, line 2)" in shown
