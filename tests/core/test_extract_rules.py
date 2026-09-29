@@ -87,6 +87,24 @@ def test_clear_non_movements_are_not_declined(text: str) -> None:
         # What is left or still somewhere is a report, not a movement.
         "2 ONTs left on truck 1",
         "2 ONTs still in van 3",
+        # A second item or clause inside an item or a place (adversarial review of #31):
+        "took 2 ONTs with 2 SFPs from shop to truck 1",
+        "took 2 ONTs w/ 2 SFPs from shop to truck 1",
+        "took 2 ONTs plus 2 SFPs from shop to truck 1",
+        "took 2 ONTs/3 SFPs from shop to truck 1",
+        "2 ONTs 3 SFPs on truck 1",
+        "took 5 ONTs from shop to truck 1 but 2 were DOA",
+        "took 5 ONTs from shop to truck 1 then 2 back",
+        "took 5 ONTs from shop to truck 1 minus 2",
+        "took 5 ONTs from shop to truck 1 instead of 2",
+        "took 5 ONTs (3 were bad) for smith job",
+        # Numbers that are not one plain quantity:
+        "took 10 \N{VULGAR FRACTION ONE HALF} ft cat6 from shop to truck 1",
+        "took 2 x 3 ONTs from shop to truck 1",
+        "took 2.000 ONTs from shop to truck 1",
+        "took 1,5 ONTs from shop to truck 1",
+        "took 2 million ONTs from shop to truck 1",
+        "took sixty five ONTs from shop to truck 1",
     ],
 )
 def test_what_it_cannot_read_is_declined_not_guessed(text: str) -> None:
@@ -135,6 +153,10 @@ def test_a_sentence_with_instructions_is_never_read() -> None:
         ("1 PTP radio SN SR5-000456 to oak hill tower", LineItem("PTP radio", Decimal(1), serials=("SR5-000456",))),
         ("took 1,500 ft of cat6 from main stock to truck 1", LineItem("cat6", Decimal(1500), "ft")),
         ("pulled 1 16 port poe switch for oak hill", LineItem("16 port poe switch", Decimal(1))),
+        ("took 2 Cat6 patch cables 3 ft from shop to truck 1", LineItem("Cat6 patch cables 3 ft", Decimal(2))),
+        ("took 1 UPS 600 VA from shop to truck 1, thanks", LineItem("UPS 600 VA", Decimal(1))),
+        ("took 3 left-hand brackets from shop to truck 1", LineItem("left-hand brackets", Decimal(3))),
+        ("took sixty ONTs from shop to truck 1", LineItem("ONTs", Decimal(60))),
     ],
 )
 def test_quantities_units_and_serials(text: str, item: LineItem) -> None:

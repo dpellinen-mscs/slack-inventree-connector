@@ -81,21 +81,26 @@ _SOURCE_WORDS = {"from", "off", "out of"}
 _NUMBERS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
     "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
-    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+    "seventy": 70, "eighty": 80, "ninety": 90,
 }  # fmt: skip
 _EACH = {"each", "ea", "pc", "pcs", "piece", "pieces", "unit", "units", "x"}
 _CONTAINERS = {"box", "bag", "pack", "case", "roll", "spool", "bundle", "carton", "pallet"}
 _LENGTHS = {"ft": "ft", "feet": "ft", "foot": "ft", "m": "m", "meter": "m", "meters": "m", "metre": "m", "metres": "m"}
 _NUMBER = r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
 """A number as written: "1,500" is fifteen hundred (a comma between digit groups is not a list comma)."""
-_LIST_COMMA = r",(?!\d{3}(?!\d))"
-_MULTIPLIER = re.compile(rf"(?i)\s*(dozen|score|gross|hundreds?|thousands?|k|{'|'.join(_NUMBERS)})\b")
-"""A number word after a quantity: "two dozen", "twenty five", "a hundred". Never guessed. A digit may follow
-("1 16 port switch"), so "2 12 ONTs" reads as 2 of an item named "12 ONTs", which the matcher must find."""
+_LIST_COMMA = r"(?<!\d),|,(?!\d)"
+"""A comma between digits never separates items: "1,500" is one number, and "1,5" is declined."""
+_MULTIPLIER = re.compile(
+    rf"(?i)\s*((dozen|score|gross|hundreds?|thousands?|millions?|grand|k|{'|'.join(_NUMBERS)})\b|\d*\s*[/\u2044])"
+)
+"""A number word or a fraction after a quantity: "two dozen", "twenty five", "a hundred", "10 ½". Never guessed.
+A digit may follow ("1 16 port switch"), so "2 12 ONTs" reads as 2 of an item named "12 ONTs", which the
+matcher must find."""
 
 _NOT_STOCK = re.compile(
     r"\b(sec(ond)?|min(ute)?|hour|hr|day|week|month|year|while|time|pto|lunch|break|meeting|call|update|complaint"
-    r"|guy|people|folks|customer|ticket|more|floor|trip|mile|left|still|remaining|leftover)s?\b",
+    r"|guy|people|folks|customer|ticket|more|floor|trip|mile|left|still|remaining|leftover)s?\b(?!-)",
     re.IGNORECASE,
 )
 """Words that name time, people or events, or a report of what is left: "3 hours at the Smith job",
@@ -257,15 +262,26 @@ def _places(rest: str) -> tuple[str, str | None, str | None]:
     return rest[: found[0].start()], source, destination
 
 
+_SIGN_OFF = re.compile(r"(?i)(thanks|thx|ty|thank you|cheers)?")
+"""What may follow a comma after a location without being a second statement."""
+_MORE_THAN_A_PLACE = re.compile(
+    r"(?i)\s(and|with|w/|but|then|minus|plus|instead|except|or|so|because|since|until|after|before|when)\s|[()]"
+)
+_MORE_THAN_AN_ITEM = re.compile(
+    r"(?i)\s(with|w/|plus|but|then|minus|instead|except|or)\s|[()/\u2044]|\b\d+\s+([a-z]\w*)"
+)
+"""A second item or clause inside an item: "ONTs with 2 SFPs", "ONTs/3 SFPs", "ONTs 3 SFPs"."""
+
+
 def _place(text: str) -> str | None:
     """Location text as written, without a leading article. Declines when anything follows a comma."""
     text, *after = re.split(r"[,;.!]", text, maxsplit=1)
-    if after and after[0].strip(" ,;.!"):
+    if after and not _SIGN_OFF.fullmatch(after[0].strip(" ,;.!")):
         raise _Decline  # "truck 1, jk", "truck 1, 2 SFPs too": what follows is unread, so nothing is
     text = text.strip()
     text = re.sub(r"(?i)^the\s+", "", text)
-    if re.search(r"(?i)\s(and|with|w/)\s", f" {text} ") or _NOT_A_PLACE.search(text):
-        raise _Decline
+    if _MORE_THAN_A_PLACE.search(f" {text} ") or _NOT_A_PLACE.search(text):
+        raise _Decline  # "truck 1 but 2 were DOA", "truck 1 (3 were bad)"
     return text or None
 
 
@@ -313,6 +329,8 @@ def _line_item(text: str, zero: bool = False) -> tuple[LineItem, bool]:
     item = rest.strip(" ,;:-") or None
     if item is not None and (not re.search(r"\w", item) or "," in item or _NOT_STOCK.search(item)):
         raise _Decline
+    if item is not None and _second_item(item):
+        raise _Decline
     if quantity.value == 0 and not zero:
         raise _Decline
     return LineItem(item, quantity.value, quantity.unit, quantity.pack_size, serials), quantity.vague
@@ -340,6 +358,8 @@ def _quantity(text: str) -> tuple[_Quantity, str]:
         return _Quantity(Decimal(1), found.group(1), _decimal(found.group(2))), text[found.end() :]
     if found := re.match(rf"(?:about|around|approx\.?|~)\s*{_NUMBER}\b", lowered):
         return _unit(_Quantity(_decimal(found.group(1)), vague=True), text[found.end() :])
+    if re.match(r"\d{1,3}\.\d{3}(?!\d)|\d+\s*x\s*\d", lowered):
+        raise _Decline  # "2.000 ONTs" (two, or two thousand?), "2 x 3 ONTs"
     if found := re.match(rf"{_NUMBER}\s*x?\b", lowered):
         quantity = _Quantity(_decimal(found.group(1)))
         rest = re.sub(r"(?i)^\s*of the \d+\b", "", text[found.end() :])  # "2 of the 5"
@@ -370,6 +390,18 @@ def _unit(quantity: _Quantity, rest: str) -> tuple[_Quantity, str]:
     if word in _LENGTHS:
         return _Quantity(quantity.value, _LENGTHS[word], quantity.pack_size, quantity.vague), after
     return quantity, rest
+
+
+def _second_item(item: str) -> bool:
+    """True when an item text holds another item or a clause. A number before a unit or a model word stays:
+    "Cat6 patch cables 3 ft", "UPS 600 VA"; a number before a plural does not: "ONTs 3 SFPs"."""
+    for found in _MORE_THAN_AN_ITEM.finditer(f" {item} "):
+        word = found.group(2)
+        if word is None:
+            return True
+        if word.lower() not in _LENGTHS and _plural(word) and len(word) > 2:
+            return True
+    return False
 
 
 def _decimal(number: str) -> Decimal:
