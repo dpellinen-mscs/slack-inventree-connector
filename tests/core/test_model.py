@@ -175,6 +175,7 @@ def test_a_deterministic_match_can_authorize_a_write(rule: MatchRule) -> None:
     ("match", "kind", "code"),
     [
         (Match(MatchStatus.MATCHED, rule=MatchRule.FUZZY, record=7), "part", ReasonCode.FUZZY_MATCH),
+        (Match(MatchStatus.MATCHED, rule=MatchRule.WORDS, record=7), "part", ReasonCode.FUZZY_MATCH),
         (Match(MatchStatus.AMBIGUOUS, rule=MatchRule.FUZZY, candidates=(7, 8)), "part", ReasonCode.PART_AMBIGUOUS),
         (
             Match(MatchStatus.AMBIGUOUS, rule=MatchRule.ALIAS, candidates=(7, 8)),
@@ -193,3 +194,8 @@ def test_every_other_match_is_a_review_reason(
     assert reason is not None
     assert reason.code is code
     assert reason.source is ReasonSource.RULE
+
+
+def test_only_exact_normalized_and_alias_authorize_a_write() -> None:
+    authorizing = {rule for rule in MatchRule if Match(MatchStatus.MATCHED, rule=rule, record=7).can_authorize_a_write}
+    assert authorizing == {MatchRule.EXACT, MatchRule.NORMALIZED, MatchRule.ALIAS}

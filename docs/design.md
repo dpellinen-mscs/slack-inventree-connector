@@ -148,7 +148,19 @@ needs.
   listener stores the raw event, acknowledges, and processes it later.
 - **Durable queue.** The queue is the `slack_events` table with a
   processing status. Rows that were not finished are picked up again at
-  startup, so a restart loses nothing that was acknowledged.
+  startup, so a restart loses nothing that was acknowledged. A row moves
+  `pending` -> `processing` -> `done`, `dropped` or `failed`, and back to
+  `pending` only at startup. An event claimed 3 times without finishing is
+  `failed`, so one bad payload cannot crash the connector in a loop. Only
+  the holder of the instance lock claims and finishes events, and startup
+  requeues only events an earlier instance left behind. Delivery is **at
+  least once**: after a lock takeover, an event the old instance was still
+  processing runs again, so processing checks the lock before any write,
+  and everything downstream is idempotent (post keys, request keys,
+  markers). Triggers keep the key and the raw body fixed (retention may
+  expire the body only of a finished event), keep attempts from going down,
+  move the claim only with the status, freeze finished rows, and refuse
+  deletes and illegal status changes. An outcome is a short code, never text.
 - **Deduplication.** Slack retries deliveries. Events are deduplicated on
   `event_id`, messages on `(workspace, channel, ts)`, and writes on the
   request key (section 7).
@@ -462,7 +474,8 @@ request shares it.
 
 - The marker has a fixed length and comes first in the notes. The notes
   hold nothing else except a link to the Slack message and the Slack user
-  id, and they stay under 200 characters.
+  id, and they stay under 200 characters. The server stores notes in a
+  `varchar(512)`, which PostgreSQL enforces (`test_char_notes_length`).
 - The search for a marker reads every page of results and compares the
   whole token, because the server search matches substrings.
 - **A marker that is found proves the write happened. A marker that is not
@@ -491,19 +504,43 @@ connector never has two InvenTree writes in flight and cannot race itself.
    sub-locations. Compare with what the plan was built on. If a source
    holds less than the plan takes from it, or anything relevant changed,
    stop: the request returns to `planned` and the post to review.
-   Otherwise store the snapshot, the exact request body and the move to
-   `applying` in one transaction.
-4. **Write.** Send the request once. InvenTree runs each stock adjustment
-   request in one database transaction, so all lines of a request succeed
-   or fail together.
-5. **Read back.** Find the history entries that carry the marker and check
-   their deltas against the plan. As a second check, compare the
-   quantities per part and location with the snapshot.
+   Also record the ids of the history entries that already exist on each
+   source stock item the request takes from. Otherwise store the snapshot,
+   the exact request body and the move to `applying` in one transaction.
+4. **Write.** Send the request once. A request that InvenTree refuses
+   with a 4xx changes nothing: all lines succeed or fail together
+   (`test_char_multi_item_request_is_atomic`). A 5xx is not that safe. On
+   1.5.6 with PostgreSQL, a request whose history entry fails to save
+   answers 500 after the stock change is committed, and no entry carries
+   the marker (`test_char_overlong_notes_write_without_history`). That is
+   why a 5xx is an unknown outcome and recovery compares quantities.
+5. **Read back.** Three checks, and any failure means `verify_failed`:
+   - the history entries that carry the marker have the deltas of the
+     plan;
+   - the quantities per part and location match the snapshot plus the
+     plan;
+   - the source stock items and the items the request created have no
+     history entry that is missing from the snapshot and lacks this
+     request's marker. Such an entry means another writer touched the
+     same stock during the apply.
 6. **Record.** Move to `verified` and post the receipt.
 
 Another InvenTree user can still change the stock between steps 3 and 4.
 The connector cannot lock InvenTree, so that window cannot be closed, only
 detected by step 5.
+A concurrent write can also make the connector's own request move less
+than it asked for (a transfer of more than an item holds moves the whole
+item), and on 1.4.3 with PostgreSQL two concurrent splits of one item can
+even create stock (`test_char_concurrent_transfers_same_item`). The first
+two checks of step 5 catch the short move (a delta of 1 where the plan says
+4), but not the 1.4.3 lost update: there the connector's own deltas and the
+source and destination quantities all match the plan, and the extra stock
+appears at a third location outside the snapshot. The third check catches
+it, because the other writer's split leaves an entry without the marker on
+the source item. The price is that any concurrent write to the same stock
+items ends in `verify_failed` and goes to the operator, even a harmless
+one. A concurrent writer that touches none of these items cannot be
+detected, and it also cannot corrupt the connector's movement.
 
 ### Unknown outcomes and recovery
 
@@ -616,22 +653,47 @@ send to InvenTree.
 
 Deterministic. The rules run in this order:
 
-1. Exact match on IPN or name.
-2. Normalized match: case, punctuation, plurals, possessives, spacing.
-3. Confirmed alias.
-4. Token and fuzzy candidates, with a score threshold and a cap on the
-   list length.
+1. **exact**: the text equals an IPN or a part name, or a location path
+   or name.
+2. **normalized**: the same after folding case, punctuation, plurals,
+   possessives and spacing.
+3. **alias**: a confirmed alias, or "my truck" for the poster's vehicle.
+4. **words**: every word of the text is one of the record's words (name,
+   keywords and aliases; path and description for locations). "Disc 40"
+   finds "Norvane Disc 40 Access Point". A word such as "3ft" or "van3"
+   may be split into letters and digits.
+5. **fuzzy**: as rule 4, but a word of 4 letters or more may be misspelled
+   (`difflib` similarity 0.8, so "ondrl" finds "Ondrel"). Words with digits
+   never get this allowance, so "truck 7" never becomes "Truck 1".
 
-- Exactly one hit at rule 1, 2 or 3 is `matched`.
-- More than one hit at any rule is `ambiguous`. Matching does not fall
-  through to a later rule to find a single winner.
-- Hits at rule 4 are candidates for a human. Whether a single hit at rule
-  4 may count as `matched` is decided against the corpus and recorded with
-  the scores. Under auto-apply it never counts.
+- The first rule with any hit decides. One hit is `matched`, more than one
+  is `ambiguous` with every hit as a candidate. Matching does not fall
+  through to a later rule to find a single winner. The candidate list is
+  capped where it is shown, not in the result.
+- A single hit at rule 4 or 5 is `matched`, because the corpus clerk would
+  pick that one record. It still cannot authorize a write: it raises the
+  `fuzzy_match` review reason. Only rules 1 to 3 authorize, and the code
+  enforces that with an allowlist (`Match.can_authorize_a_write`).
+- Corpus 0.2.0, with the expected text as input (`tests/core/test_matching_corpus.py`):
+  part match 100% (109 results) and location match 100% (92 results).
+  Of the 99 single part matches, 81 came from rule 4 or 5 ("Disc 40",
+  "ONTs"), and so did 20 of the 88 single location matches. Under the
+  current policy all of those need a confirmation.
+- Plural endings are folded only on words without digits at rules 2 and
+  3 ("40S" may be another model), and "-es" only after a hissing sound
+  ("boxes", "switches", but "tapes" is never "tap"). Rules 4 and 5 fold
+  both kinds ("d40s", "tapes"), and those rules never authorize. Where
+  folding still makes two records look the same ("ups": "UP" or "UPS"),
+  the result is ambiguous.
+- A trailing "+" is part of the word at rules 1 to 3 ("SFP+" and "SFP",
+  "PoE+" and "PoE" are different products). Rules 4 and 5 ignore it, so
+  "poe injector" still finds "PoE+ Injector", for confirmation.
 - Template, inactive and virtual parts are never a match. Structural
   locations are never a match.
-- "My truck" resolves through the mapping from Slack user to vehicle.
-  Aliases that contain such words are stored per user.
+- "My truck" resolves through the mapping from Slack user to vehicle,
+  only when the word ("truck", "van") names that vehicle in its path,
+  description or aliases. "My trailer" from a user with a truck goes
+  through the other rules instead. Aliases that contain such words are stored per user.
 - An alias is checked against the catalog snapshot when it is used. An
   alias that points to an inactive part or a deleted location is ignored
   and reported.
@@ -669,11 +731,12 @@ the test suite.
 | `test_char_marker_on_every_entry_type` | The notes reach every history entry a request writes |
 | `test_char_marker_visible_after_response` | Whether history is readable as soon as the server has answered |
 | `test_char_marker_search_is_substring` | The history search matches substrings, and `limit` with `offset` pages through it without overlap |
-| `test_char_notes_length` | Notes of 20,000 characters are stored whole (SQLite; PostgreSQL not measured yet) |
+| `test_char_notes_length` | Notes up to 512 characters are stored whole. Longer ones: SQLite stores them, PostgreSQL answers 500 |
+| `test_char_overlong_notes_write_without_history` | PostgreSQL: on 1.5.6 that 500 still commits the stock change, with no history entry. On 1.4.3 it changes nothing |
 | `test_char_multi_item_request_is_atomic` | One bad line fails the whole request |
 | `test_char_restricted_user_can_adjust` | View on Part and Stock Location plus view and add on Stock Item allow transfer, add, remove and count. The server adds "change" to "add"; delete stays refused |
 | `test_char_user_without_stock_add_cannot_adjust` | Without "add" on Stock Item every adjustment is a 403 that changes nothing, even with "change" |
-| `test_char_concurrent_transfers_same_item` | Two simultaneous transfers never move more than the item held. On SQLite, colliding requests give one 201 and one 5xx that wrote nothing. Requests handled one after the other give two 201s, and the second moves only what was left: a 201 can move less than asked, so read-back must compare the delta with the plan |
+| `test_char_concurrent_transfers_same_item` | Two simultaneous transfers of 4 from an item of 5. SQLite: colliding requests give one 201 and one 5xx that wrote nothing; requests handled one after the other behave like PostgreSQL 1.5.6. PostgreSQL 1.5.6: both 201, the second moves only the 1 left, so a 201 can move less than asked. PostgreSQL 1.4.3: both 201 and stock grows to 9 (a lost update) |
 | `test_char_transfer_does_not_merge` | A transfer to a location that holds the same part leaves separate items (server-wide merge setting off) |
 | `test_char_transfer_merge_setting_on` | The server-wide merge setting does not merge a line that omits `merge` or sends `false`; only `merge: true` merges (1.5.6) |
 | `test_char_stock_list_cascade_false` | A stock list with `cascade=false` leaves out sub-locations |
@@ -684,7 +747,12 @@ are frozen: a photo with a caption arrives as one message, and the app
 receives events only from channels it is a member of.
 
 A fault proxy between the connector and InvenTree delays, drops and
-corrupts responses. It drives the tests for unknown outcomes, including
+corrupts responses (`tests/support/faultproxy.py`). Each fault happens
+either before the request reaches the server or after the server answered.
+`test_char_failure_seen_by_client_hides_committed_transfer` shows that a
+client timeout, a lost connection, a proxy error page and a cut body can
+each hide a transfer that committed. The proxy drives the M3 tests for
+unknown outcomes, including
 `test_late_commit_after_client_timeout_never_double_applies`.
 
 ## 12. Configuration
