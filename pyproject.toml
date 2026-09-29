@@ -9,6 +9,8 @@ description = "Slack to InvenTree stock movements, with a human in the loop wher
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "anyio>=4.8,<5",
+    "httpx>=0.28,<0.29",
     "pydantic>=2.13,<3",
 ]
 

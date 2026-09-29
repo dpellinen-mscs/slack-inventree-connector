@@ -1,0 +1,65 @@
+name: Integration
+
+# Real InvenTree servers in Docker. Runs only when code that talks to InvenTree changes.
+on:
+  pull_request:
+    paths:
+      - "src/stockthread/inventree.py"
+      - "src/stockthread/config.py"
+      - "tests/integration/**"
+      - "eval/catalog/**"
+      - "pyproject.toml"
+      - ".github/workflows/integration.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/stockthread/inventree.py"
+      - "src/stockthread/config.py"
+      - "tests/integration/**"
+      - "eval/catalog/**"
+      - "pyproject.toml"
+      - ".github/workflows/integration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  inventree:
+    name: InvenTree ${{ matrix.inventree }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # The tested range in src/stockthread/inventree.py: the current stable release and the previous minor.
+        inventree: ["1.4.4", "1.5.6"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: make install
+      - name: Start InvenTree
+        env:
+          STOCKTHREAD_IT_TOKEN_FILE: ${{ runner.temp }}/inventree-token
+        run: tests/integration/start-inventree.sh "inventree/inventree:${{ matrix.inventree }}" >> "$GITHUB_ENV"
+      - name: Integration tests
+        run: |
+          test -n "$STOCKTHREAD_IT_URL"
+          .venv/bin/pytest tests/integration -p no:cacheprovider
+      - name: Server log
+        if: failure()
+        run: docker logs --tail 200 stockthread-it
+      - name: Tear down
+        if: always()
+        run: tests/integration/start-inventree.sh --stop
