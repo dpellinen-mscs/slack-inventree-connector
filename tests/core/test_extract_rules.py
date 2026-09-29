@@ -74,6 +74,19 @@ def test_clear_non_movements_are_not_declined(text: str) -> None:
         "took a while to find the switch",
         "1 more day on the Smith job",
         "took 2 Disc 40 to my truck lol jk",
+        # Nothing after a comma is left unread (review of #31):
+        "took 2 Disc 40 from main stock to truck 1, jk",
+        "took 2 Disc 40 from main stock to truck 1, nvm",
+        "took 2 Disc 40 from main stock to truck 1. wrong truck, sorry",
+        "took 3 ONTs from main stock to truck 1, 2 SFPs too",
+        # A number word after the quantity: the first number is not the quantity.
+        "took two dozen zip ties from main stock to truck 1",
+        "took twenty five ONTs from main stock to truck 1",
+        "took a hundred feet of cat6 from main stock to truck 1",
+        "took 2 thousand ft of cat6 from main stock to truck 1",
+        # What is left or still somewhere is a report, not a movement.
+        "2 ONTs left on truck 1",
+        "2 ONTs still in van 3",
     ],
 )
 def test_what_it_cannot_read_is_declined_not_guessed(text: str) -> None:
@@ -120,6 +133,8 @@ def test_a_sentence_with_instructions_is_never_read() -> None:
         ("Used fifteen blue screws at riverside", LineItem("blue screws", Decimal(15))),
         ("brought back 2 of the 5 drop 150s to main stock", LineItem("drop 150s", Decimal(2))),
         ("1 PTP radio SN SR5-000456 to oak hill tower", LineItem("PTP radio", Decimal(1), serials=("SR5-000456",))),
+        ("took 1,500 ft of cat6 from main stock to truck 1", LineItem("cat6", Decimal(1500), "ft")),
+        ("pulled 1 16 port poe switch for oak hill", LineItem("16 port poe switch", Decimal(1))),
     ],
 )
 def test_quantities_units_and_serials(text: str, item: LineItem) -> None:
@@ -149,6 +164,21 @@ def test_counts_and_loads_under_a_heading() -> None:
     load = movement("Sam's truck: 2 d40s, 1 disc 60")
     assert (load.movement_type, load.destination_text) == (MovementType.TAKE_TO_VEHICLE, "Sam's truck")
     assert one("Received from supplier: 24 Disc 40").declined
+
+
+def test_a_thousands_separator_is_one_quantity_in_a_count() -> None:
+    count = movement("truck 2 count: 1,000 ft cat6, 3 Disc 40")
+    assert count.line_items == (LineItem("cat6", Decimal(1000), "ft"), LineItem("Disc 40", Decimal(3)))
+
+
+@pytest.mark.parametrize("text", ["took 2 ONTs to Will's truck", "took 2 ONTs to the Will St job"])
+def test_will_as_a_name_is_not_a_plan(text: str) -> None:
+    assert movement(text).line_items == (LineItem("ONTs", Decimal(2)),)
+
+
+@pytest.mark.parametrize("text", ["I will take 2 ONTs to truck 1", "will grab 2 ONTs for oak street"])
+def test_will_as_a_plan_is_not_a_movement(text: str) -> None:
+    assert one(text) == Extraction("rules-0.1", ())
 
 
 def test_a_declined_extraction_has_no_movements() -> None:

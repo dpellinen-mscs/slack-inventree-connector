@@ -633,11 +633,15 @@ send to InvenTree.
   - Flags that follow from the fields are computed by rule, never guessed.
   - Corpus 0.2.0 (`tests/core/test_extract_rules_corpus.py`, matching not
     scored): 0 hard failures; movement detection precision 100%, recall
-    64.6%; flag precision 100%, recall 54.2%; case exact match 71.3%. The
-    29 missed movements are all declined posts: photos, threads and
+    63.4%; flag precision 100%, recall 53.1%; case exact match 70.3%. The
+    30 missed movements are all declined posts: photos, threads and
     sibling messages (11), lists, headings and multi-movement posts (7),
-    and wording it does not know (11: "gave", "swapped", a third person,
-    no quantity, Slack chatter around the movement, Spanish).
+    and wording it does not know (12: "gave", "swapped", a third person,
+    no quantity, Slack chatter around the movement, Spanish, text after a
+    comma that ends the location).
+  - Nothing is left unread: text after a comma that ends a location, or a
+    number word after a quantity ("two dozen", "twenty five", "a
+    hundred"), declines the post. "1,500" is one quantity.
 - **LLM extractor.** A provider interface with a strict JSON schema for
   the output. v1.0 ships one adapter for OpenAI-compatible endpoints,
   which covers hosted providers and local servers. More adapters can

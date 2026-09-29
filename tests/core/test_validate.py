@@ -241,3 +241,52 @@ def test_rules_alone_raise_every_field_flag_in_the_corpus(case: dict[str, Any]) 
             assert "quantity_missing" in raised
         if expected["movement_type"] == "unclear":
             assert "movement_unclear" in raised
+
+
+def test_connective_words_are_whole_words() -> None:
+    # "from main shop": the "in" at the end of "main" must not put "shop" on the destination side.
+    receive = take("breakers", movement_type=MovementType.RECEIVE, source_text=None, destination_text="shop")
+    assert ReasonCode.MOVEMENT_UNCLEAR in codes(receive, "received 2 breakers from main shop")
+    assert codes(receive, "received 2 breakers in shop") == set()
+    assert codes(take(destination_text="truck 2"), "took 2 Disc 40 from main stock -> truck 2") == set()
+
+
+@pytest.mark.parametrize(
+    ("movement", "text"),
+    [
+        (
+            take("ft drop cable", "50", movement_type=MovementType.COUNT, source_text=None, destination_text="truck 2"),
+            "truck 2 count: 1,050 ft drop cable",
+        ),
+        (take("breakers", "12"), "took 2 dozen breakers from main stock to truck 1"),
+        (take("breakers", "2"), "took 2 dozen breakers from main stock to truck 1"),
+        (take("breakers", "24"), "took 2 dozen breakers from main stock to truck 1"),
+        (take("breakers", "20"), "took twenty five breakers from main stock to truck 1"),
+        (take("breakers", "5"), "took twenty five breakers from main stock to truck 1"),
+        (take("five breakers", "20"), "took twenty five breakers from main stock to truck 1"),
+        (take("dozen breakers", "2"), "took 2 dozen breakers from main stock to truck 1"),
+        (take("feet of cat6", "1"), "took a hundred feet of cat6 from main stock to truck 1"),
+    ],
+)
+def test_one_word_of_a_longer_number_does_not_state_a_quantity(movement: CandidateMovement, text: str) -> None:
+    assert ReasonCode.QUANTITY_NOT_IN_TEXT in codes(movement, text)
+
+
+def test_a_thousands_separator_states_the_whole_number() -> None:
+    count = take(
+        "ft drop cable", "1050", movement_type=MovementType.COUNT, source_text=None, destination_text="truck 2"
+    )
+    assert ReasonCode.QUANTITY_NOT_IN_TEXT not in codes(count, "truck 2 count: 1,050 ft drop cable")
+    assert codes(take(quantity="3"), "took 2,3 Disc 40 from main stock to truck 1") == set()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<@U04ABC> grabbed 2 Disc 40 from main stock for his truck 1",
+        "Then Mike took 2 Disc 40 from main stock to truck 1",
+        "Yesterday Mike took 2 Disc 40 from main stock to truck 1",
+    ],
+)
+def test_someone_else_named_anywhere_is_not_the_poster(text: str) -> None:
+    assert ReasonCode.ACTOR_NOT_POSTER in codes(take(), text)
