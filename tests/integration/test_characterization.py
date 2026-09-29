@@ -6,11 +6,13 @@ pinned version it runs against. When one fails, the design is what changes.
 
 from __future__ import annotations
 
+import os
 import threading
 import uuid
 from typing import TYPE_CHECKING, Any
 
 import httpx
+import pytest
 
 if TYPE_CHECKING:
     from conftest import RawApi, Scratch
@@ -250,25 +252,64 @@ def test_char_transfer_merge_setting_on(api: RawApi, scratch: Scratch) -> None:
         api.http.patch(MERGE_SETTING, json={"value": False}).raise_for_status()
 
 
-def test_char_notes_length(api: RawApi, scratch: Scratch) -> None:
-    """Notes of 20,000 characters are accepted and stored whole on the history entry (SQLite).
+DB = os.environ.get("STOCKTHREAD_IT_DB", "sqlite")
+"""The database behind the test server: `sqlite` or `postgres` (set by start-inventree.sh)."""
+NOTES_LIMIT = 512
+"""Measured: history notes are `varchar(512)`. PostgreSQL enforces it, SQLite does not."""
 
-    The connector keeps its notes under 200 characters (design section 7), so it never nears a limit.
-    PostgreSQL is not measured yet.
+
+def test_char_notes_length(api: RawApi, scratch: Scratch) -> None:
+    """Notes up to 512 characters are stored whole. Longer notes: SQLite stores them, PostgreSQL answers 500.
+
+    The connector keeps its notes under 200 characters (design section 7).
     """
     item = scratch.stock(5)
-    prefix = f"long-{uuid.uuid4().hex}"
-    notes = prefix + "n" * 20_000
-    body = {"items": [{"pk": item["pk"], "quantity": 5}], "location": scratch.other, "notes": notes}
+    prefix = f"long-{uuid.uuid4().hex}-"
+    notes = prefix + "n" * (NOTES_LIMIT - len(prefix))
+    body = {"items": [{"pk": item["pk"], "quantity": 1}], "location": scratch.other, "notes": notes}
     assert api.post("/api/stock/transfer/", body).status_code == 201
-    assert search(api, prefix) == [notes]
+    assert set(search(api, prefix)) == {notes}  # a partial transfer writes two entries
+    if DB == "sqlite":
+        prefix = f"longer-{uuid.uuid4().hex}-"
+        notes = prefix + "n" * 20_000
+        body = {"items": [{"pk": item["pk"], "quantity": 1}], "location": scratch.other, "notes": notes}
+        assert api.post("/api/stock/transfer/", body).status_code == 201
+        assert set(search(api, prefix)) == {notes}  # a partial transfer writes two entries
+
+
+@pytest.mark.skipif(DB != "postgres", reason="SQLite does not enforce the notes length")
+@pytest.mark.parametrize("path", ["/api/stock/transfer/", "/api/stock/add/", "/api/stock/remove/"])
+def test_char_overlong_notes_write_without_history(api: RawApi, scratch: Scratch, path: str) -> None:
+    """Notes over the limit give a 500. On API 530 (1.5.6) the stock change is still committed, without the history
+    entry that would carry the marker. On API 511 (1.4.3) nothing changes.
+
+    This is why a 5xx is an unknown outcome, and why a marker that is not found proves nothing (design section 7).
+    """
+    item = scratch.stock(10)
+    marker = f"overlong-{uuid.uuid4().hex}-"
+    body: dict[str, Any] = {"items": [{"pk": item["pk"], "quantity": 1}], "notes": marker + "n" * NOTES_LIMIT}
+    if path.endswith("transfer/"):
+        body["location"] = scratch.other
+    history_before = len(api.get("/api/stock/track/", item=item["pk"]))
+    response = api.post(path, body)
+    assert response.status_code == 500
+    assert search_rows(api, marker) == []
+    assert len(api.get("/api/stock/track/", item=item["pk"])) == history_before
+    committed = {"/api/stock/transfer/": 9, "/api/stock/add/": 11, "/api/stock/remove/": 9}[path]
+    expected = committed if api.get("/api/")["apiVersion"] >= 530 else 10
+    assert float(scratch.item(item["pk"])["quantity"]) == expected
 
 
 def test_char_concurrent_transfers_same_item(api: RawApi, scratch: Scratch) -> None:
-    """Two simultaneous transfers of 4 from an item of 5 never move more than the item held.
+    """Two simultaneous transfers of 4 from an item of 5 never move more than the item held, but they do not
+    always move what they asked for.
 
-    Measured on SQLite (one server process): one answers 201, the other a 5xx that wrote nothing. A 5xx is an
-    unknown outcome for the connector (design section 7); recovery then finds no marker for it.
+    - SQLite (one server process): one answers 201, the other a 5xx that wrote nothing.
+    - PostgreSQL, API 530 (1.5.6): both answer 201. The second moves the 1 that is left, because a transfer of
+      more than an item holds moves the whole item (`test_char_over_quantity_transfer`). Only the read-back of
+      the history deltas can see that (design section 7).
+    - PostgreSQL, API 511 (1.4.3): both answer 201 and both split 4 off the item, which keeps 1: stock grows from
+      5 to 9 (a lost update). Measured 3 times out of 3; the serialized outcome of 1.5.6 is accepted too.
     """
     item = scratch.stock(5)
     destinations = {"first": scratch.child, "second": scratch.other}
@@ -291,14 +332,21 @@ def test_char_concurrent_transfers_same_item(api: RawApi, scratch: Scratch) -> N
     def held(location: int) -> float:
         return sum(float(row["quantity"]) for row in api.items(scratch.part, location))
 
-    assert 201 in statuses.values(), statuses
     moved = {name: held(location) for name, location in destinations.items()}
-    assert held(scratch.parent) + sum(moved.values()) == 5
+    left = held(scratch.parent)
     for name, status in statuses.items():
-        if status == 201:
-            assert moved[name] == 4
-            assert search(api, markers[name]) != []
-        else:
-            assert status >= 500, statuses
-            assert moved[name] == 0
-            assert search(api, markers[name]) == []
+        assert (search(api, markers[name]) != []) == (status == 201), statuses
+    lost_update = DB == "postgres" and api.get("/api/")["apiVersion"] < 530
+    if lost_update and sorted(moved.values()) == [4, 4]:
+        assert left == 1
+        assert sorted(statuses.values()) == [201, 201], statuses
+        return
+    assert left + sum(moved.values()) == 5
+    if DB == "sqlite":
+        first, second = sorted(statuses.values())
+        assert first == 201, statuses
+        assert second >= 500, statuses
+        assert sorted(moved.values()) == [0, 4]
+    else:
+        assert sorted(statuses.values()) == [201, 201], statuses
+        assert sorted(moved.values()) == [1, 4]

@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   inventree:
-    name: InvenTree ${{ matrix.inventree }}
+    name: InvenTree ${{ matrix.inventree }} (${{ matrix.db }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -38,6 +38,11 @@ jobs:
       matrix:
         # The tested range in src/stockthread/inventree.py: the current stable release and the previous minor.
         inventree: ["1.4.3", "1.5.6"]
+        db: [sqlite]
+        # One PostgreSQL job, on the current release: notes length, atomicity and concurrency differ by database.
+        include:
+          - inventree: "1.5.6"
+            db: postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,6 +57,7 @@ jobs:
       - name: Start InvenTree
         env:
           STOCKTHREAD_IT_TOKEN_FILE: ${{ runner.temp }}/inventree-token
+          STOCKTHREAD_IT_DB: ${{ matrix.db }}
         run: tests/integration/start-inventree.sh "inventree/inventree:${{ matrix.inventree }}" >> "$GITHUB_ENV"
       - name: Integration tests
         run: |
@@ -59,7 +65,9 @@ jobs:
           .venv/bin/pytest tests/integration -p no:cacheprovider
       - name: Server log
         if: failure()
-        run: docker logs --tail 200 stockthread-it
+        run: |
+          docker logs --tail 200 stockthread-it
+          docker logs --tail 50 stockthread-it-db 2>/dev/null || true
       - name: Tear down
         if: always()
         run: tests/integration/start-inventree.sh --stop
