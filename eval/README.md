@@ -271,7 +271,7 @@ the averages say:
 
 1. **False movement.** A movement is extracted from a case whose expected
    movements are empty, or a case gets an extra movement that pairs with no
-   expected movement and has no flag. Without a review reason, such a
+   expected movement and has no flag from the schema. Without a review reason, such a
    movement would be proposed as a write.
 2. **Missed flag.** A movement was extracted without one of its expected
    flags, or an expected post flag was not raised. Every flag is a review

@@ -44,6 +44,11 @@ EVAL_DIR = Path(__file__).resolve().parent.parent
 # Above this number of movements in one post, movements are paired in order.
 MAX_PAIRING_SIZE = 6
 
+# The movement flags the corpus schema defines. Only these count as review reasons.
+MOVEMENT_FLAGS = frozenset(
+    json.loads((EVAL_DIR / "schema" / "case-file.schema.json").read_text(encoding="utf-8"))["$defs"]["flag"]["enum"]
+)
+
 _EDGE_PUNCTUATION = " \t\n\r.,;:!?\"'()[]{}<>-"
 _WHITESPACE = re.compile(r"\s+")
 _ES_ENDINGS = ("ses", "xes", "zes", "ches", "shes")
@@ -66,7 +71,11 @@ def singular_forms(word: str, original: str) -> set[str]:
 
 
 def normalize(text: str) -> str:
-    """Normalize text for comparison, as defined in eval/README.md. The result can be empty."""
+    """Normalize text for comparison, as defined in eval/README.md. The result can be empty.
+
+    The scorer compares `text_forms`, which builds on the same words. This is the reference form
+    the README documents, and the tests pin it.
+    """
     return " ".join(word.lower() for word in _words(text))
 
 
@@ -116,6 +125,11 @@ def string_list(value: Any) -> list[str] | None:
     if isinstance(value, list) and all(isinstance(entry, str) for entry in value):
         return value
     return None
+
+
+def has_review_reason(flags: Any) -> bool:
+    """Return whether a list of movement flags holds at least one flag the schema defines."""
+    return bool(set(string_list(flags) or ()) & MOVEMENT_FLAGS)
 
 
 def match_equal(predicted: Any, expected: dict) -> bool:
@@ -300,7 +314,8 @@ def score_movement(report: Report, where: str, got: dict | None, want: dict) -> 
             and text_matches(got_item.get("unit"), want_item["unit"], None, plural=False)
             and same_number(got_item.get("pack_size"), want_item.get("pack_size"))
         )
-        serials = string_list(got_item.get("serials") or [])
+        got_serials = got_item.get("serials")
+        serials = string_list(got_serials if got_serials is not None else [])
         ok &= serials is not None and sorted(serials) == sorted(want_item.get("serials", []))
         if report.matching and "match" in want_item:
             ok &= report.part_match.add(paired and match_equal(got_item.get("match"), want_item["match"]))
@@ -379,7 +394,7 @@ def score_case(report: Report, case: dict, predicted: list[dict], post_flags: An
         if index not in paired:
             report.line_items.false_positive += len(line_items_of(got))
             score_flags(report, None, got.get("flags"), [])
-            if expected and not string_list(got.get("flags")) and case_id not in report.false_movements:
+            if expected and not has_review_reason(got.get("flags")) and case_id not in report.false_movements:
                 report.false_movements.append(case_id)
 
     ok &= score_flags(report, f"{case_id} post", post_flags, case["expected"].get("post_flags", []))
