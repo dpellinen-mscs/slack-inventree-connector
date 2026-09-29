@@ -1,7 +1,9 @@
 # Design
 
-Status: proposal, 2026-09-28. Sections marked **(decision pending)** wait for
-an answer from Dan. Everything else is the working design.
+Status: working design, 2026-09-29. Shape, stack and default policy are
+decided ([0003](decisions/0003-standalone-python-service.md),
+[0004](decisions/0004-default-write-policy.md)). Sections marked
+**(decision pending)** still wait for an answer from Dan.
 
 InvenTree and Slack behavior described here comes from reading
 documentation and source code. It becomes a fact for this project only when
@@ -108,13 +110,13 @@ Slack, InvenTree and storage. Shipped as one service.
   keep it to one package, with adapter interfaces only where a second
   implementation exists or is planned.
 
-### Recommendation **(decision pending)**
+### Decision
 
 Option C, deployed as in option A: one Python package, one container, a pure
-core and three adapters. A thin InvenTree plugin can come after v1.0 if
+core and three adapters ([0003](decisions/0003-standalone-python-service.md)). A thin InvenTree plugin can come after v1.0 if
 users ask for settings inside the InvenTree UI.
 
-### Language **(decision pending)**
+### Language
 
 | | Python | TypeScript |
 | --- | --- | --- |
@@ -124,7 +126,7 @@ users ask for settings inside the InvenTree UI.
 | Fuzzy matching, data tools | Strong | Adequate |
 | Typing | Type hints with a strict checker | Native |
 
-Recommendation: Python. The users and likely contributors come from the
+Decision: Python. The users and likely contributors come from the
 InvenTree community, and Bolt for Python covers everything the connector
 needs.
 
@@ -285,9 +287,13 @@ independently, and each one alone can block.
 1. **Switch.** `writes.enabled` is true. The default is false. Turning it
    on is an explicit configuration step, and the connector logs it at
    startup.
-2. **Policy.** The policy allows this movement. The default policy
-   **(decision pending)** is review-first: a human approves every movement
-   with a button.
+2. **Policy.** The policy allows this movement
+   ([0004](decisions/0004-default-write-policy.md)). By default a
+   `take_to_vehicle` or `take_to_site` movement with no review reason
+   applies automatically, with a receipt and an Undo button. Every other
+   movement type waits for a human to click "Apply". `policy.auto_apply`
+   lists the movement types that may apply automatically. An empty list
+   makes every movement review-first.
 3. **Validation.** The plan has no open review reason, every part and
    location is matched to exactly one record, and every stock item is
    resolved.
@@ -316,9 +322,12 @@ can also steer the gate by what it omits. These rules close that path:
   text and the poster as input (section 10). The extraction prompt never
   contains catalog or alias data, so the model cannot learn part names to
   aim at.
-- **Auto-apply is stricter than approval.** If a team turns auto-apply on,
-  it applies only when both extractors agree, every match comes from an
-  exact, normalized or alias rule, and the poster is a mapped user.
+- **Auto-apply is stricter than approval.** A movement applies without a
+  click only when every match comes from an exact, normalized or alias
+  rule, the vehicle resolves through a mapped Slack user or an exact
+  location name, and the model raised no flag. If the rule-based extractor
+  produced a candidate that disagrees with the LLM extractor, that is a
+  review reason.
 - **Implied source.** `policy.default_source` can name a default source
   location per movement type. It is unset by default, and an implied
   source is then a review reason.

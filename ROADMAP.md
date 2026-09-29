@@ -26,12 +26,12 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [x] Eval corpus v0.1 with format, schema and validator (`eval/`)
 - [x] Reference scorer for the corpus (`eval/tools/score.py`)
 - [x] Lean CI for the corpus
-- [ ] First decision bundle answered: shape and stack, default policy, name and license
+- [x] Shape, stack and default policy decided ([0003](docs/decisions/0003-standalone-python-service.md), [0004](docs/decisions/0004-default-write-policy.md))
+- [x] Name decided: stockthread ([0005](docs/decisions/0005-project-name.md))
+- [ ] License and origin credit decided (#3)
 - [ ] Docker works on the build machine
 
 ## M0: foundations
-
-Blocked on the shape and stack decision.
 
 - [ ] Project scaffold: package layout, formatter, linter, type checker, test runner
 - [ ] CI: format, lint, types and unit tests on every PR, with dependency caching
@@ -102,6 +102,7 @@ payloads whose channel or message does not fit the stored id.
 - [ ] Plans with several requests, and the `partially_applied` state
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
 - [ ] Undo by button, authorized and idempotent, built from the observed history
+- [ ] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
 - [ ] Instance lock: one connector per database
 
 **DoD:** integration tests against every pinned InvenTree version, with one
@@ -123,6 +124,10 @@ job on PostgreSQL, prove each line below.
 - The full suite with writes off records zero requests other than GET.
 - A failed read-back is reported in Slack and blocks further writes for
   that post.
+- A clear take-out applies without a click and gets a receipt with Undo.
+  A return with no review reason still waits for "Apply". Stripping or
+  varying every model output never turns a blocked movement into an
+  automatic one.
 
 ## M4: alias learning
 
