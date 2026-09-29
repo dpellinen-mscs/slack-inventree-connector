@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+import urllib.parse
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -59,6 +60,18 @@ class InvenTreeSettings(_Section):
     url: str = Field(pattern=r"^https?://[^\s/@?#]+(/[^\s?#]*)?$")
     """Base URL of the InvenTree server. Credentials and a query are refused: they would be logged."""
     timeout_seconds: int = Field(default=10, ge=1, le=300)
+
+    @field_validator("url")
+    @classmethod
+    def _has_host(cls, value: str) -> str:
+        parts = urllib.parse.urlsplit(value)
+        if not parts.hostname:
+            raise ValueError("has no host name")
+        try:
+            parts.port  # noqa: B018 - raises on a port that is not a number from 0 to 65535
+        except ValueError:
+            raise ValueError("has an invalid port") from None
+        return value
 
 
 class WriteSettings(_Section):
