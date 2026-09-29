@@ -58,7 +58,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 - [ ] Slack ingest over Socket Mode and HTTP, with signature verification on HTTP
 - [ ] Workspace and app id checks, channel allowlist, subtype allowlist, bot filtering, deduplication
 - [ ] Durable event queue (store side done: `slack_events`, migration 0002), and catch-up from channel history after downtime
-- [ ] Grouping: photo with caption, sibling messages and threads become one post
+- [ ] Grouping: photo with caption, sibling messages and threads become one post (rule and store done: `core/grouping.py`, migration 0003; wiring comes with the listener)
 - [ ] Rule-based extractor that needs no LLM
 - [ ] LLM extractor behind a provider interface, with a strict output schema
 - [ ] Eval runner: scores either extractor against the corpus, using recorded fixtures in CI

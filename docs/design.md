@@ -181,7 +181,14 @@ needs.
   exactly one post. The post key is fixed when the post is created and is
   never recomputed, because Slack does not guarantee the order of events.
   Sibling grouping closes when the dry-run reply is posted. A thread
-  reply after that creates a new plan revision.
+  reply after that creates a new plan revision. The rule is
+  `core/grouping.py`; `Store.place_message` runs it inside one transaction
+  under the instance lock. A reply that arrives before its thread root
+  creates the post keyed on the root's timestamp, and the root joins it
+  when it arrives. The window is compared exactly, to the microsecond.
+  Which messages end up together can depend on arrival order (a sibling
+  that arrives after the thread root's reply was posted starts its own
+  post), but a message never changes post once placed.
 - **Plan revisions.** Every plan has a revision number and a hash of the
   messages it was built from. An edit, a deletion or a new message in the
   thread makes the revision stale: its buttons are removed and a new plan
@@ -601,7 +608,7 @@ and needs no extra service.
 | --- | --- |
 | `slack_events` | Raw events with a processing status, unique on `event_id` |
 | `posts` | One row per post, unique on post key |
-| `post_messages` | Messages of a post, unique on `(workspace, channel, ts)` |
+| `post_messages` | Which post each message belongs to, unique on `(workspace, channel, ts)`: ids, author and thread, never text (migration 0003) |
 | `plans` | Plan revisions with the hash of their input messages |
 | `extractions` | Extractor name and version, prompt version, raw output |
 | `candidates` | Candidate movements and line items |
