@@ -206,3 +206,13 @@ def test_will_as_a_plan_is_not_a_movement(text: str) -> None:
 def test_a_declined_extraction_has_no_movements() -> None:
     with pytest.raises(ValueError, match="declined"):
         Extraction("x", (movement("2 Disc 40 on my truck"),), declined=True)
+
+
+@pytest.mark.parametrize("text", ["<@U0SAM0001> took 2 ONTs from shop to truck 1", "@sam took 2 ONTs to truck 1"])
+def test_a_mentioned_actor_is_declined_before_markup_is_removed(text: str) -> None:
+    assert one(text).declined
+
+
+@pytest.mark.parametrize("text", ["took 2 wrong-way adapters from shop to truck 1"])
+def test_a_retraction_word_inside_a_name_is_not_a_retraction(text: str) -> None:
+    assert movement(text).line_items == (LineItem("wrong-way adapters", Decimal(2)),)

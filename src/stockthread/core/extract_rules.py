@@ -30,6 +30,7 @@ from stockthread.core.signals import (
     QUESTION_OR_REQUEST,
     SENSITIVE,
     SUSPICIOUS,
+    THIRD_PERSON,
     VEHICLE_WORDS,
 )
 
@@ -138,6 +139,8 @@ def extract(messages: Sequence[MessageInput]) -> Extraction:
         return Extraction(EXTRACTOR, ())
     if len(live) > 1 or live[0].file_ids:
         return Extraction(EXTRACTOR, (), flags, declined=True)
+    if THIRD_PERSON.search(live[0].text):
+        return Extraction(EXTRACTOR, (), flags, declined=True)  # "<@U1> took ...": markup is removed below
     text = _clean(live[0].text)
     if _RETRACTION.search(text):
         return Extraction(EXTRACTOR, (), flags, declined=True)  # "…to truck 1, nvm": a person must read it

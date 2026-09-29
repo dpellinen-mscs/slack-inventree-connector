@@ -29,6 +29,7 @@ from stockthread.core.signals import (
     CONTAINERS,
     CORRECTION,
     HEDGE,
+    MENTION,
     NEGATION,
     NUMBER_WORDS,
     PLAN_OR_CONDITION,
@@ -41,13 +42,23 @@ from stockthread.core.signals import (
 
 _NUMBER_TOKEN = re.compile(r"^(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(x|-\w+)?$", re.IGNORECASE)
 """A number token: "2", "2x", "12-piece", "1,050". Not "van3" or "d40"."""
-_SCALES = frozenset({"dozen", "score", "gross", "hundred", "hundreds", "thousand", "thousands", "k"})
+_SCALES = frozenset(
+    {"dozen", "score", "gross", "hundred", "hundreds", "thousand", "thousands", "k", "million", "millions", "grand"}
+)
+_FRACTION = re.compile(r"^\d*[/\u2044]\d*$")
+_AMBIGUOUS_NUMBER = re.compile(r"^\d{1,3}\.\d{3}$")
+""""2.000": two, or two thousand written the European way. It states neither."""
+_FILLER = frozenset(
+    {"of", "x", "about", "around", "approx", "approximately", "roughly", "~", "half", "each", "ea", "pc", "pcs"}
+    | {"piece", "pieces", "unit", "units", "ft", "feet", "foot", "m", "meter", "meters", "metre", "metres"}
+)
+"""Words that may sit between a quantity and its item: "5 boxes of", "300 ft of", "2 of the 5"."""
 _ONE = frozenset({"a", "an", "the", "one", "single", "this", "that"})
 _WORD_QUANTITIES = {"dozen": Decimal(12), "pair": Decimal(2), "couple": Decimal(2), "half": Decimal("0.5")}
 _QUANTITY_WINDOW = 4
 """How many words before an item may hold its quantity: "5 boxes of", "a 12-piece box of", "2 of the 5"."""
-_SEPARATOR = re.compile(r"(?<!\d),|,(?!\d{3}(?!\d))|[;:\n+&]|\band\b|→|->")
-"""Where one item's words end. A comma inside "1,050" is not one."""
+_SEPARATOR = re.compile(r"(?<!\d),|,(?!\d)|[;:\n+&]|\band\b|→|->")
+"""Where one item's words end. A comma between digits is not one: "1,050" is a number, "1,5" states nothing."""
 _TYPE_VERBS = {
     MovementType.COUNT: re.compile(r"\b(count(ed)?|stocktake|inventory)\b"),
     MovementType.RECEIVE: re.compile(r"\b(receiv\w*|rcvd|arrived|delivery|delivered|came in)\b"),
@@ -137,6 +148,8 @@ def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         reasons.add(_rule(ReasonCode.CORRECTED_IN_THREAD, "correction word in the text"))
     if THIRD_PERSON.search(text):
         reasons.add(_rule(ReasonCode.ACTOR_NOT_POSTER, "someone else is named as the actor"))
+    elif MENTION.search(text):
+        reasons.add(_rule(ReasonCode.ACTOR_NOT_POSTER, "a person is mentioned"))
     verbs = _TYPE_VERBS.get(movement.movement_type)
     if verbs is not None and not verbs.search(text):
         reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, f"no word in the text supports {movement.movement_type.value}"))
@@ -171,10 +184,13 @@ def _has_words(phrase: str, text: str) -> bool:
 def _stated(before: str) -> set[Decimal]:
     """The quantities the words right before an item can state."""
     before = _SEPARATOR.split(before)[-1]
-    words = before.split()[-_QUANTITY_WINDOW:]
+    words = [word.strip("(),.!") for word in before.split()[-_QUANTITY_WINDOW:]]
+    while words and not all(_quantity_word(word) for word in words):
+        words.pop(0)  # "took 2 ONTs 3": only the words right before the item, not the last item's quantity
     found = set()
-    words = [word.strip("(),.!") for word in words]
     for index, word in enumerate(words):
+        if _AMBIGUOUS_NUMBER.match(word):
+            continue
         if _compound(words, index):
             continue  # "2 dozen", "twenty five": neither word alone states the quantity
         if number := _NUMBER_TOKEN.match(word):
@@ -191,16 +207,36 @@ def _stated(before: str) -> set[Decimal]:
 
 
 def _is_number(word: str) -> bool:
-    return bool(_NUMBER_TOKEN.match(word)) or word in NUMBER_WORDS
+    return bool(_NUMBER_TOKEN.match(word)) or word in NUMBER_WORDS or bool(_FRACTION.match(word))
+
+
+def _quantity_word(word: str) -> bool:
+    return (
+        _is_number(word)
+        or word in _SCALES
+        or word in _WORD_QUANTITIES
+        or word in _ONE
+        or word in _FILLER
+        or bool(CONTAINER_WORDS.fullmatch(word))
+        or bool(_AMBIGUOUS_NUMBER.match(word))
+    )
 
 
 def _compound(words: list[str], index: int) -> bool:
-    """A number word that is part of a longer number: next to a scale word, or a number word next to another."""
+    """A number that is part of a longer one: next to a scale word or a fraction, a number word next to another,
+    or either side of "x"."""
     word, near = words[index], words[max(0, index - 1) : index] + words[index + 1 : index + 2]
     if word in _SCALES:
         return any(_is_number(other) for other in near)
     if _is_number(word):
-        return any(other in _SCALES or (word in NUMBER_WORDS and other in NUMBER_WORDS) for other in near)
+        times = any(
+            0 <= index + 2 * step < len(words) and words[index + step] == "x" and _is_number(words[index + 2 * step])
+            for step in (-1, 1)
+        )  # "2 x 3"
+        return times or any(
+            other in _SCALES or _FRACTION.match(other) or (_is_number(other) and NUMBER_WORDS.keys() & {word, other})
+            for other in near
+        )
     return False
 
 
@@ -222,19 +258,31 @@ def _grounding(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     """Each item is in the text as whole words, and its quantity is stated right before it."""
     places = [_folded(place) for place in (movement.source_text, movement.destination_text) if place]
     reasons = set()
+    used: set[int] = set()
     for n, item in enumerate(movement.line_items, start=1):
         if not item.item_text:
             continue  # items_missing covers it
-        found = _occurrences(item.item_text, text)
+        found = [m for m in _occurrences(item.item_text, text) if m.start() not in used]
         if not found or any(_folded(item.item_text) in place for place in places):
             reasons.add(_rule(ReasonCode.ITEM_NOT_IN_TEXT, f"line {n}"))
         first = _folded(item.item_text).split()[0]
-        stated = [_stated(text[: m.start()]) for m in found]
+        grounded = [m for m in found if item.quantity is None or item.quantity in _stated(text[: m.start()])]
+        if grounded:
+            used.add(grounded[0].start())  # one mention grounds one line: "2 ONTs" is not two lines of 2
         if item.quantity is not None and (
-            first in _SCALES or first in NUMBER_WORDS or item.quantity not in set().union(*stated)
+            first in _SCALES
+            or first in NUMBER_WORDS
+            or _FRACTION.match(first)
+            or not grounded
+            or (first[:1].isdigit() and any(_after_times(text[: m.start()]) for m in found))
         ):
             reasons.add(_rule(ReasonCode.QUANTITY_NOT_IN_TEXT, f"line {n}"))
     return reasons
+
+
+def _after_times(before: str) -> bool:
+    """ "2 x " right before an item that opens with a number: "2 x 3 ONTs" is not 2 of "3 ONTs"."""
+    return bool(re.search(r"(?<!\w)(\d+\s*x|x)\s*$", before))
 
 
 def _places(movement: CandidateMovement, text: str) -> set[ReviewReason]:
