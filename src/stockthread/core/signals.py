@@ -43,12 +43,13 @@ VAGUE = re.compile(
 """A quantity that is approximate, a range or a vague word."""
 CORRECTION = re.compile(r"\b(actually|correction|make that|i mean|sorry|wait)\b|(^|\s)\*\w", re.IGNORECASE)
 """A later message or phrase that changes a stated value."""
+_WHEN = r"(?:then|yesterday|today|earlier|this morning|also|so)"
 THIRD_PERSON = re.compile(
-    r"(?:^|[.!\n]\s*)(?!(?:i|we|just|also|then|and|finally|already|so)\b)([a-z]+)"
+    rf"(?:(?:^|[.!\n]\s*)(?:{_WHEN},?\s+)?(?!(?:i|we|just|and|finally|already|{_WHEN})\b)[a-z]+|<@\w+(?:\|[^>]*)?>)"
     r" (took|grabbed|put|loaded|moved|returned|brought|used|installed|received|dropped|pulled|counted)\b",
     re.IGNORECASE,
 )
-"""Someone other than the poster did it: "Mike put 2 poe 8 on his truck"."""
+"""Someone other than the poster did it: "Mike put 2 poe 8 on his truck", "Then Mike took", "<@U04ABC> grabbed"."""
 HEDGE = re.compile(r"\b(i think|maybe|probably|i guess|not sure|might have|might be|or so|ish)\b", re.IGNORECASE)
 
 NUMBER_WORDS = {

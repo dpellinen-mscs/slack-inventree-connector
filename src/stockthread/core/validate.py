@@ -39,13 +39,15 @@ from stockthread.core.signals import (
     VEHICLE_WORDS,
 )
 
-_NUMBER_TOKEN = re.compile(r"^(\d+(?:\.\d+)?)(x|-\w+)?$", re.IGNORECASE)
-"""A number token: "2", "2x", "12-piece". Not "van3" or "d40"."""
+_NUMBER_TOKEN = re.compile(r"^(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(x|-\w+)?$", re.IGNORECASE)
+"""A number token: "2", "2x", "12-piece", "1,050". Not "van3" or "d40"."""
+_SCALES = frozenset({"dozen", "score", "gross", "hundred", "hundreds", "thousand", "thousands", "k"})
 _ONE = frozenset({"a", "an", "the", "one", "single", "this", "that"})
 _WORD_QUANTITIES = {"dozen": Decimal(12), "pair": Decimal(2), "couple": Decimal(2), "half": Decimal("0.5")}
 _QUANTITY_WINDOW = 4
 """How many words before an item may hold its quantity: "5 boxes of", "a 12-piece box of", "2 of the 5"."""
-_SEPARATOR = re.compile(r"[,;:\n+&]|\band\b|→|->")
+_SEPARATOR = re.compile(r"(?<!\d),|,(?!\d{3}(?!\d))|[;:\n+&]|\band\b|→|->")
+"""Where one item's words end. A comma inside "1,050" is not one."""
 _TYPE_VERBS = {
     MovementType.COUNT: re.compile(r"\b(count(ed)?|stocktake|inventory)\b"),
     MovementType.RECEIVE: re.compile(r"\b(receiv\w*|rcvd|arrived|delivery|delivered|came in)\b"),
@@ -56,8 +58,9 @@ _TYPE_VERBS = {
     MovementType.TRANSFER: re.compile(r"\b(moved?|transferr?\w*)\b"),
 }
 """A movement type that changes stock in a way a take cannot needs one of its words in the text."""
-_FROM = r"(from|off|out of)"
-_TO = r"(to|into|onto|on|in|at|for|up|→|->)"
+_FROM = r"(?<!\w)(from|off|out of)"
+_TO = r"((?<!\w)(to|into|onto|on|in|at|for|up)|→|->)"
+"""Whole words only: "from main shop" must not read as "…in shop"."""
 
 
 def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
@@ -170,11 +173,13 @@ def _stated(before: str) -> set[Decimal]:
     before = _SEPARATOR.split(before)[-1]
     words = before.split()[-_QUANTITY_WINDOW:]
     found = set()
+    words = [word.strip("(),.!") for word in words]
     for index, word in enumerate(words):
-        word = word.strip("(),.!")
+        if _compound(words, index):
+            continue  # "2 dozen", "twenty five": neither word alone states the quantity
         if number := _NUMBER_TOKEN.match(word):
             with contextlib.suppress(InvalidOperation):
-                found.add(Decimal(number.group(1)))
+                found.add(Decimal(number.group(1).replace(",", "")))
         if word in NUMBER_WORDS:
             found.add(Decimal(NUMBER_WORDS[word]))
         if word in _WORD_QUANTITIES:
@@ -183,6 +188,20 @@ def _stated(before: str) -> set[Decimal]:
     if _one_container(words):
         found.add(Decimal(1))
     return found
+
+
+def _is_number(word: str) -> bool:
+    return bool(_NUMBER_TOKEN.match(word)) or word in NUMBER_WORDS
+
+
+def _compound(words: list[str], index: int) -> bool:
+    """A number word that is part of a longer number: next to a scale word, or a number word next to another."""
+    word, near = words[index], words[max(0, index - 1) : index] + words[index + 1 : index + 2]
+    if word in _SCALES:
+        return any(_is_number(other) for other in near)
+    if _is_number(word):
+        return any(other in _SCALES or (word in NUMBER_WORDS and other in NUMBER_WORDS) for other in near)
+    return False
 
 
 def _one_container(words: list[str]) -> bool:
@@ -209,17 +228,24 @@ def _grounding(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         found = _occurrences(item.item_text, text)
         if not found or any(_folded(item.item_text) in place for place in places):
             reasons.add(_rule(ReasonCode.ITEM_NOT_IN_TEXT, f"line {n}"))
-        if item.quantity is not None and not any(item.quantity in _stated(text[: m.start()]) for m in found):
+        first = _folded(item.item_text).split()[0]
+        stated = [_stated(text[: m.start()]) for m in found]
+        if item.quantity is not None and (
+            first in _SCALES or first in NUMBER_WORDS or item.quantity not in set().union(*stated)
+        ):
             reasons.add(_rule(ReasonCode.QUANTITY_NOT_IN_TEXT, f"line {n}"))
     return reasons
 
 
 def _places(movement: CandidateMovement, text: str) -> set[ReviewReason]:
-    """Each location is in the text, on the side the movement puts it: "from X", "to X", or "X:" for a heading."""
+    """Each location is in the text, on the side the movement puts it: "from X", "to X", or "X:" for a heading.
+
+    A place that opens the post without a colon ("van 3 got 2 breakers") is not on either side.
+    """
     reasons = set()
     for side, place, pattern in (
         ("source", movement.source_text, rf"{_FROM}\s+(the\s+)?$"),
-        ("destination", movement.destination_text, rf"(^|{_TO}\s+(the\s+)?)$"),
+        ("destination", movement.destination_text, rf"{_TO}\s+(the\s+)?$"),
     ):
         if place is None:
             continue
