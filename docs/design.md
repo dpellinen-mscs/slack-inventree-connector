@@ -146,6 +146,12 @@ needs.
   and app id. Anything else is dropped.
 - **Acknowledge first.** Slack expects an answer within 3 seconds. The
   listener stores the raw event, acknowledges, and processes it later.
+  `slack/listener.py` runs the ingest checks inside the Bolt handler, which
+  runs before the acknowledgement (`process_before_response`). An accepted
+  payload is stored first; if storing fails, the handler raises and Slack
+  delivers the event again. A dropped payload is acknowledged and never
+  stored. A click has no event id, so its queue key is built from the
+  channel, the message, the user and the click's own `action_ts`.
 - **Durable queue.** The queue is the `slack_events` table with a
   processing status. Rows that were not finished are picked up again at
   startup, so a restart loses nothing that was acknowledged. A row moves
