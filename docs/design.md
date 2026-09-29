@@ -595,10 +595,26 @@ send to InvenTree.
 
 - **Interface.** `extract(post) -> list[candidate]`, with two
   implementations: rule-based and LLM.
-- **Rule-based extractor.** Needs no network and no key. It handles the
-  common patterns (quantity, item, preposition, location), spelled-out
-  numbers and units. It is the fallback, the test oracle for the simple
-  cases, and the default in the quickstart.
+- **Rule-based extractor** (`core/extract_rules.py`). Needs no network
+  and no key. It handles the common patterns (quantity, item, preposition,
+  location), spelled-out numbers and units. It is the fallback, the test
+  oracle for the simple cases, and the default in the quickstart.
+  - It is precision-first. It reads one message of a known shape and
+    **declines** the rest: photos, threads, sibling messages, lists,
+    several movements, a third person as the actor, or a post without a
+    verb that does not open with a number. `Extraction.declined` means "could
+    not read", which is not the same as "not a movement". Questions,
+    requests, plans, conditions and negations are "not a movement".
+  - Post flags are raised on every post, even a declined one. A sentence
+    that holds instructions to the connector is dropped before parsing.
+  - Flags that follow from the fields are computed by rule, never guessed.
+  - Corpus 0.2.0 (`tests/core/test_extract_rules_corpus.py`, matching not
+    scored): 0 hard failures; movement detection precision 100%, recall
+    64.6%; flag precision 100%, recall 54.2%; case exact match 71.3%. The
+    29 missed movements are all declined posts: photos, threads and
+    sibling messages (11), lists, headings and multi-movement posts (7),
+    and wording it does not know (11: "gave", "swapped", a third person,
+    no quantity, Slack chatter around the movement, Spanish).
 - **LLM extractor.** A provider interface with a strict JSON schema for
   the output. v1.0 ships one adapter for OpenAI-compatible endpoints,
   which covers hosted providers and local servers. More adapters can

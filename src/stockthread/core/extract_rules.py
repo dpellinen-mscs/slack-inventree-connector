@@ -1,0 +1,379 @@
+"""The rule-based extractor (design section 9): no network, no key, and no guessing.
+
+It reads one message of the common shapes, "took 2 Disc 40 to my truck" or "2 ONTs on truck 1",
+and declines everything else: photos, threads, sibling messages, lists, several movements in one
+post, a third person as the actor, and any wording it does not know. A declined post is not "no
+movement"; the pipeline must not read it as one (`Extraction.declined`).
+
+Some posts are clearly not movements: questions, requests, plans, conditions and negations. Those
+give an extraction with no movements. Post flags (instructions to the connector, customer details)
+are raised on every post, declined or not, and a sentence that holds instructions is never read.
+
+Flags that follow from the fields (eval/README.md, "Flags") are computed here by rule.
+"""
+
+from __future__ import annotations
+
+import re
+import unicodedata
+from collections.abc import Sequence
+from dataclasses import dataclass
+from decimal import Decimal
+from enum import Enum
+
+from stockthread.core.model import CandidateMovement, Extraction, Flag, LineItem, MessageInput, MovementType, PostFlag
+
+EXTRACTOR = "rules-0.1"
+
+_SUSPICIOUS = re.compile(
+    r"\b(ignore (all |any )?(the )?(previous|prior|above|earlier) (instructions|rules)|system\s*:|without review"
+    r"|writes? (are|is) (now )?(on|enabled)|mark (this|it) as (confirmed|approved)|you are now|disregard)",
+    re.IGNORECASE,
+)
+_SENSITIVE = re.compile(
+    r"\b(gate code|door code|lock ?box|alarm code|pass(word|code)|pin code|customer (cell|phone|number)"
+    r"|phone|cell)\b|\b\d{3}[-.]\d{4}\b",
+    re.IGNORECASE,
+)
+_NOT_A_MOVEMENT = re.compile(
+    r"\?|\b(can|could|would) (some|any)one\b|\b(can|could) you\b|\bneeds?\b|\bplease\b|\bshould\b|\bset \w+ aside\b"
+    r"|\b(going to|gonna|will|i'll|tomorrow|tonight|later today|next week)\b|^if\b|, if\b"
+    r"|\b(not|never|nothing|no longer|didn't|did not|wasn't|haven't|scratch that|actually no|put (them|it) back)\b",
+    re.IGNORECASE,
+)
+_SLACK_MARKUP = re.compile(r"<[@#!][^>]*>|:[a-z0-9_+-]+:")
+_TICKET = re.compile(r"^(ticket|job|wo|work order)\s*#?\d+\s*[:,-]\s*", re.IGNORECASE)
+_TIME = re.compile(r"\bat \d{1,2}(:\d{2})?\s*(am|pm)\b", re.IGNORECASE)
+_SERIAL = re.compile(r"\b(?:sn|s/n|serial)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{3,})\b", re.IGNORECASE)
+
+
+class _Verb(Enum):
+    TAKE = "take"
+    RETURN = "return"
+    RECEIVE = "receive"
+    CONSUME = "consume"
+
+
+_VERBS = {
+    "took": _Verb.TAKE,
+    "grabbed": _Verb.TAKE,
+    "pulled": _Verb.TAKE,
+    "put": _Verb.TAKE,
+    "loaded": _Verb.TAKE,
+    "moved": _Verb.TAKE,
+    "dropped off": _Verb.TAKE,
+    "returned": _Verb.RETURN,
+    "brought back": _Verb.RETURN,
+    "received": _Verb.RECEIVE,
+    "rcvd": _Verb.RECEIVE,
+    "installed": _Verb.CONSUME,
+    "used": _Verb.CONSUME,
+}
+_OTHER_VERBS = (
+    r"took|grabbed|pulled|put|loaded|moved|dropped|brought|returned|received|rcvd|installed|used|swapped|replaced|gave"
+)
+"""Any of these after the first verb means a second movement, which this extractor declines."""
+
+_PREPOSITIONS = re.compile(r"(?:^|\s)(from|off|out of|to|into|onto|on|in|at|for|→|->)(?=\s|$)", re.IGNORECASE)
+_SOURCE_WORDS = {"from", "off", "out of"}
+
+_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+}  # fmt: skip
+_EACH = {"each", "ea", "pc", "pcs", "piece", "pieces", "unit", "units", "x"}
+_CONTAINERS = {"box", "bag", "pack", "case", "roll", "spool", "bundle", "carton", "pallet"}
+_LENGTHS = {"ft": "ft", "feet": "ft", "foot": "ft", "m": "m", "meter": "m", "meters": "m", "metre": "m", "metres": "m"}
+_NUMBER = r"(\d+(?:\.\d+)?)"
+
+_NOT_STOCK = re.compile(
+    r"\b(sec(ond)?|min(ute)?|hour|hr|day|week|month|year|while|time|pto|lunch|break|meeting|call|update|complaint"
+    r"|guy|people|folks|customer|ticket|more|floor|trip|mile)s?\b",
+    re.IGNORECASE,
+)
+"""Words that name time, people or events: "3 hours at the Smith job" is not stock."""
+_NOT_A_PLACE = re.compile(
+    r"\b(today|tonight|tomorrow|yesterday|morning|afternoon|lol|jk|haha|kidding|maybe|\d{1,2}(:\d{2})?\s*(am|pm))\b"
+    r"|^(find|get|see|check|fix|help|do|make|go)\b",
+    re.IGNORECASE,
+)
+"""Words that make a place text more than a place: "my truck lol jk", "to find the switch", "to 3pm"."""
+_VEHICLE_WORDS = re.compile(r"\b(truck|van|trailer|vehicle)s?\b|\bvan\d", re.IGNORECASE)
+_WAREHOUSE_WORDS = re.compile(r"\b(receiving|main stock|warehouse|shop|rma|stock ?room|storage)\b", re.IGNORECASE)
+
+
+class _Kind(Enum):
+    VEHICLE = "vehicle"
+    WAREHOUSE = "warehouse"
+    SITE = "site"
+
+
+class _Decline(Exception):
+    """The text is outside what this extractor reads."""
+
+
+@dataclass(frozen=True)
+class _Quantity:
+    value: Decimal | None
+    unit: str | None = None
+    pack_size: Decimal | None = None
+    vague: bool = False
+
+
+def post_flags(text: str) -> frozenset[PostFlag]:
+    """Review reasons about a post as a whole, from its text."""
+    flags = set()
+    if _SUSPICIOUS.search(text):
+        flags.add(PostFlag.SUSPICIOUS_INSTRUCTIONS)
+    if _SENSITIVE.search(text):
+        flags.add(PostFlag.CONTAINS_SENSITIVE)
+    return frozenset(flags)
+
+
+def extract(messages: Sequence[MessageInput]) -> Extraction:
+    """Extract the movements of one post: its messages by people, with bots already filtered out."""
+    live = [message for message in messages if not message.deleted]
+    flags = post_flags("\n".join(message.text for message in live))
+    if not live:
+        return Extraction(EXTRACTOR, ())
+    if len(live) > 1 or live[0].file_ids:
+        return Extraction(EXTRACTOR, (), flags, declined=True)
+    text = _clean(live[0].text)
+    if _NOT_A_MOVEMENT.search(text):
+        return Extraction(EXTRACTOR, (), flags)
+    try:
+        movement = _movement(text)
+    except _Decline:
+        return Extraction(EXTRACTOR, (), flags, declined=True)
+    return Extraction(EXTRACTOR, (movement,), flags)
+
+
+def _clean(text: str) -> str:
+    """Slack markup, instruction sentences, ticket numbers and times removed; spacing folded."""
+    text = unicodedata.normalize("NFKC", text)
+    text = _SLACK_MARKUP.sub(" ", text)
+    sentences = re.split(r"(?<=[.!])\s+", text.strip())
+    text = " ".join(sentence for sentence in sentences if not _SUSPICIOUS.search(sentence))
+    text = _TICKET.sub("", text.strip())
+    text = _TIME.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip().rstrip(".!")
+
+
+def _movement(text: str) -> CandidateMovement:
+    if "\n" in text or re.search(rf"(?i)\b({_OTHER_VERBS})\b.*\b({_OTHER_VERBS})\b", text):
+        raise _Decline  # lists, and a second movement
+    if found := re.fullmatch(r"(?i)(.*?)\b(?:stock ?)?count\s*:\s*(.+)", text):
+        return _count(found.group(1), found.group(2))
+    if re.search(r"(?i)\bcount", text):
+        raise _Decline  # a count needs "count:"; it sets an absolute quantity, so it is never guessed
+    if found := re.fullmatch(r"(?i)(?:on\s+)?([^:]+?)\s*:\s*(.+)", text):
+        return _load(found.group(1), found.group(2))  # "Truck 1: 2 Disc 40" is a load
+    if ":" in text:
+        raise _Decline
+    verb, rest = _verb(text)
+    items_text, source, destination = _places(rest)
+    return _candidate(_movement_type(verb, source, destination), items_text, source, destination)
+
+
+def _count(header: str, rest: str) -> CandidateMovement:
+    """ "truck 2 count: 3 Disc 40, 0 ONTs" or "Stock count: 14 SFP modules in main stock"."""
+    items_text, source, destination = _places(rest)
+    place = header.strip(" ,-")
+    if source is not None or (place and destination is not None) or _PREPOSITIONS.search(f" {place} "):
+        raise _Decline
+    if place:
+        destination = _place(place)
+    return _candidate(MovementType.COUNT, items_text, None, destination, zero=True)
+
+
+def _load(header: str, rest: str) -> CandidateMovement:
+    """ "Sam's truck: 2 d40s, 1 disc 60". Only a vehicle may head the list, and nothing else may be said."""
+    place = _place(header)
+    items_text, source, destination = _places(rest)
+    if place is None or _kind(place) is not _Kind.VEHICLE or _PREPOSITIONS.search(f" {header} "):
+        raise _Decline  # "truck 1 → truck 2: ...", "Received from supplier: ..."
+    if source is not None or destination is not None:
+        raise _Decline
+    return _candidate(MovementType.TAKE_TO_VEHICLE, items_text, None, place)
+
+
+def _candidate(
+    movement_type: MovementType, items_text: str, source: str | None, destination: str | None, *, zero: bool = False
+) -> CandidateMovement:
+    read = [_line_item(part, zero) for part in re.split(r",|\s+(?:and|\+|&)\s+", items_text) if part.strip()]
+    if not read:
+        raise _Decline
+    items = tuple(item for item, _ in read)
+    flags = _flags(movement_type, items, source, destination)
+    if any(vague for _, vague in read):
+        flags.add(Flag.QUANTITY_VAGUE)
+    if any(item.quantity is None and not vague for item, vague in read):
+        flags.add(Flag.QUANTITY_MISSING)
+    return CandidateMovement(movement_type, items, source, destination, frozenset(flags))
+
+
+def _verb(text: str) -> tuple[_Verb | None, str]:
+    """The movement verb that opens the text, and the rest. No verb is allowed when a quantity opens it."""
+    lowered = text.lower()
+    for words, verb in _VERBS.items():
+        if lowered.startswith(words + " "):
+            return verb, text[len(words) + 1 :]
+    first = lowered.split(" ", 1)[0]
+    counted = re.match(rf"(?:{'|'.join(_CONTAINERS)}) of \d", lowered)  # "box of 100 rj45s"
+    if not (re.match(r"\d", first) or first in _NUMBERS or counted):
+        raise _Decline  # "Priya took ...", "router installed", "fyi ...", "the job went fine on truck 1"
+    return None, text
+
+
+def _places(rest: str) -> tuple[str, str | None, str | None]:
+    """Split "2 ONTs from main stock to van 3" into the items, the source and the destination."""
+    found = list(_PREPOSITIONS.finditer(rest))
+    if not found:
+        return rest, None, None
+    source = destination = None
+    for index, match in enumerate(found):
+        end = found[index + 1].start() if index + 1 < len(found) else len(rest)
+        place = _place(rest[match.end() : end])
+        if place is None:
+            continue  # "at" with nothing after the removed time
+        if match.group(1).lower() in _SOURCE_WORDS:
+            if source is not None:
+                raise _Decline
+            source = place
+        else:
+            if destination is not None:
+                raise _Decline  # "to truck 1 and 3 to van 3"
+            destination = place
+    return rest[: found[0].start()], source, destination
+
+
+def _place(text: str) -> str | None:
+    """Location text as written, without a leading article or what follows a comma."""
+    text = re.split(r"[,;.!]", text, maxsplit=1)[0].strip()
+    text = re.sub(r"(?i)^the\s+", "", text)
+    if re.search(r"(?i)\s(and|with|w/)\s", f" {text} ") or _NOT_A_PLACE.search(text):
+        raise _Decline
+    return text or None
+
+
+def _kind(place: str) -> _Kind:
+    if _VEHICLE_WORDS.search(place):
+        return _Kind.VEHICLE
+    if _WAREHOUSE_WORDS.search(place):
+        return _Kind.WAREHOUSE
+    return _Kind.SITE
+
+
+def _movement_type(verb: _Verb | None, source: str | None, destination: str | None) -> MovementType:
+    to = _kind(destination) if destination else None
+    origin = _kind(source) if source else None
+    match verb:
+        case _Verb.TAKE | None:
+            if to is _Kind.VEHICLE:
+                return MovementType.TAKE_TO_VEHICLE
+            if to is _Kind.SITE:
+                return MovementType.TAKE_TO_SITE
+            if verb is _Verb.TAKE and to is _Kind.WAREHOUSE and origin is _Kind.WAREHOUSE:
+                return MovementType.TRANSFER
+        case _Verb.RETURN:
+            if to is _Kind.VEHICLE:
+                return MovementType.UNCLEAR  # a return onto a vehicle contradicts itself
+            return MovementType.RETURN
+        case _Verb.RECEIVE:
+            if source is None and to in (None, _Kind.WAREHOUSE):
+                return MovementType.RECEIVE
+        case _Verb.CONSUME:
+            if to in (None, _Kind.SITE):
+                return MovementType.CONSUME
+    raise _Decline
+
+
+def _line_item(text: str, zero: bool = False) -> tuple[LineItem, bool]:
+    """One item, and whether its quantity is vague. Zero is a quantity only in a count (`zero`)."""
+    text = text.strip()
+    serials = tuple(_SERIAL.findall(text))
+    text = _SERIAL.sub("", text).strip()
+    quantity, rest = _quantity(text)
+    rest = re.sub(r"(?i)^of\s+", "", rest.strip())
+    item = rest.strip(" ,;:-") or None
+    if item is not None and (not re.search(r"\w", item) or _NOT_STOCK.search(item)):
+        raise _Decline
+    if quantity.value == 0 and not zero:
+        raise _Decline
+    return LineItem(item, quantity.value, quantity.unit, quantity.pack_size, serials), quantity.vague
+
+
+def _quantity(text: str) -> tuple[_Quantity, str]:
+    """The quantity that opens an item, and the text after it. Declines when there is none."""
+    lowered = text.lower()
+    patterns: list[tuple[str, _Quantity]] = [
+        (r"half a dozen\b", _Quantity(Decimal(6))),
+        (r"a dozen\b", _Quantity(Decimal(12))),
+        (r"a pair of\b", _Quantity(Decimal(2))),
+        (r"a couple( of)?\b", _Quantity(Decimal(2), vague=True)),
+        (r"(some|a few|several)\b", _Quantity(None, vague=True)),
+        (rf"{_NUMBER}\s*-\s*{_NUMBER}\b", _Quantity(None, vague=True)),
+    ]
+    for pattern, quantity in patterns:
+        if found := re.match(pattern, lowered):
+            return quantity, text[found.end() :]
+    if found := re.match(rf"half an? ({'|'.join(_CONTAINERS)})\b", lowered):
+        return _Quantity(Decimal("0.5"), found.group(1)), text[found.end() :]
+    if found := re.match(rf"an? {_NUMBER}[- ](?:piece|pc|pack|count|ct) ({'|'.join(_CONTAINERS)})\b", lowered):
+        return _Quantity(Decimal(1), found.group(2), Decimal(found.group(1))), text[found.end() :]
+    if found := re.match(rf"(?:an? )?({'|'.join(_CONTAINERS)}) of {_NUMBER}\b", lowered):
+        return _Quantity(Decimal(1), found.group(1), Decimal(found.group(2))), text[found.end() :]
+    if found := re.match(rf"(?:about|around|approx\.?|~)\s*{_NUMBER}\b", lowered):
+        return _unit(_Quantity(Decimal(found.group(1)), vague=True), text[found.end() :])
+    if found := re.match(rf"{_NUMBER}\s*x?\b", lowered):
+        quantity = _Quantity(Decimal(found.group(1)))
+        rest = re.sub(r"(?i)^\s*of the \d+\b", "", text[found.end() :])  # "2 of the 5"
+        return _unit(quantity, rest)
+    first = lowered.split(" ", 1)[0]
+    if first in _NUMBERS:
+        return _unit(_Quantity(Decimal(_NUMBERS[first])), text[len(first) :])
+    if first in ("a", "an", "the"):
+        rest = text[len(first) :]
+        if first == "the" and _plural(rest):
+            return _Quantity(None), rest  # "the APs": how many is not said
+        return _unit(_Quantity(Decimal(1)), rest)
+    raise _Decline
+
+
+def _unit(quantity: _Quantity, rest: str) -> tuple[_Quantity, str]:
+    """Read a unit word after a quantity: "5 boxes of", "300 ft of", "12 pieces of"."""
+    found = re.match(r"\s*([a-z]+)\b\s*(?:of\b)?", rest, re.IGNORECASE)
+    if not found:
+        return quantity, rest
+    word = found.group(1).lower()
+    singular = word[:-2] if word.endswith("xes") else word[:-1] if word.endswith("s") else word
+    after = rest[found.end() :]
+    if word in _EACH or singular in _EACH:
+        return quantity, after
+    if singular in _CONTAINERS:
+        return _Quantity(quantity.value, singular, quantity.pack_size, quantity.vague), after
+    if word in _LENGTHS:
+        return _Quantity(quantity.value, _LENGTHS[word], quantity.pack_size, quantity.vague), after
+    return quantity, rest
+
+
+def _plural(text: str) -> bool:
+    last = re.findall(r"[A-Za-z]+", text)
+    return bool(last) and last[-1].lower().endswith("s") and not last[-1].lower().endswith("ss")
+
+
+def _flags(
+    movement_type: MovementType, items: tuple[LineItem, ...], source: str | None, destination: str | None
+) -> set[Flag]:
+    """The flags that follow from the fields (eval/README.md, "Flags"). Quantity flags are added by the caller."""
+    flags = set()
+    if source is None and movement_type not in (MovementType.RECEIVE, MovementType.COUNT):
+        flags.add(Flag.IMPLIED_SOURCE)
+    if destination is None and movement_type is not MovementType.CONSUME:
+        flags.add(Flag.IMPLIED_DESTINATION)
+    if any(item.item_text is None for item in items):
+        flags.add(Flag.ITEMS_MISSING)
+    if any(item.unit in _CONTAINERS or item.pack_size is not None for item in items):
+        flags.add(Flag.PACK_UNIT_AMBIGUOUS)
+    return flags
