@@ -635,18 +635,24 @@ Deterministic. The rules run in this order:
   enforces that with an allowlist (`Match.can_authorize_a_write`).
 - Corpus 0.2.0, with the expected text as input (`tests/core/test_matching_corpus.py`):
   part match 100% (109 results) and location match 100% (92 results).
-  Of the 99 single part matches, 80 came from rule 4 or 5 ("Disc 40",
+  Of the 99 single part matches, 81 came from rule 4 or 5 ("Disc 40",
   "ONTs"), and so did 20 of the 88 single location matches. Under the
   current policy all of those need a confirmation.
 - Plural endings are folded only on words without digits at rules 2 and
-  3 ("40S" may be another model). Rules 4 and 5 also fold them on words
-  with digits ("d40s"), and those rules never authorize. Where folding
-  makes two records look the same ("tapes": "Tap" or "Tape"), the result
-  is ambiguous.
+  3 ("40S" may be another model), and "-es" only after a hissing sound
+  ("boxes", "switches", but "tapes" is never "tap"). Rules 4 and 5 fold
+  both kinds ("d40s", "tapes"), and those rules never authorize. Where
+  folding still makes two records look the same ("ups": "UP" or "UPS"),
+  the result is ambiguous.
+- A trailing "+" is part of the word at rules 1 to 3 ("SFP+" and "SFP",
+  "PoE+" and "PoE" are different products). Rules 4 and 5 ignore it, so
+  "poe injector" still finds "PoE+ Injector", for confirmation.
 - Template, inactive and virtual parts are never a match. Structural
   locations are never a match.
-- "My truck" resolves through the mapping from Slack user to vehicle.
-  Aliases that contain such words are stored per user.
+- "My truck" resolves through the mapping from Slack user to vehicle,
+  only when the word ("truck", "van") names that vehicle in its path,
+  description or aliases. "My trailer" from a user with a truck goes
+  through the other rules instead. Aliases that contain such words are stored per user.
 - An alias is checked against the catalog snapshot when it is used. An
   alias that points to an inactive part or a deleted location is ignored
   and reported.

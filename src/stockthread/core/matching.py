@@ -3,7 +3,8 @@
 The rules run in order, and the first rule with any hit decides:
 
 1. exact: the text equals a part's IPN or name, or a location's path or name;
-2. normalized: the same after folding case, punctuation, possessives and plural endings;
+2. normalized: the same after folding case, punctuation, possessives and plural endings
+   (a trailing "+" is kept: "SFP+" is another model than "SFP");
 3. alias: the normalized text equals a confirmed alias;
 4. words: every word of the text is one of a record's words (name, keywords, aliases; path
    and description for locations), so "Disc 40" finds "Norvane Disc 40 Access Point";
@@ -28,9 +29,11 @@ from stockthread.core.model import Match, MatchRule, MatchStatus
 TYPO_RATIO = 0.8
 """Two words of 4 letters or more count as the same word at this `difflib` similarity (for example "ondrl")."""
 MY_VEHICLE = re.compile(r"^my (truck|van|vehicle|car|trailer)$")
-"""Phrases that mean the poster's own vehicle."""
-_WORD = re.compile(r"[^\W_]+")
-"""Letters and digits of any script, so "10\N{MICRO SIGN}F" never loses its unit."""
+"""Phrases that mean the poster's own vehicle, when the word names the kind of vehicle assigned."""
+_WORD = re.compile(r"[^\W_]+\+*")
+"""Letters and digits of any script, so "10\N{MICRO SIGN}F" never loses its unit, and a trailing "+" ("PoE+")."""
+_HISSING = ("ss", "x", "z", "ch", "sh")
+"""Endings after which "-es" is a plural ending: "boxes", "switches", "glasses", but not "tapes"."""
 _LETTERS_DIGITS = re.compile(r"[^\W\d_]+|\d+")
 
 
@@ -78,7 +81,7 @@ class Catalog:
 
 
 def words(text: str) -> list[str]:
-    """Lower-case words without punctuation or possessives: "Sam's J-Arm" -> ["sam", "j", "arm"]."""
+    """Lower-case words without punctuation or possessives: "Sam's J-Arm, SFP+" -> ["sam", "j", "arm", "sfp+"]."""
     folded = unicodedata.normalize("NFKC", text).lower()
     folded = re.sub("['\N{RIGHT SINGLE QUOTATION MARK}]s\\b", "", folded)
     return _WORD.findall(folded)
@@ -89,15 +92,18 @@ def _forms(word: str, *, loose: bool = False) -> set[str]:
 
     "-ss" words and words under 3 letters have none. A word with digits has one only when `loose`:
     "d40s" is probably two "d40", but "40S" may be another model, so only the rules that cannot
-    authorize a write (4 and 5) accept it. The forms may over-reduce ("tapes" -> "tap"), so rules
-    compare form sets, and a collision is ambiguous.
+    authorize a write (4 and 5) accept it. The same goes for "-es" after anything but a hissing sound
+    ("tapes" may be "tap") and for dropping a trailing "+" ("poe+" may be "poe"). The forms may
+    still over-reduce ("ups" -> "up"), so rules compare form sets, and a collision is ambiguous.
     """
     forms = {word}
-    if word.endswith("ss") or len(word) < 3 or (not loose and any(char.isdigit() for char in word)):
+    if loose and word.endswith("+"):
+        forms.add(word.rstrip("+"))
+    if word.endswith(("ss", "+")) or len(word) < 3 or (not loose and any(char.isdigit() for char in word)):
         return forms
     if word.endswith("ies"):
         forms.add(word[:-3] + "y")
-    if word.endswith("es"):
+    if word.endswith("es") and (loose or word[:-2].endswith(_HISSING)):
         forms.add(word[:-2])
     if word.endswith("s"):
         forms.add(word[:-1])
@@ -117,7 +123,7 @@ def _vocabulary(texts: Iterable[str]) -> set[str]:
     vocabulary: set[str] = set()
     for text in texts:
         for forms in _text_words(text):
-            vocabulary |= forms
+            vocabulary |= forms | {form.rstrip("+") for form in forms}  # rules 4 and 5 only
     return vocabulary
 
 
@@ -206,21 +212,25 @@ def match_part(text: str, catalog: Catalog, poster: str | None = None) -> Match:
 def match_location(text: str, catalog: Catalog, poster: str) -> Match:
     """Match location text to a stock location. `poster` is the Slack user id of the post's author.
 
-    "My truck" is the poster's assigned vehicle, and unmatched when there is none. Aliases of other users
-    do not apply. Structural locations are never a match, because they cannot hold stock.
+    "My truck" is the poster's assigned vehicle, and unmatched when there is none. The word must name
+    that vehicle ("truck" in its path, description or aliases); otherwise "my trailer" goes through
+    the other rules. Aliases of other users do not apply. Structural locations are never a match,
+    because they cannot hold stock.
     """
     locations = {loc.pk: loc for loc in catalog.locations if not loc.structural}
-    if MY_VEHICLE.match(" ".join(words(text))):
-        vehicle = catalog.vehicles.get(poster)
-        if vehicle in locations:
-            return Match(MatchStatus.MATCHED, rule=MatchRule.ALIAS, record=vehicle)
-        return Match(MatchStatus.UNMATCHED)
     aliases = [a for a in catalog.location_aliases if a.user is None or a.user == poster]
     alias_texts = {pk: [a.text for a in aliases if a.record == pk] for pk in locations}
 
     def vocabulary(pk: int) -> set[str]:
         location = locations[pk]
         return _vocabulary([location.path.replace("/", " "), location.description, *alias_texts[pk]])
+
+    if mine := MY_VEHICLE.match(" ".join(words(text))):
+        vehicle = catalog.vehicles.get(poster)
+        if vehicle not in locations:
+            return Match(MatchStatus.UNMATCHED)
+        if _forms(mine.group(1)) & vocabulary(vehicle):
+            return Match(MatchStatus.MATCHED, rule=MatchRule.ALIAS, record=vehicle)
 
     names = {pk: _names(loc.path, loc.name) for pk, loc in locations.items()}
     return _match(text, names, aliases, vocabulary)

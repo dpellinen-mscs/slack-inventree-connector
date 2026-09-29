@@ -42,7 +42,7 @@ def matched(record: int, rule: MatchRule) -> Match:
 
 
 def test_words_fold_case_punctuation_and_possessives() -> None:
-    assert words("Sam\N{RIGHT SINGLE QUOTATION MARK}s  J-Arm, SFP+!") == ["sam", "j", "arm", "sfp"]
+    assert words("Sam\N{RIGHT SINGLE QUOTATION MARK}s  J-Arm, SFP+!") == ["sam", "j", "arm", "sfp+"]
 
 
 def test_rules_run_in_order() -> None:
@@ -69,7 +69,8 @@ def test_typo_tolerance_only_for_words_of_four_letters_or_more() -> None:
     assert match_part("ab", CATALOG).status is MatchStatus.UNMATCHED
 
 
-def test_capitalized_words_have_no_plural() -> None:
+def test_a_plural_form_that_names_no_record_does_not_block_a_match() -> None:
+    # "UPS" also folds to "up", which names nothing, so rule 4 still finds part 3.
     assert match_part("UPS", CATALOG) == matched(3, MatchRule.WORDS)
 
 
@@ -90,6 +91,18 @@ def test_my_vehicle_is_the_posters_vehicle() -> None:
     assert match_location("My Truck", CATALOG, "U0MIKE") == matched(12, MatchRule.ALIAS)
     assert match_location("my truck", CATALOG, "U0NONE").status is MatchStatus.UNMATCHED
     assert match_location("my truck", CATALOG, "U0GONE").status is MatchStatus.UNMATCHED  # structural
+    assert match_location("my vehicle", CATALOG, "U0SAM") == matched(11, MatchRule.ALIAS)  # its path says "Vehicles"
+
+
+def test_my_vehicle_must_name_the_kind_of_vehicle_assigned() -> None:
+    # Sam is assigned a truck. "My trailer" is not Sam's truck, and never authorizes a write to it.
+    trailer = LocationRecord(14, "Vehicles/Trailer", "Shared equipment trailer")
+    catalog = Catalog(parts=PARTS, locations=(*LOCATIONS, trailer), vehicles={"U0SAM": 11})
+    for text in ("my trailer", "my van", "my car"):
+        result = match_location(text, catalog, "U0SAM")
+        assert result.record != 11, text
+        assert not result.can_authorize_a_write, text
+    assert match_location("my truck", catalog, "U0SAM") == matched(11, MatchRule.ALIAS)
 
 
 def test_possessive_names_resolve_through_the_description() -> None:
@@ -139,9 +152,26 @@ def test_a_letter_after_digits_is_never_folded_by_an_authorizing_rule() -> None:
 
 
 def test_plural_collisions_are_ambiguous() -> None:
-    assert match_part("wire tapes", _catalog("Wire Tap", "Wire Tape")).status is MatchStatus.AMBIGUOUS
     assert match_part("ups battery", _catalog("UP Battery", "UPS Battery")).status is MatchStatus.AMBIGUOUS
     assert match_part("wire tape", _catalog("Wire Tap", "Wire Tape")) == matched(2, MatchRule.NORMALIZED)
+    assert match_part("wire tapes", _catalog("Wire Tap", "Wire Tape")) == matched(2, MatchRule.NORMALIZED)
+
+
+def test_es_is_folded_only_after_a_hissing_sound_by_an_authorizing_rule() -> None:
+    # "tapes" is not "tap" and "pipes" is not "pip": with only the wrong record in the catalog, no write.
+    for text, name in (("wire tapes", "Wire Tap"), ("pipes", "Pip"), ("tubes", "Tub"), ("cones", "Con")):
+        assert not match_part(text, _catalog(name)).can_authorize_a_write, text
+    for text, name in (("boxes", "Box"), ("switches", "Switch"), ("brushes", "Brush"), ("glasses", "Glass")):
+        assert match_part(text, _catalog(name)) == matched(1, MatchRule.NORMALIZED), text
+
+
+def test_a_trailing_plus_names_another_model() -> None:
+    # SFP and SFP+, PoE and PoE+ are different products.
+    assert not match_part("poe injector", _catalog("PoE+ Injector")).can_authorize_a_write
+    assert not match_part("poe+ injector", _catalog("PoE Injector")).can_authorize_a_write
+    assert match_part("sfp module", _catalog("SFP+ Module", "SFP Module")) == matched(2, MatchRule.NORMALIZED)
+    assert match_part("SFP+ modules", _catalog("SFP+ Module", "SFP Module")) == matched(1, MatchRule.NORMALIZED)
+    assert match_part("poe injector", _catalog("PoE+ Injector")) == matched(1, MatchRule.WORDS)  # asked, not assumed
 
 
 def test_letters_outside_ascii_are_words() -> None:
