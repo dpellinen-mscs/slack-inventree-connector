@@ -237,12 +237,15 @@ needs.
   work on quantities per part and location. Serialized stock is verified
   and undone by stock item and serial number.
 - **No merge in v1.0.** The server can merge transferred stock into
-  matching stock at the destination. A merge deletes stock items together
-  with their history, and it removes batch identity. Both would weaken
-  verification and undo, so v1.0 never merges. It sends `merge: false`
-  where the API version has the field, and it refuses writes when the
-  server-wide setting "merge stock on transfer" would merge anyway. The
-  cost is more small stock items on a vehicle. Merge is an option to
+  matching stock at the destination. A merge deletes the moving stock item,
+  writes the transfer's history entry on the destination item, and removes
+  batch identity. That would weaken verification and undo, so v1.0 never
+  merges. It sends `merge: false` on every transfer line. Measured
+  (`test_char_transfer_merge_setting_on`): on 1.5.6 only an explicit
+  `merge: true` merges; the server-wide setting "merge stock on transfer"
+  (off by default) does not change a line that omits `merge` or sends
+  `false`. 1.4.3 has neither the setting nor the field, and never merges.
+  The cost is more small stock items on a vehicle. Merge is an option to
   consider after v1.0.
 - **Depletion.** Removing the last unit can delete the stock item together
   with its history, depending on a server setting. Verification treats a
@@ -422,7 +425,7 @@ A plan has its own state: `current`, `stale`, `expired`, `applied`,
 | State | Meaning | Next |
 | --- | --- | --- |
 | `planned` | Part of a current plan | `approved`, `rejected`, `cancelled` (plan became stale), `expired` |
-| `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present) |
+| `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present), `cancelled` (plan became stale) |
 | `applying` | Intent stored, write about to be sent or sent | `applied`, `failed`, `unknown` |
 | `failed` | InvenTree refused the request. Nothing was written | `approved`, by a human, as a new attempt |
 | `unknown` | The outcome is not known | `applied`, `failed` (no marker and nothing changed) or `verify_failed`, by recovery |
@@ -447,7 +450,8 @@ click on a button changes nothing.
 
 ### The marker
 
-`[sic:<22 random base32 characters>:<a or u><two-digit attempt number>]`,
+`[sic:<22 random base32 characters>:<a or u><two-digit attempt number>]`
+(Crockford's alphabet in lower case: digits and letters without i, l, o, u),
 for example `[sic:k7m2q9x4t1b8w3n6p5r0zd:a01]`. `a` marks an apply and `u`
 an undo. The random id belongs to one request, and every attempt of that
 request shares it.
@@ -575,7 +579,11 @@ and needs no extra service.
 | `audit_log` | Append-only log of every state change, ids only |
 
 `audit_log` rows are never updated or deleted by the application. Database
-triggers reject both. The log holds ids and never message text, so it can
+triggers reject both. Triggers also keep every key column fixed, keep
+the recorded intent of an attempt (marker, snapshot, request body) fixed,
+and keep rows that carry a key from being deleted. The first migration
+holds the tables of section 7; the others arrive with their features
+([ADR 0009](decisions/0009-audit-store.md)). The log holds ids and never message text, so it can
 stay complete when retention removes text elsewhere. Retention of text is
 configurable, and expiry replaces the text while keeping the row.
 
@@ -676,12 +684,12 @@ the test suite.
 | `test_char_marker_on_every_entry_type` | The notes reach every history entry a request writes |
 | `test_char_marker_visible_after_response` | Whether history is readable as soon as the server has answered |
 | `test_char_marker_search_is_substring` | The history search matches substrings, and `limit` with `offset` pages through it without overlap |
-| `test_char_notes_length` | What happens to notes beyond the length limit |
+| `test_char_notes_length` | Notes of 20,000 characters are stored whole (SQLite; PostgreSQL not measured yet) |
 | `test_char_multi_item_request_is_atomic` | One bad line fails the whole request |
 | `test_char_restricted_user_can_adjust` | The documented minimum roles are enough |
-| `test_char_concurrent_transfers_same_item` | What two simultaneous transfers from one item do |
+| `test_char_concurrent_transfers_same_item` | Two simultaneous transfers never move more than the item held. On SQLite, colliding requests give one 201 and one 5xx that wrote nothing. Requests handled one after the other give two 201s, and the second moves only what was left: a 201 can move less than asked, so read-back must compare the delta with the plan |
 | `test_char_transfer_does_not_merge` | A transfer to a location that holds the same part leaves separate items (server-wide merge setting off) |
-| `test_char_transfer_merge_setting_on` | What a transfer does when the server-wide merge setting is on (not written yet) |
+| `test_char_transfer_merge_setting_on` | The server-wide merge setting does not merge a line that omits `merge` or sends `false`; only `merge: true` merges (1.5.6) |
 | `test_char_stock_list_cascade_false` | A stock list with `cascade=false` leaves out sub-locations |
 | `test_char_error_body_format` | The shape of a 4xx answer from InvenTree, which recovery uses to tell it from a proxy |
 
