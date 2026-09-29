@@ -20,6 +20,8 @@ Nothing is released yet. The connector cannot write stock in this state.
 - A read-only InvenTree client (GET only), with an API version check.
 - Slack ingest checks: workspace, app, channel allowlist, subtypes, bots, duplicates, and the
   approver check for Apply, each drop with a reason.
+- The durable Slack event queue in the store (migration 0002): store before acknowledging,
+  pick up unfinished events at startup, and stop retrying an event that keeps failing.
 - Integration tests against real InvenTree 1.4.3 and 1.5.6 in Docker, including characterization tests
   of the server behavior the design depends on.
 - A threat model, first version (`docs/threat-model.md`).
