@@ -222,19 +222,33 @@ needs.
   `drain` claims stored events, runs the ingest checks again with the
   current settings, and places each new message in its post; the message
   keeps a link to its stored event, whose raw body is the only place its
-  text is kept. `reply_due` takes each post whose newest message is older
-  than the sibling window, extracts, validates and matches it, closes it to
-  siblings, posts the dry-run reply in the thread, and records the outcome
-  once (`posts.dry_run_at`, `posts.reply_ts`; migration 0004). A post that
-  is declined or is not a movement gets no reply, and neither does a post
-  with a message that cannot be read again (its body expired), because a
-  post is never read with a message left out. A crash between posting and
-  recording posts the reply again: a duplicate dry-run beats a silent drop.
-  A failed reply is retried, and after 5 failures in a row the post is
-  finished without one. A post that breaks the pipeline is logged and
-  finished without a reply, so it cannot stop later posts. Until M2, edits,
-  deletions, clicks and thread replies after the dry-run are recorded and
-  not acted on.
+  text is kept. An event that raises fails alone, with its error class as
+  the outcome. Only once the queue is empty does `reply_due` run, so a
+  backlog never splits siblings. A post is due when its newest message is
+  older than the sibling window plus 10 seconds of grace, and, when it is
+  keyed on a thread root that has not arrived, 6 minutes after the root
+  (Slack retries a delivery after about 1 and 5 minutes). The worker then
+  extracts, validates and matches, closes the post to siblings, posts the
+  dry-run reply in the thread, and records the outcome once
+  (`posts.dry_run_at`, `posts.reply_ts`, audit `dry_run_<outcome>`;
+  migration 0004):
+  - `replied`. A post answered more than 10 minutes after its newest
+    message carries `late_ingest`.
+  - `silent`: declined, or not a movement. No reply by design.
+  - `withheld`: a message cannot be read again (its body expired), was
+    edited or deleted before the dry run, or the post is older than
+    `plan_expiry_hours`. A post is never read with a message left out.
+  - `failed`: the pure pipeline raised on this post. It is logged by error
+    class and line, never with a message or a traceback, and it cannot stop
+    later posts. A catalog or database failure is an outage instead: it
+    propagates, and the post waits.
+  - `gave_up`: posting kept failing for 15 minutes, with backoff up to a
+    minute between tries.
+
+  A crash between posting and recording posts the reply again: a
+  duplicate dry run beats a silent drop. Until M2, edits and deletions
+  after the dry run, clicks, and thread replies after the dry run are
+  recorded and not acted on.
 - **Replies.** The dry-run reply (`slack/replies.py`) lists each movement
   with the matched part and location names next to the words as written,
   then every review reason in plain words. Text from the post and from the

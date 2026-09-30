@@ -104,6 +104,29 @@ class EventStatus(StrEnum):
     FAILED = "failed"
 
 
+class DryRunOutcome(StrEnum):
+    """How a post's dry run ended. Only `replied` has a reply in the thread."""
+
+    REPLIED = "replied"
+    SILENT = "silent"
+    """Declined, or not a movement: no reply by design."""
+    WITHHELD = "withheld"
+    """A message cannot be read again, was edited or deleted first, or is too old to answer."""
+    FAILED = "failed"
+    """The pipeline raised on this post."""
+    GAVE_UP = "gave_up"
+    """Posting the reply kept failing."""
+
+
+@dataclass(frozen=True)
+class WaitingPost:
+    key: PostKey
+    newest_ts: str
+    """The timestamp of the post's newest message."""
+    has_key_message: bool
+    """Whether the message the post is keyed on (the thread root) is in it yet."""
+
+
 @dataclass(frozen=True)
 class QueuedEvent:
     id: int
@@ -367,18 +390,25 @@ class Store:
             if cursor.rowcount:
                 self._audit(Actor.PLANNER, "siblings_closed", post_id=post_id)
 
-    def posts_waiting_for_dry_run(self) -> list[tuple[PostKey, str]]:
-        """Posts without a dry-run outcome yet, oldest first, each with the timestamp of its newest message."""
+    def posts_waiting_for_dry_run(self) -> list[WaitingPost]:
+        """Posts without a dry-run outcome yet, oldest first."""
         rows = self._db.execute(
             "SELECT p.workspace_id, p.channel_id, p.ts, m.ts FROM posts p JOIN post_messages m ON m.post_id = p.id"
             " WHERE p.dry_run_at IS NULL ORDER BY p.id"
         ).fetchall()
-        newest: dict[PostKey, str] = {}
+        found: dict[PostKey, list[str]] = {}
         for workspace, channel, post_ts, ts in rows:
-            key = PostKey(workspace, channel, post_ts)
-            if key not in newest or seconds(ts) > seconds(newest[key]):
-                newest[key] = ts
-        return list(newest.items())
+            found.setdefault(PostKey(workspace, channel, post_ts), []).append(ts)
+        return [WaitingPost(key, max(ts, key=seconds), key.ts in ts) for key, ts in found.items()]
+
+    def waiting_post_of(self, message: PostKey) -> PostKey | None:
+        """The post that holds this message, if that post has no dry-run outcome yet."""
+        row = self._db.execute(
+            "SELECT p.workspace_id, p.channel_id, p.ts FROM post_messages m JOIN posts p ON p.id = m.post_id"
+            " WHERE m.workspace_id = ? AND m.channel_id = ? AND m.ts = ? AND p.dry_run_at IS NULL",
+            (message.workspace_id, message.channel_id, message.ts),
+        ).fetchone()
+        return None if row is None else PostKey(row[0], row[1], row[2])
 
     def post_bodies(self, key: PostKey) -> list[tuple[str, str | None]]:
         """Each message of a post, oldest first: its timestamp, and the raw body of the event it came from.
@@ -395,10 +425,10 @@ class Store:
         ).fetchall()
         return sorted(((row[0], row[1]) for row in rows), key=lambda row: seconds(row[0]))
 
-    def finish_dry_run(self, owner: str, key: PostKey, reply_ts: str | None) -> None:
-        """Record the post's dry-run outcome: the reply's timestamp, or None when it got no reply. Once only."""
-        if reply_ts is not None and not _SLACK_TS.fullmatch(reply_ts):
-            raise ValueError(f"not a Slack timestamp: {reply_ts!r}")
+    def finish_dry_run(self, owner: str, key: PostKey, outcome: DryRunOutcome, reply_ts: str | None = None) -> None:
+        """Record the post's dry-run outcome, and the reply's timestamp when Slack gave one. Once only."""
+        if reply_ts is not None and (outcome is not DryRunOutcome.REPLIED or not _SLACK_TS.fullmatch(reply_ts)):
+            raise ValueError("only a reply has a timestamp, in Slack's form")
         with self._transaction():
             self._check_lock(owner)
             post_id = self._post_id(key)
@@ -410,7 +440,7 @@ class Store:
             )
             if cursor.rowcount != 1:
                 raise StateConflict("the post already has its dry-run outcome")
-            self._audit(Actor.PLANNER, "dry_run_replied" if reply_ts else "dry_run_silent", post_id=post_id)
+            self._audit(Actor.PLANNER, f"dry_run_{outcome.value}", post_id=post_id)
 
     def create_plan(self, post: PostKey, input_hash: str, operations: Sequence[Operation]) -> int:
         """Store a new plan revision with one planned request per operation, and return its revision.
