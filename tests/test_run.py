@@ -598,3 +598,20 @@ def test_an_edit_while_the_reply_is_on_its_way_waits_for_the_call(tmp_path: Path
     assert record.outcome is DryRunOutcome.WITHHELD
     assert len(client.calls) == 1
     store.close()
+
+
+def test_a_reply_on_its_way_is_checked_with_backoff_and_not_while_stopping(tmp_path: Path) -> None:
+    worker, store, client, at = hung_worker(tmp_path, lambda: DISC)
+    assert worker.step() == 2  # the event, and the reply whose call hangs (next check in 2 seconds)
+    at(1790000031)
+    assert worker.step() == 0  # backing off
+    client.release.set()
+    wait_until_idle()
+    at(1790000033)
+    worker.stopping = lambda: True
+    assert worker.step() == 0  # a stop request does not wait for it
+    assert store.dry_run(HUNG_POST) is None
+    worker.stopping = lambda: False
+    assert worker.step() == 1
+    assert reply_ts(tmp_path) == ["1790000099.000100"]
+    store.close()

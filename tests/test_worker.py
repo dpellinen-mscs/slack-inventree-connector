@@ -299,6 +299,7 @@ def test_a_failed_reply_is_retried_with_backoff_then_given_up(
     clock.at("1790000032.000000")
     worker.step()
     assert len(slack.posted) == 1
+    assert worker._failures == {}  # a reply that got through leaves no retry state behind
 
     enqueue(store, message("1790000100.000100", "took 1 ONT 100 from main stock to truck 1"))
     clock.at("1790000130.000000")

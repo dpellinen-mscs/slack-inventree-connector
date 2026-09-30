@@ -241,7 +241,8 @@ def _event(payload: Mapping[str, Any], settings: SlackSettings) -> Decision:
 
 
 _MAY_HIDE_A_REVISION = frozenset({DropReason.MALFORMED, DropReason.SUBTYPE_NOT_ALLOWED, DropReason.UNCHANGED})
-"""Drops that come after the workspace, app, channel and bot checks, so a payload from elsewhere stays dropped."""
+"""Drops that come after the app, channel and bot checks. `revised_message` checks the workspace, the app and
+the channel itself, and the poster's organization too, so a payload from elsewhere stays dropped."""
 _SLACK_TS = re.compile(r"\d{1,10}\.\d{6}")
 
 
@@ -264,13 +265,19 @@ def revised_message(payload: object, settings: SlackSettings) -> tuple[str, str]
     if event.get("type") != "message" or not isinstance(channel, str) or channel not in settings.channels:
         return None
     previous = event.get("previous_message")
+    before = previous.get("ts") if isinstance(previous, Mapping) else None
+    inner = event.get("message") if subtype == "message_changed" else None
+    for part in (event, inner, previous):
+        # In a shared channel, the poster may belong to another organization.
+        team = part.get("user_team", part.get("team")) if isinstance(part, Mapping) else None
+        if team is not None and team != settings.workspace_id:
+            return None
     if subtype == "message_deleted":
-        ts = event.get("deleted_ts") or (previous.get("ts") if isinstance(previous, Mapping) else None)
+        ts = event.get("deleted_ts") or before
     elif subtype == "message_changed":
-        inner = event.get("message")
         if not isinstance(inner, Mapping):
             return None
-        ts = inner.get("ts")
+        ts = inner.get("ts") if isinstance(inner.get("ts"), str) else before
         unchanged = isinstance(previous, Mapping) and _shown(inner) == _shown(previous)
         if unchanged and inner.get("subtype") != "tombstone":
             return None

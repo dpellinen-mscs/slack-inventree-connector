@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from stockthread.config import SlackSettings
+from stockthread.slack import ingest
 from stockthread.slack.ingest import (
     Challenge,
     Click,
@@ -22,6 +23,7 @@ from stockthread.slack.ingest import (
     Revised,
     ingest_action,
     ingest_event,
+    revised_message,
     unwrap_socket,
 )
 
@@ -236,12 +238,20 @@ def test_a_deletion_that_names_its_message_only_in_the_previous_one_is_kept() ->
     assert ingest_event(body, SETTINGS, RecentEvents()) == Revised(body["event_id"], "C0ACME001", ts)
 
 
-@pytest.mark.parametrize("field", ["team_id", "api_app_id", "channel", "event_id", "bot_id"])
+@pytest.mark.parametrize(
+    "field", ["team_id", "api_app_id", "channel", "event_id", "bot_id", "user_team", "team", "previous_team"]
+)
 def test_a_revision_from_elsewhere_stays_dropped(field: str) -> None:
     body = changed()
     body["event"]["message"]["subtype"] = "tombstone"
     if field == "channel":
         body["event"]["channel"] = "C0OTHER01"
+    elif field == "user_team":
+        body["event"]["message"]["user_team"] = "T0OTHER99"
+    elif field == "team":
+        body["event"]["team"] = "T0OTHER99"
+    elif field == "previous_team":
+        body["event"]["previous_message"]["user_team"] = "T0OTHER99"
     elif field == "bot_id":
         body["event"]["previous_message"]["bot_id"] = "B0OTHER01"
     elif field == "event_id":
@@ -249,6 +259,32 @@ def test_a_revision_from_elsewhere_stays_dropped(field: str) -> None:
     else:
         body[field] = "X0OTHER01"
     assert isinstance(ingest_event(body, SETTINGS, RecentEvents()), Drop)
+
+
+@pytest.mark.parametrize("field", ["team_id", "api_app_id", "channel", "user_team"])
+def test_the_lenient_reading_checks_where_a_revision_comes_from_by_itself(field: str) -> None:
+    body = changed()
+    assert revised_message(body, SETTINGS) == ("C0ACME001", body["event"]["message"]["ts"])
+    if field == "channel":
+        body["event"]["channel"] = "C0OTHER01"
+    elif field == "user_team":
+        body["event"]["message"]["user_team"] = "T0OTHER99"
+    else:
+        body[field] = "X0OTHER01"
+    assert revised_message(body, SETTINGS) is None
+
+
+@pytest.mark.parametrize("reason", [DropReason.WRONG_APP, DropReason.WRONG_WORKSPACE, DropReason.CHANNEL_NOT_ALLOWED])
+def test_a_drop_for_where_a_payload_comes_from_is_never_read_again(reason: DropReason) -> None:
+    assert reason not in ingest._MAY_HIDE_A_REVISION
+    assert DropReason.BOT not in ingest._MAY_HIDE_A_REVISION
+
+
+def test_an_edit_without_its_own_ts_is_found_by_the_previous_message() -> None:
+    body = changed()
+    ts = body["event"]["message"].pop("ts")
+    assert body["event"]["previous_message"]["ts"] == ts
+    assert ingest_event(body, SETTINGS, RecentEvents()) == Revised(body["event_id"], "C0ACME001", ts)
 
 
 def test_a_reply_under_a_post_edited_earlier_is_not_another_edit() -> None:
