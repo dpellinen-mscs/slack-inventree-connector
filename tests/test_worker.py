@@ -16,6 +16,8 @@ from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.core.model import PostKey
+from stockthread.slack.ingest import Drop, Revised
+from stockthread.slack.listener import Listener
 from stockthread.store import DryRunOutcome, LockLost, StateConflict, Store
 from stockthread.store import db as store_db
 from stockthread.worker import (
@@ -777,6 +779,45 @@ def test_an_edit_the_ingest_checks_drop_still_withholds_the_post(
     worker.step()
     assert slack.posted == []
     assert audit(path) == ["dry_run_withheld"]
+
+
+@pytest.mark.parametrize("revision", [tombstone, unstamped, without_user])
+@pytest.mark.parametrize("edit_first", [False, True])
+def test_an_edit_the_strict_checks_cannot_read_gets_from_the_listener_to_the_worker(
+    revision: Any, edit_first: bool, worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    listener = Listener(worker.settings.slack, lambda: store)
+    events = [message(ROOT, TAKE), revision(ROOT, "1790000002.000100")]
+    for event in reversed(events) if edit_first else events:
+        listener.on_event(event)
+    assert isinstance(listener.on_event(events[1]), Drop)  # Slack's retry of it is stored once
+    assert len(statuses(path)) == 2
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert slack.posted == []
+    assert audit(path) == ["dry_run_withheld"]
+    assert ("dropped", "revisions_not_handled_yet") in statuses(path) or ("done", "withheld_changed_post") in statuses(
+        path
+    )
+
+
+def test_the_listener_does_not_keep_a_link_preview_or_an_edit_from_elsewhere(store: Store, path: Path) -> None:
+    listener = Listener(settings().slack, lambda: store)
+    preview = edit_of(ROOT, "1790000002.000100", TAKE, TAKE)
+    del preview["event"]["message"]["edited"]
+    other_app = {**tombstone(ROOT, "1790000003.000100"), "api_app_id": "A0OTHER01"}
+    other_workspace = {**tombstone(ROOT, "1790000004.000100"), "team_id": "T0OTHER01"}
+    other_channel = tombstone(ROOT, "1790000005.000100")
+    other_channel["event"]["channel"] = "C0OTHER01"
+    from_a_bot = tombstone(ROOT, "1790000006.000100")
+    from_a_bot["event"]["previous_message"]["bot_id"] = "B0OTHER01"
+    no_event_id = tombstone(ROOT, "1790000007.000100")
+    del no_event_id["event_id"]
+    for event in (preview, other_app, other_workspace, other_channel, from_a_bot, no_event_id):
+        assert isinstance(listener.on_event(event), Drop)
+    assert statuses(path) == []
+    assert listener.on_event(tombstone(ROOT, "1790000008.000100")) == Revised("Ev1790000008.000100", CHANNEL, ROOT)
 
 
 def test_a_link_preview_or_a_new_thread_reply_is_not_an_edit(

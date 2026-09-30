@@ -29,7 +29,7 @@ from stockthread.core.matching import Catalog
 from stockthread.inventree import InvenTreeError, InvenTreeReader, check_version
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
-from stockthread.worker import Worker
+from stockthread.worker import PostStillRunning, Worker
 
 log = logging.getLogger(__name__)
 
@@ -90,8 +90,8 @@ class CatalogCache:
         return self._catalog
 
 
-class PostStillRunning(Exception):
-    """A Slack call did not return within the deadline. It is still running; a later try takes its result."""
+class PosterBusy(Exception):
+    """Another thread's call is still running, and this one was not sent. An ordinary failure: try again."""
 
 
 class _Call:
@@ -120,7 +120,7 @@ class DeadlinePoster:
         call = self._calls.get(key)
         if call is None:
             if any(not other.done.is_set() for other in self._calls.values()):
-                raise PostStillRunning
+                raise PosterBusy
             call = self._calls[key] = _Call()
             threading.Thread(target=self._post, args=(call, kwargs), name="slack-post", daemon=True).start()
             call.done.wait(self._deadline)
