@@ -218,12 +218,60 @@ needs.
 - **After apply,** an edit, a deletion or a correction never writes by
   itself. It creates a review item that offers an undo. A revised plan can
   be approved only after the undo has been verified.
+- **Worker.** `worker.py` runs under the instance lock, in two steps.
+  `drain` claims stored events, runs the ingest checks again with the
+  current settings, and places each new message in its post; the message
+  keeps a link to its stored event, whose raw body is the only place its
+  text is kept. An event that raises fails alone, with its error class as
+  the outcome. Only once the queue is empty does `reply_due` run, so a
+  backlog never splits siblings. A post is due when its newest message is
+  older than the sibling window plus 10 seconds of grace, and, when it is
+  keyed on a thread root that has not arrived, 6 minutes after the root
+  (Slack retries a delivery after about 1 and 5 minutes). The worker then
+  extracts, validates and matches, closes the post to siblings, posts the
+  dry-run reply in the thread, and records the outcome once
+  (`posts.dry_run_at`, `posts.reply_ts`, audit `dry_run_<outcome>`;
+  migration 0004):
+  - `replied`. A post answered more than 10 minutes after its newest
+    message carries `late_ingest`.
+  - `silent`: declined, or not a movement. No reply by design.
+  - `withheld`: a message cannot be read again (its body expired), was
+    edited or deleted before the dry run, or the post is older than
+    `plan_expiry_hours`. A post is never read with a message left out.
+    Every edit and deletion is noted by message key (`revised_messages`),
+    so one that Slack delivers before the message it changes still
+    withholds the post when that message arrives. The note is read from
+    the raw event, so it also covers edits the ingest checks drop (a
+    deleted thread root becomes a tombstone) and a root that never arrives.
+    A link preview or a new thread reply changes neither text nor files
+    and is not an edit.
+  - `failed`: the pure pipeline raised on this post. It is logged by error
+    class and line, never with a message or a traceback, and it cannot stop
+    later posts. A catalog or database failure is an outage instead: it
+    propagates, and the post waits.
+  - `gave_up`: posting kept failing for 15 minutes, with backoff up to a
+    minute between tries.
+
+  The outcome is stored with what was decided and why (`dry_runs`, in the
+  same transaction): the extractor's name and version, the candidate
+  movements, every match with its rule and InvenTree ids, the validator's
+  reasons and the reasons the reply showed. A withheld post records why,
+  and a failed one the error class. The result quotes words of the post,
+  so it is never logged, and retention can expire it.
+
+  A crash between posting and recording posts the reply again: a
+  duplicate dry run beats a silent drop. Until M2, edits and deletions
+  after the dry run, clicks, and thread replies after the dry run are
+  recorded and not acted on.
 - **Replies.** The dry-run reply (`slack/replies.py`) lists each movement
   with the matched part and location names next to the words as written,
   then every review reason in plain words. Text from the post and from the
   catalog is escaped, so neither can become a mention or a link. Candidate
   lists are capped at 5 in the display, and long sections are cut to fit
-  Slack's limits.
+  Slack's limits; a reply shows at most 20 movements (Slack allows 50
+  blocks), then says how many more there are. "Could apply" is printed only
+  when `gate_reasons` finds nothing: the caller's reasons plus every reason
+  the view itself shows (an unmatched part or place, a missing quantity).
 - **Interactivity.** Questions and receipts use Block Kit in the thread.
   A button carries only a random id of at least 128 bits that points to a
   row in the connector's database. The handler checks that the channel and
@@ -380,7 +428,12 @@ can also steer the gate by what it omits. These rules close that path:
   on the model to raise one.
 - **Grounding.** Each item text must appear in the message, and each
   quantity must correspond to a number or number word in the message.
-  Anything else is a review reason.
+  A quantity expression is read as a whole: in "2 of the 5" only 2 is
+  stated, and "half a dozen" states 6. An expression the rules cannot
+  read ("one and a half", "half of the 10", "both", "all the") states
+  nothing, so any quantity for it needs review. The unit must be the one the text
+  gives right before the item, in any spelling: a swapped, missing or
+  made-up unit changes the amount. Anything else is a review reason.
 - **Limits.** A quantity above `policy.max_quantity` is a review reason.
   So is a quantity above the stock on hand, which the resolve step checks.
 - **Where.** `core/validate.py` implements the rules above that need no
@@ -657,6 +710,8 @@ and needs no extra service.
 | `slack_events` | Raw events with a processing status, unique on `event_id` |
 | `posts` | One row per post, unique on post key |
 | `post_messages` | Which post each message belongs to, unique on `(workspace, channel, ts)`: ids, author and thread, never text (migration 0003) |
+| `revised_messages` | Message keys that were edited or deleted, in any arrival order: ids only (migration 0004) |
+| `dry_runs` | One row per post: the outcome, the extractor, and the result as JSON (candidates, matches, reasons) (migration 0004) |
 | `plans` | Plan revisions with the hash of their input messages |
 | `extractions` | Extractor name and version, prompt version, raw output |
 | `candidates` | Candidate movements and line items |

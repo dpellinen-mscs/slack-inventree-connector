@@ -104,6 +104,39 @@ class EventStatus(StrEnum):
     FAILED = "failed"
 
 
+class DryRunOutcome(StrEnum):
+    """How a post's dry run ended. Only `replied` has a reply in the thread."""
+
+    REPLIED = "replied"
+    SILENT = "silent"
+    """Declined, or not a movement: no reply by design."""
+    WITHHELD = "withheld"
+    """A message cannot be read again, was edited or deleted first, or is too old to answer."""
+    FAILED = "failed"
+    """The pipeline raised on this post."""
+    GAVE_UP = "gave_up"
+    """Posting the reply kept failing."""
+
+
+@dataclass(frozen=True)
+class WaitingPost:
+    key: PostKey
+    newest_ts: str
+    """The timestamp of the post's newest message."""
+    has_key_message: bool
+    """Whether the message the post is keyed on (the thread root) is in it yet."""
+
+
+@dataclass(frozen=True)
+class DryRunRecord:
+    """What a post's dry run decided. `result` quotes words of the post: never log it."""
+
+    outcome: DryRunOutcome
+    extractor: str | None
+    result: Mapping[str, Any] | None
+    """None when the dry run stored none, or once retention expired it."""
+
+
 @dataclass(frozen=True)
 class QueuedEvent:
     id: int
@@ -269,7 +302,14 @@ class Store:
             return post_id
 
     def place_message(
-        self, owner: str, message: PostKey, *, user_id: str, thread_ts: str | None, window_seconds: int
+        self,
+        owner: str,
+        message: PostKey,
+        *,
+        user_id: str,
+        thread_ts: str | None,
+        window_seconds: int,
+        slack_event_id: int | None = None,
     ) -> tuple[PostKey, bool]:
         """Put a message in its post (design section 4, "Grouping"): the post key, and whether the post is new.
 
@@ -277,7 +317,8 @@ class Store:
         `False`. After a crash the first placement may have committed without a plan, so callers plan on
         every placement, not only when the post is new. `owner` must hold the instance lock, so two
         instances never group the same channel differently. Timestamps must be in Slack's exact form
-        ("1790000000.000100"): keys are compared as strings.
+        ("1790000000.000100"): keys are compared as strings. `slack_event_id` is the stored event the message
+        came from: the worker reads the message text from its raw body.
         """
         if not user_id or window_seconds < 0:
             raise ValueError("a message needs a user, and the window cannot be negative")
@@ -329,9 +370,10 @@ class Store:
                 post_id = int(cursor.lastrowid or 0)
                 self._audit(Actor.PLANNER, "post_created", post_id=post_id)
             self._db.execute(
-                "INSERT INTO post_messages (post_id, workspace_id, channel_id, ts, user_id, thread_ts, added_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (post_id, workspace, channel, message.ts, user_id, thread_ts, self._now()),
+                "INSERT INTO post_messages"
+                " (post_id, workspace_id, channel_id, ts, user_id, thread_ts, added_at, slack_event_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (post_id, workspace, channel, message.ts, user_id, thread_ts, self._now(), slack_event_id),
             )
             self._audit(Actor.PLANNER, "message_grouped", post_id=post_id)
             return key, created
@@ -357,6 +399,123 @@ class Store:
             )
             if cursor.rowcount:
                 self._audit(Actor.PLANNER, "siblings_closed", post_id=post_id)
+
+    def posts_waiting_for_dry_run(self) -> list[WaitingPost]:
+        """Posts without a dry-run outcome yet, oldest first."""
+        rows = self._db.execute(
+            "SELECT p.workspace_id, p.channel_id, p.ts, m.ts FROM posts p JOIN post_messages m ON m.post_id = p.id"
+            " WHERE p.dry_run_at IS NULL ORDER BY p.id"
+        ).fetchall()
+        found: dict[PostKey, list[str]] = {}
+        for workspace, channel, post_ts, ts in rows:
+            found.setdefault(PostKey(workspace, channel, post_ts), []).append(ts)
+        return [WaitingPost(key, max(ts, key=seconds), key.ts in ts) for key, ts in found.items()]
+
+    def waiting_post_of(self, message: PostKey) -> PostKey | None:
+        """The post that holds this message, if that post has no dry-run outcome yet."""
+        row = self._db.execute(
+            "SELECT p.workspace_id, p.channel_id, p.ts FROM post_messages m JOIN posts p ON p.id = m.post_id"
+            " WHERE m.workspace_id = ? AND m.channel_id = ? AND m.ts = ? AND p.dry_run_at IS NULL",
+            (message.workspace_id, message.channel_id, message.ts),
+        ).fetchone()
+        return None if row is None else PostKey(row[0], row[1], row[2])
+
+    def post_bodies(self, key: PostKey) -> list[tuple[str, str | None]]:
+        """Each message of a post, oldest first: its timestamp, and the raw body of the event it came from.
+
+        The body is None when retention expired it, or when the message was grouped before migration 0004.
+        """
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        rows = self._db.execute(
+            "SELECT m.ts, e.body FROM post_messages m LEFT JOIN slack_events e ON e.id = m.slack_event_id"
+            " WHERE m.post_id = ?",
+            (post_id,),
+        ).fetchall()
+        return sorted(((row[0], row[1]) for row in rows), key=lambda row: seconds(row[0]))
+
+    def note_revision(self, owner: str, message: PostKey, slack_event_id: int | None = None) -> None:
+        """Remember that a message was edited or deleted, whether or not the message itself has arrived. Idempotent."""
+        with self._transaction():
+            self._check_lock(owner)
+            key = (message.workspace_id, message.channel_id, message.ts)
+            if self._db.execute(
+                "SELECT 1 FROM revised_messages WHERE workspace_id = ? AND channel_id = ? AND ts = ?", key
+            ).fetchone():
+                return
+            self._db.execute(
+                "INSERT INTO revised_messages (workspace_id, channel_id, ts, slack_event_id, noted_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (*key, slack_event_id, self._now()),
+            )
+            self._audit("ingest", "revision_noted", slack_event_id=slack_event_id)
+
+    def post_has_revision(self, key: PostKey) -> bool:
+        """Whether any message of the post, or the message it is keyed on, was edited or deleted, in whatever
+        order the events arrived."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        row = self._db.execute(
+            "SELECT 1 FROM revised_messages r WHERE EXISTS ("
+            " SELECT 1 FROM post_messages m WHERE m.post_id = ?1"
+            " AND m.workspace_id = r.workspace_id AND m.channel_id = r.channel_id AND m.ts = r.ts"
+            ") OR EXISTS ("  # the thread root the post is keyed on, even when it never arrived
+            " SELECT 1 FROM posts p WHERE p.id = ?1"
+            " AND p.workspace_id = r.workspace_id AND p.channel_id = r.channel_id AND p.ts = r.ts"
+            ") LIMIT 1",
+            (post_id,),
+        ).fetchone()
+        return row is not None
+
+    def finish_dry_run(
+        self,
+        owner: str,
+        key: PostKey,
+        outcome: DryRunOutcome,
+        reply_ts: str | None = None,
+        *,
+        extractor: str | None = None,
+        result: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Record the post's dry-run outcome, and the reply's timestamp when Slack gave one. Once only.
+
+        `extractor` and `result` are what was decided and why (the candidates, matches and reasons): they are
+        stored in the same transaction, so a finished post always has its record.
+        """
+        if reply_ts is not None and (outcome is not DryRunOutcome.REPLIED or not _SLACK_TS.fullmatch(reply_ts)):
+            raise ValueError("only a reply has a timestamp, in Slack's form")
+        stored = None if result is None else json.dumps(result, sort_keys=True, separators=(",", ":"))
+        with self._transaction():
+            self._check_lock(owner)
+            post_id = self._post_id(key)
+            if post_id is None:
+                raise KeyError("no such post")
+            now = self._now()
+            cursor = self._db.execute(
+                "UPDATE posts SET dry_run_at = ?, reply_ts = ? WHERE id = ? AND dry_run_at IS NULL",
+                (now, reply_ts, post_id),
+            )
+            if cursor.rowcount != 1:
+                raise StateConflict("the post already has its dry-run outcome")
+            self._db.execute(
+                "INSERT INTO dry_runs (post_id, outcome, extractor, result, created_at) VALUES (?, ?, ?, ?, ?)",
+                (post_id, outcome.value, extractor or None, stored, now),
+            )
+            self._audit(Actor.PLANNER, f"dry_run_{outcome.value}", post_id=post_id)
+
+    def dry_run(self, key: PostKey) -> DryRunRecord | None:
+        """The record of a post's dry run, or None when it has not had one (or had it before migration 0004)."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        row = self._db.execute(
+            "SELECT outcome, extractor, result FROM dry_runs WHERE post_id = ?", (post_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return DryRunRecord(DryRunOutcome(row[0]), row[1], None if row[2] is None else json.loads(row[2]))
 
     def create_plan(self, post: PostKey, input_hash: str, operations: Sequence[Operation]) -> int:
         """Store a new plan revision with one planned request per operation, and return its revision.

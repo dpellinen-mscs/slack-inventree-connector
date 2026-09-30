@@ -26,6 +26,7 @@ from stockthread.core.signals import (
     CONTAINERS,
     LATER,
     LATER_WORDS,
+    LENGTH_UNITS,
     NEGATION,
     NUMBER_WORDS,
     PLAN_OR_CONDITION,
@@ -82,7 +83,7 @@ _PREPOSITIONS = re.compile(r"(?:^|\s)(from|off|out of|to|into|onto|on|in|at|for|
 _SOURCE_WORDS = {"from", "off", "out of"}
 
 _EACH = {"each", "ea", "pc", "pcs", "piece", "pieces", "unit", "units", "x"}
-_LENGTHS = {"ft": "ft", "feet": "ft", "foot": "ft", "m": "m", "meter": "m", "meters": "m", "metre": "m", "metres": "m"}
+_LENGTHS = LENGTH_UNITS
 _NUMBER = r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
 """A number as written: "1,500" is fifteen hundred (a comma between digit groups is not a list comma)."""
 _LIST_COMMA = r"(?<!\d),|,(?!\d)"

@@ -2,6 +2,8 @@
 
 from stockthread.store.db import (
     Attempt,
+    DryRunOutcome,
+    DryRunRecord,
     EventKind,
     EventStatus,
     InstanceLocked,
@@ -11,12 +13,15 @@ from stockthread.store.db import (
     SchemaTooNew,
     StateConflict,
     Store,
+    WaitingPost,
     WriteBlocked,
     new_lock_owner,
 )
 
 __all__ = [
     "Attempt",
+    "DryRunOutcome",
+    "DryRunRecord",
     "EventKind",
     "EventStatus",
     "InstanceLocked",
@@ -26,6 +31,7 @@ __all__ = [
     "SchemaTooNew",
     "StateConflict",
     "Store",
+    "WaitingPost",
     "WriteBlocked",
     "new_lock_owner",
 ]

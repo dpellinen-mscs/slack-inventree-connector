@@ -36,3 +36,10 @@ Nothing is released yet. The connector cannot write stock in this state.
 - A threat model, first version (`docs/threat-model.md`).
 - The Slack listener on Bolt for Python, for Socket Mode and HTTP: payloads are checked, stored in the
   durable queue and only then acknowledged. HTTP requests are always signature-checked.
+- The worker (migration 0004): stored events become grouped posts, and once a post's sibling window
+  has passed it gets one dry-run reply in its thread. Posts that are not read as a movement get no
+  reply. Edits, deletions and clicks are recorded and not acted on yet; a post that was edited or
+  deleted before its dry run gets none, whichever event Slack delivers first. Each dry run keeps a
+  record of what was decided and why (candidates, matches, reasons).
+- The validator reads a quantity expression as a whole ("2 of the 5", "half a dozen") and checks the
+  unit against the text: a swapped, missing or made-up unit needs review.
