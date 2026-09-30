@@ -22,6 +22,7 @@ from stockthread.worker import (
     DRAIN_BATCH,
     GRACE_SECONDS,
     MAX_BACKOFF_SECONDS,
+    MAX_POSTS_PER_STEP,
     RETRY_FOR_SECONDS,
     ROOT_WAIT_SECONDS,
     Worker,
@@ -510,3 +511,22 @@ def test_an_edit_before_the_dry_run_withholds_the_post(
     assert statuses(path) == [("done", None), ("done", "withheld_changed_post")]
     assert audit(path) == ["dry_run_withheld"]
     assert slack.posted == []
+
+
+def test_a_step_answers_a_bounded_number_of_posts_and_stops_when_asked(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    stopping = [False]
+    worker = Worker(settings(), store, OWNER, slack, lambda: CATALOG, clock, stopping=lambda: stopping[0])
+    for n in range(MAX_POSTS_PER_STEP + 2):
+        enqueue(store, message(f"1790000000.{n:06d}", "took 2 Disc 40 from main stock to truck 1", user=f"U0T{n:04d}"))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert len(slack.posted) == MAX_POSTS_PER_STEP
+    stopping[0] = True
+    worker.step()
+    assert len(slack.posted) == MAX_POSTS_PER_STEP
+    stopping[0] = False
+    worker.step()
+    assert len(slack.posted) == MAX_POSTS_PER_STEP + 2

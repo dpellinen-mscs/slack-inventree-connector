@@ -36,6 +36,9 @@ Nothing is released yet. The connector cannot write stock in this state.
 - A threat model, first version (`docs/threat-model.md`).
 - The Slack listener on Bolt for Python, for Socket Mode and HTTP: payloads are checked, stored in the
   durable queue and only then acknowledged. HTTP requests are always signature-checked.
+- `stockthread run`: connects to Slack over Socket Mode and posts dry runs until stopped. It checks
+  the bot token, InvenTree and the catalog before connecting, and refuses a second instance on the
+  same database. HTTP serving is not built yet.
 - The worker (migration 0004): stored events become grouped posts, and once a post's sibling window
   has passed it gets one dry-run reply in its thread. Posts that are not read as a movement get no
   reply. Edits, deletions and clicks are recorded and not acted on yet.

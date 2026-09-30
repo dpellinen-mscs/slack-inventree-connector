@@ -136,7 +136,20 @@ needs.
   public URL and no TLS setup, which suits a small team behind NAT. HTTP
   with the Events API is supported for teams that prefer it. The listeners
   are the same, and only the entry point differs. The repository ships one
-  app manifest per transport.
+  app manifest per transport. `stockthread run` serves Socket Mode today;
+  it refuses HTTP until a production WSGI server is chosen. At startup it
+  takes the instance lock (another instance on the same database refuses
+  to start), puts back events an earlier instance left unfinished, checks
+  the bot token (`auth.test`), the InvenTree version and a first catalog
+  read, and only then connects. A startup failure (a revoked token, no
+  network, InvenTree down) exits with code 2 and names only the error
+  code or class. The worker runs in the main thread. It beats the lock's
+  heartbeat between startup phases and before each batch and each post,
+  answers at most 20 posts per step, and the lock goes stale only after
+  `4 × inventree.timeout_seconds + 60` seconds (at least a minute). An
+  outage makes it back off up to a minute, and a lost lock stops the
+  process with code 1. The first SIGINT, SIGTERM or SIGHUP stops it
+  cleanly, between posts; a second one stops it at once.
 - **Signature verification** applies to HTTP, for events and for
   interactivity payloads. It is always on and has no switch. In HTTP mode
   the connector refuses to start without a signing secret. Tests cover a
@@ -755,6 +768,13 @@ send to InvenTree.
   stored with every extraction.
 
 ## 10. Matching
+
+Matching works on a catalog snapshot (`catalog.py`): every active part
+and every stock location, read from InvenTree at startup and again every
+5 minutes. A record with a missing or mistyped field fails the whole
+read, because a partial catalog would make a part look unknown. When a
+refresh fails, dry runs keep the last snapshot for up to an hour; after
+that, posts wait. Aliases and vehicle assignments are not read yet.
 
 Deterministic. The rules run in this order:
 

@@ -55,7 +55,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 
 ## M1: read-only extraction and matching, dry-run in Slack
 
-- [ ] Slack ingest over Socket Mode and HTTP, with signature verification on HTTP (listener done: `slack/listener.py` checks, stores, then acknowledges; the worker is `worker.py`; serving comes with `stockthread run`)
+- [ ] Slack ingest over Socket Mode and HTTP, with signature verification on HTTP (listener done: `slack/listener.py` checks, stores, then acknowledges; the worker is `worker.py`; `stockthread run` serves Socket Mode; HTTP serving is not built yet)
 - [x] Workspace and app id checks, channel allowlist, subtype allowlist, bot filtering, deduplication (`slack/ingest.py`; in-memory dedup until the durable queue)
 - [ ] Durable event queue (store side done: `slack_events`, migration 0002), and catch-up from channel history after downtime
 - [x] Grouping: photo with caption, sibling messages and threads become one post (`core/grouping.py`, migration 0003; the worker places each message)
@@ -64,7 +64,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 - [ ] Eval runner: scores either extractor against the corpus, using recorded fixtures in CI
 - [x] Validator: deterministic contradiction checks and text-level review reasons (`core/validate.py`)
 - [x] Matcher: exact, normalized, alias, then fuzzy candidates, for parts and locations (`core/matching.py`; the catalog snapshot from InvenTree comes with Resolve)
-- [ ] Dry-run reply in the Slack thread: what would change, and every review reason (renderer `slack/replies.py`; `worker.py` posts it once the sibling window has passed; live once `stockthread run` serves)
+- [ ] Dry-run reply in the Slack thread: what would change, and every review reason (renderer `slack/replies.py`; `worker.py` posts it once the sibling window has passed; `stockthread run` serves it; not yet tried in a real workspace)
 - [ ] Slack app manifests and the quickstart
 
 **DoD:** a post in an allowlisted channel gets a dry-run reply in its thread

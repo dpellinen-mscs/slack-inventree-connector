@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pydantic import SecretStr
 
+from stockthread.catalog import load_catalog
 from stockthread.config import InvenTreeSettings
 from stockthread.inventree import InvenTreeError, InvenTreeReader, ReadOnlyViolation, check_version
 
@@ -47,6 +48,19 @@ async def test_reads_the_seeded_catalog(catalog: Catalog) -> None:
         assert locations[pk]["name"] == path.rpartition("/")[2]
     expected = json.loads((Path(__file__).resolve().parents[2] / "eval/catalog/parts.json").read_text())["parts"]
     assert {parts[catalog.parts[entry["ipn"]]]["IPN"] for entry in expected} == {entry["ipn"] for entry in expected}
+
+
+async def test_the_matcher_catalog_holds_the_seeded_parts_and_locations(catalog: Catalog) -> None:
+    async with make_reader() as reader:
+        loaded = await load_catalog(reader)
+    parts = {part.pk: part for part in loaded.parts}
+    locations = {location.pk: location for location in loaded.locations}
+    for ipn, pk in catalog.parts.items():
+        assert parts[pk].ipn == ipn
+        assert (parts[pk].active, parts[pk].template, parts[pk].virtual) == (True, False, False)
+    for path, pk in catalog.locations.items():
+        assert locations[pk].path == path  # pathstring is the full path, joined with "/"
+    assert locations[catalog.locations["Warehouse"]].structural
 
 
 async def test_stock_items_leave_out_sub_locations(scratch: Scratch) -> None:

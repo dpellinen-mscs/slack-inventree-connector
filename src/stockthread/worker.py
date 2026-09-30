@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -60,6 +61,10 @@ LATE_AFTER_SECONDS = 10 * 60
 RETRY_FOR_SECONDS = 15 * 60
 """How long posting a reply is retried, with backoff, before the post is finished without one."""
 MAX_BACKOFF_SECONDS = 60
+HEARTBEAT_SECONDS = 10.0
+"""The worker beats the instance lock at most this often, before each batch and each post, so one long step
+(Slack or InvenTree slow to answer) never lets the lock look stale."""
+MAX_POSTS_PER_STEP = 20
 DRAIN_BATCH = 50
 MAX_DRAIN_BATCHES = 20
 """A step drains at most this many batches. While events are still pending no post is due, so a backlog
@@ -69,7 +74,18 @@ _SLACK_TS = re.compile(r"\d{1,10}\.\d{6}")
 
 
 class SlackPoster(Protocol):
-    def chat_postMessage(self, **kwargs: Any) -> Any: ...  # slack_sdk's name
+    """The one Web API call the worker makes (slack_sdk's `WebClient`)."""
+
+    def chat_postMessage(
+        self,
+        *,
+        channel: str,
+        thread_ts: str,
+        text: str,
+        blocks: Sequence[dict[str, Any]],
+        unfurl_links: bool,
+        unfurl_media: bool,
+    ) -> Any: ...
 
 
 class _AlreadyStored:
@@ -97,7 +113,16 @@ class Worker:
     """The current catalog snapshot. A failure here is an outage: it propagates, and the post waits."""
     clock: Callable[[], datetime]
     """Must return an aware datetime."""
+    stopping: Callable[[], bool] = lambda: False
+    """Checked between posts, so a stop request does not wait for a whole backlog."""
     _failures: dict[PostKey, _Failures] = field(default_factory=dict)
+    _beat_at: float = float("-inf")
+
+    def beat(self, *, now: bool = False) -> None:
+        """Beat the instance lock's heartbeat, at most every HEARTBEAT_SECONDS unless `now`. Raises LockLost."""
+        if now or time.monotonic() - self._beat_at >= HEARTBEAT_SECONDS:
+            self.store.heartbeat(self.owner)
+            self._beat_at = time.monotonic()
 
     def step(self) -> int:
         """Drain the queue and, once it is empty, reply to the posts that are due. Returns how much was done."""
@@ -108,6 +133,7 @@ class Worker:
         """Handle pending events: how many, and whether the queue is empty now."""
         done = 0
         for _ in range(MAX_DRAIN_BATCHES):
+            self.beat()
             events = self.store.claim_events(self.owner, limit=DRAIN_BATCH)
             for event in events:
                 try:
@@ -175,6 +201,9 @@ class Worker:
             failures = self._failures.get(post.key)
             if failures is not None and failures.next_try > now:
                 continue
+            if self.stopping() or done >= MAX_POSTS_PER_STEP:
+                break  # the rest wait for the next step
+            self.beat()
             self._reply(post, now)
             done += 1
         return done
@@ -198,6 +227,7 @@ class Worker:
             self._finish(key, DryRunOutcome.SILENT)
             return
         catalog = self.catalog()
+        self.beat()  # a catalog read can take a while
         late = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if age > LATE_AFTER_SECONDS else ()
         try:
             body = self._render(extraction, messages, poster, catalog, late)
@@ -209,7 +239,12 @@ class Worker:
         self.store.close_siblings(self.owner, key)
         try:
             response = self.slack.chat_postMessage(
-                channel=key.channel_id, thread_ts=key.ts, unfurl_links=False, unfurl_media=False, **body
+                channel=key.channel_id,
+                thread_ts=key.ts,
+                text=body["text"],
+                blocks=body["blocks"],
+                unfurl_links=False,
+                unfurl_media=False,
             )
         except Exception as error:  # any Slack or network error: retry with backoff, then give up
             self._post_failed(key, now, error)
