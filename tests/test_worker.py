@@ -684,3 +684,60 @@ def test_a_post_the_pipeline_breaks_on_records_the_error_class(
     record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
     assert record is not None
     assert (record.outcome, record.result) == (DryRunOutcome.FAILED, {"error": "error_runtime_error"})
+
+
+class RateLimited(Exception):
+    """Shaped like slack_sdk's SlackApiError: a response with headers."""
+
+    def __init__(self, headers: dict[str, Any]) -> None:
+        super().__init__("ratelimited")
+        self.response = type("Response", (), {"headers": headers})()
+
+
+@pytest.mark.parametrize(
+    ("headers", "waits"),
+    [({"Retry-After": "120"}, 120), ({"retry-after": 45}, 45), ({"Retry-After": "soon"}, 2), ({}, 2)],
+)
+def test_a_rate_limited_reply_waits_between_steps_for_as_long_as_slack_asks(
+    headers: dict[str, Any], waits: int, worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    calls: list[int] = []
+    post = slack.chat_postMessage
+
+    def limited(**kwargs: Any) -> dict[str, Any]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RateLimited(headers)  # returns at once: nothing sleeps inside the call
+        return post(**kwargs)
+
+    slack.chat_postMessage = limited  # type: ignore[method-assign]
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    clock.at(f"{1790000030 + waits - 1}.000000")
+    worker.step()
+    assert len(calls) == 1  # not before the time Slack named
+    clock.at(f"{1790000030 + waits}.000000")
+    worker.step()
+    assert len(slack.posted) == 1
+    assert audit(path) == ["dry_run_replied"]
+
+
+def test_an_instance_that_lost_the_lock_while_it_was_blocked_does_not_post(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    def catalog() -> Catalog:
+        with sqlite3.connect(path) as raw:  # the read took so long that another instance took the lock over
+            raw.execute("UPDATE instance_lock SET owner = 'instance-b'")
+        return CATALOG
+
+    worker = Worker(settings(), store, OWNER, slack, catalog, clock)
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.beat(now=True)  # a fresh beat: the throttled one would not look again for 10 seconds
+    with pytest.raises(LockLost):
+        worker.step()
+    assert slack.posted == []  # the new holder posts the one reply
+    assert replies(path) == [(ROOT, None, False)]

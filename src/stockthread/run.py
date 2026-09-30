@@ -13,7 +13,7 @@ import asyncio
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -39,6 +39,11 @@ CATALOG_RETRY_SECONDS = 30
 CATALOG_MAX_AGE_SECONDS = 60 * 60
 """A refresh that fails keeps the last snapshot for dry runs, up to this age; after that, posts wait."""
 MAX_ERROR_BACKOFF_SECONDS = 60.0
+SLACK_TIMEOUT_SECONDS = 15
+"""For one Slack call. With the one retry of a broken connection, a call blocks for about twice this, which
+must stay well under LOCK_STALE_AFTER: the worker checks the lock right before it posts."""
+CATALOG_MARGIN_SECONDS = 30
+"""A catalog read is cut off this long before the lock could go stale."""
 CATALOG_UNSET = Catalog(parts=(), locations=())
 """Placeholder until startup has read the catalog; the worker does not run before that."""
 
@@ -81,11 +86,27 @@ class CatalogCache:
 
 
 def inventree_catalog(settings: Settings) -> Callable[[], Catalog]:
+    """Read the whole catalog, within a time limit: a read of many slow pages must end before another
+    instance could take the lock over. A cut-off read is an outage like any other."""
+    limit = (lock_stale_after(settings) - timedelta(seconds=CATALOG_MARGIN_SECONDS)).total_seconds()
+
     async def read() -> Catalog:
         async with InvenTreeReader(settings.inventree, settings.secrets.inventree_token) as reader:
             return await load_catalog(reader)
 
-    return lambda: asyncio.run(read())
+    return lambda: read_within(read, limit)
+
+
+def read_within(read: Callable[[], Coroutine[Any, Any, Catalog]], limit: float) -> Catalog:
+    async def limited() -> Catalog:
+        try:
+            return await asyncio.wait_for(read(), limit)
+        except TimeoutError:
+            raise InvenTreeError(
+                f"the catalog read took longer than {limit:.0f} s; raise inventree.timeout_seconds"
+            ) from None
+
+    return asyncio.run(limited())
 
 
 def check_inventree(settings: Settings) -> str:
@@ -140,8 +161,12 @@ def run(
         log.info("This version only posts dry runs: no stock is ever written.")
         bot_token = settings.secrets.slack_bot_token.get_secret_value()
         client = slack_client or WebClient(token=bot_token)
-        if not any(isinstance(handler, RateLimitErrorRetryHandler) for handler in client.retry_handlers):
-            client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=2))
+        # No handler that sleeps for Slack's Retry-After inside a call: it could outlast the instance lock. A
+        # rate-limited reply fails instead, and the worker tries it again once the time Slack named has passed.
+        client.retry_handlers = [
+            handler for handler in client.retry_handlers if not isinstance(handler, RateLimitErrorRetryHandler)
+        ]
+        client.timeout = SLACK_TIMEOUT_SECONDS
         cache = CatalogCache(catalog or inventree_catalog(settings))
         try:
             identity = identify(client, settings.slack)
@@ -186,8 +211,8 @@ def run(
 
 
 def lock_stale_after(settings: Settings) -> timedelta:
-    """Longer than a worker step can block between two beats: a Slack call with its retries, or a few slow
-    InvenTree pages."""
+    """Longer than the worker can block between two beats: a Slack call (SLACK_TIMEOUT_SECONDS, tried twice),
+    or a catalog read, which is cut off CATALOG_MARGIN_SECONDS before this."""
     return max(LOCK_STALE_AFTER, timedelta(seconds=4 * settings.inventree.timeout_seconds + 60))
 
 
@@ -205,7 +230,7 @@ def _loop(worker: Worker, stop: threading.Event) -> int:
             # An outage (InvenTree, Slack, the disk): wait and try again. The class only: a message could
             # quote a post.
             errors += 1
-            wait = min(2.0**errors, MAX_ERROR_BACKOFF_SECONDS)
+            wait = min(2.0 ** min(errors, 10), MAX_ERROR_BACKOFF_SECONDS)  # a long outage must not overflow
             log.warning("worker step failed (%s); retrying in %.0f s", type(error).__name__, wait)
         stop.wait(wait)
     return 0

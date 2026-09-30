@@ -256,6 +256,9 @@ class Worker:
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
         # before the outcome is recorded posts the reply again at restart; a duplicate beats a silent drop.
         self.store.close_siblings(self.owner, key)
+        # Checked right before posting, whatever the last beat: an instance that lost the lock while it was
+        # blocked must never post a reply the new holder posts too. Raises LockLost.
+        self.beat(now=True)
         try:
             response = self.slack.chat_postMessage(
                 channel=key.channel_id,
@@ -312,7 +315,7 @@ class Worker:
     ) -> None:
         failures = self._failures.get(key) or _Failures(first=now, count=0, next_try=now)
         failures.count += 1
-        failures.next_try = now + min(2 ** min(failures.count, 16), MAX_BACKOFF_SECONDS)
+        failures.next_try = now + max(min(2 ** min(failures.count, 16), MAX_BACKOFF_SECONDS), _retry_after(error))
         self._failures[key] = failures
         log.warning("post %s: reply failed (%s), attempt %d", key.ts, type(error).__name__, failures.count)
         if now - failures.first >= RETRY_FOR_SECONDS:
@@ -422,6 +425,17 @@ def _record(extraction: Extraction, views: Sequence[MovementView], *, late: bool
             for view in views
         ],
     }
+
+
+def _retry_after(error: Exception) -> int:
+    """The seconds a rate-limited Slack call asks to wait (its Retry-After header), or 0. The worker waits
+    between steps and never inside a call, so the instance lock keeps its heartbeat."""
+    headers: Any = getattr(getattr(error, "response", None), "headers", None) or {}
+    try:
+        stated = next(value for name, value in dict(headers).items() if str(name).lower() == "retry-after")
+        return min(max(int(stated), 0), RETRY_FOR_SECONDS)
+    except (StopIteration, TypeError, ValueError):
+        return 0
 
 
 def _code(error: Exception) -> str:

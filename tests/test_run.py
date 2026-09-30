@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import signal
 import sqlite3
@@ -130,7 +131,9 @@ def test_a_queued_post_gets_its_dry_run_then_the_lock_is_released(tmp_path: Path
     assert [reply["thread_ts"] for reply in client.posted] == ["1790000000.000100"]
     assert "*Disc 40*" in json.dumps(client.posted[0]["blocks"])
     assert connection.calls == ["connect", "close"]
-    assert any(isinstance(handler, RateLimitErrorRetryHandler) for handler in client.retry_handlers)
+    # Nothing may sleep for Slack's Retry-After inside a call, and a call is short: the lock outlives both.
+    assert not any(isinstance(handler, RateLimitErrorRetryHandler) for handler in client.retry_handlers)
+    assert 2 * client.timeout < run_module.LOCK_STALE_AFTER.total_seconds()
     assert lock_is_free(database)
 
 
@@ -375,3 +378,39 @@ async def test_empty_optional_fields_and_unusable_parts_are_read_as_they_are() -
         catalog = await load_catalog(client)
     assert catalog.parts == (PartRecord(2, "", "Disc 40", "", True, True, True),)
     assert catalog.locations == (LocationRecord(10, "Warehouse/Main Stock", "", True),)
+
+
+def test_a_long_outage_keeps_backing_off_without_overflowing(monkeypatch: pytest.MonkeyPatch) -> None:
+    stop = threading.Event()
+    waits: list[float] = []
+
+    class Broken:
+        steps = 0
+
+        def beat(self) -> None:
+            pass
+
+        def step(self) -> int:
+            self.steps += 1
+            if self.steps > 1100:  # 2.0 ** 1024 overflows a float
+                stop.set()
+            raise ConnectionError("synthetic outage")
+
+    monkeypatch.setattr(stop, "wait", lambda seconds: waits.append(seconds))
+    assert run_module._loop(Broken(), stop) == 0  # type: ignore[arg-type]
+    assert len(waits) == 1101
+    assert waits[:7] == [2.0, 4.0, 8.0, 16.0, 32.0, 60.0, 60.0]
+    assert set(waits[6:]) == {60.0}
+
+
+def test_a_catalog_read_is_cut_off_before_the_lock_could_go_stale() -> None:
+    async def slow() -> Catalog:
+        await asyncio.sleep(30)
+        return CATALOG
+
+    async def quick() -> Catalog:
+        return CATALOG
+
+    with pytest.raises(InvenTreeError, match="longer than 0 s"):
+        run_module.read_within(slow, 0.05)
+    assert run_module.read_within(quick, 5) == CATALOG

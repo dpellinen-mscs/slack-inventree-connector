@@ -146,7 +146,15 @@ needs.
   code or class. The worker runs in the main thread. It beats the lock's
   heartbeat between startup phases and before each batch and each post,
   answers at most 20 posts per step, and the lock goes stale only after
-  `4 × inventree.timeout_seconds + 60` seconds (at least a minute). An
+  `4 × inventree.timeout_seconds + 60` seconds (at least a minute).
+  Nothing blocks longer than that under the lock: a Slack call times out
+  after 15 seconds and never sleeps for a rate limit (the reply is tried
+  again in a later step, once the time in Slack's `Retry-After` has
+  passed), and a catalog read is cut off 30 seconds before the lock could
+  go stale (an outage like any other; a large catalog on a slow server
+  needs a higher `inventree.timeout_seconds`). The worker also checks the
+  lock right before it posts, so an instance that lost it never posts a
+  reply the new holder posts too. An
   outage makes it back off up to a minute, and a lost lock stops the
   process with code 1. The first SIGINT, SIGTERM or SIGHUP stops it
   cleanly, between posts; a second one stops it at once.
