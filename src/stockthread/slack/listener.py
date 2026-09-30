@@ -78,7 +78,7 @@ class ThreadStores:
         return store
 
 
-class _Enqueue:
+class Enqueue:
     """`ingest.SeenEvents` backed by the durable queue: an accepted event is stored under its event id."""
 
     def __init__(self, store: Store, body: str) -> None:
@@ -97,7 +97,7 @@ class Listener:
         self._stores = stores
 
     def on_event(self, body: Mapping[str, Any]) -> Decision:
-        decision = ingest_event(body, self._settings, _Enqueue(self._stores(), _dump(body)))
+        decision = ingest_event(body, self._settings, Enqueue(self._stores(), dump(body)))
         _log(decision, "event")
         return decision
 
@@ -107,7 +107,7 @@ class Listener:
             key = _click_key(decision, body)
             if key is None:
                 decision = Drop(DropReason.MALFORMED)
-            elif not self._stores().enqueue_event(key, "interactive", _dump(body)):
+            elif not self._stores().enqueue_event(key, "interactive", dump(body)):
                 decision = Drop(DropReason.DUPLICATE_EVENT)
         _log(decision, "interactive")
         return decision
@@ -180,7 +180,7 @@ def _click_key(click: Click, body: Mapping[str, Any]) -> str | None:
     return f"click:{click.channel}:{click.message_ts}:{click.user}:{action_ts}"
 
 
-def _dump(body: Mapping[str, Any]) -> str:
+def dump(body: Mapping[str, Any]) -> str:
     return json.dumps(body, separators=(",", ":"), sort_keys=True)
 
 

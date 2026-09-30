@@ -57,7 +57,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 
 - [ ] Slack ingest over Socket Mode and HTTP, with signature verification on HTTP (listener done: `slack/listener.py` checks, stores, then acknowledges; the worker is `worker.py`; `stockthread run` serves Socket Mode; HTTP serving is not built yet)
 - [x] Workspace and app id checks, channel allowlist, subtype allowlist, bot filtering, deduplication (`slack/ingest.py`; in-memory dedup until the durable queue)
-- [ ] Durable event queue (store side done: `slack_events`, migration 0002), and catch-up from channel history after downtime
+- [x] Durable event queue (`slack_events`, migration 0002), and catch-up from channel history after downtime (`slack/catchup.py`, migration 0006; a deletion made during downtime is not seen)
 - [x] Grouping: photo with caption, sibling messages and threads become one post (`core/grouping.py`, migration 0003; the worker places each message)
 - [x] Rule-based extractor that needs no LLM (`core/extract_rules.py`; one message per post for now, declines the rest)
 - [ ] LLM extractor behind a provider interface, with a strict output schema (`llm/extract.py`: prompt `llm-0.1`, strict parser, secret masking; `llm/openai_compatible.py`; `[llm]` settings; the worker asks it for the posts the rules decline, ADR 0011; not yet scored on a model)
