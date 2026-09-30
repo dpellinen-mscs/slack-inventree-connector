@@ -133,7 +133,7 @@ job on PostgreSQL, prove each line below.
 
 ## M4: alias learning
 
-- [ ] Confirmed corrections become alias proposals
+- [ ] A confirmed plan stores its whole-word matches and picked candidates as aliases, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md))
 - [ ] Only a confirmation by an authorized human creates an alias
 - [ ] Alias admin: list, remove and export
 - [ ] Aliases feed the matcher and are covered by the corpus

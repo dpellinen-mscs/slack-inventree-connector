@@ -878,6 +878,9 @@ Deterministic. The rules run in this order:
    keywords and aliases; path and description for locations). "Disc 40"
    finds "Norvane Disc 40 Access Point". A word such as "3ft" or "van3"
    may be split into letters and digits.
+   A match by this rule never applies without a click; once a person
+   confirms it, the text becomes an alias
+   ([0012](decisions/0012-first-confirmation-becomes-alias.md)).
 5. **fuzzy**: as rule 4, but a word of 4 letters or more may be misspelled
    (`difflib` similarity 0.8, so "ondrl" finds "Ondrel"). Words with digits
    never get this allowance, so "truck 7" never becomes "Truck 1".
