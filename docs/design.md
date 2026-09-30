@@ -251,12 +251,22 @@ needs.
   - `withheld`: a message cannot be read again (its body expired), was
     edited or deleted before the dry run, or the post is older than
     `plan_expiry_hours`. A post is never read with a message left out.
+    Every edit and deletion is noted by message key (`revised_messages`),
+    so one that Slack delivers before the message it changes still
+    withholds the post when that message arrives.
   - `failed`: the pure pipeline raised on this post. It is logged by error
     class and line, never with a message or a traceback, and it cannot stop
     later posts. A catalog or database failure is an outage instead: it
     propagates, and the post waits.
   - `gave_up`: posting kept failing for 15 minutes, with backoff up to a
     minute between tries.
+
+  The outcome is stored with what was decided and why (`dry_runs`, in the
+  same transaction): the extractor's name and version, the candidate
+  movements, every match with its rule and InvenTree ids, the validator's
+  reasons and the reasons the reply showed. A withheld post records why,
+  and a failed one the error class. The result quotes words of the post,
+  so it is never logged, and retention can expire it.
 
   A crash between posting and recording posts the reply again: a
   duplicate dry run beats a silent drop. Until M2, edits and deletions
@@ -427,7 +437,10 @@ can also steer the gate by what it omits. These rules close that path:
   on the model to raise one.
 - **Grounding.** Each item text must appear in the message, and each
   quantity must correspond to a number or number word in the message.
-  Anything else is a review reason.
+  A quantity expression is read as a whole: in "2 of the 5" only 2 is
+  stated, and "half a dozen" states 6. The unit must be the one the text
+  gives right before the item, in any spelling: a swapped, missing or
+  made-up unit changes the amount. Anything else is a review reason.
 - **Limits.** A quantity above `policy.max_quantity` is a review reason.
   So is a quantity above the stock on hand, which the resolve step checks.
 - **Where.** `core/validate.py` implements the rules above that need no
@@ -704,6 +717,8 @@ and needs no extra service.
 | `slack_events` | Raw events with a processing status, unique on `event_id` |
 | `posts` | One row per post, unique on post key |
 | `post_messages` | Which post each message belongs to, unique on `(workspace, channel, ts)`: ids, author and thread, never text (migration 0003) |
+| `revised_messages` | Message keys that were edited or deleted, in any arrival order: ids only (migration 0004) |
+| `dry_runs` | One row per post: the outcome, the extractor, and the result as JSON (candidates, matches, reasons) (migration 0004) |
 | `plans` | Plan revisions with the hash of their input messages |
 | `extractions` | Extractor name and version, prompt version, raw output |
 | `candidates` | Candidate movements and line items |

@@ -11,8 +11,12 @@ Two steps, both run only by the holder of the instance lock:
    A post that is not a movement, or that the extractor declines, gets no reply.
 
 Nothing here writes to InvenTree. Message text is read from the stored raw events and never logged. Edits,
-deletions and clicks are M2 (plan revisions and review): an edit or a deletion of a message whose post has
-not had its dry run yet withholds that post, and otherwise they are finished as dropped with a short code.
+deletions and clicks are M2 (plan revisions and review). Until then every edit and deletion is noted by
+message key, in whatever order Slack delivers it, and a post that holds a noted message and has not had its
+dry run is withheld: its original text would be wrong.
+
+Every finished post keeps a record of what was decided and why (`Store.dry_run`): the extractor, the
+candidates, every match with its rule and ids, and the review reasons.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ import logging
 import re
 import time
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -45,7 +49,7 @@ from stockthread.core.model import (
 )
 from stockthread.core.validate import validate
 from stockthread.slack.ingest import Deleted, Drop, Edited, NewMessage, ingest_event
-from stockthread.slack.replies import MovementView, dry_run_reply
+from stockthread.slack.replies import MovementView, dry_run_reply, gate_reasons
 from stockthread.store import DryRunOutcome, EventStatus, LockLost, Store, WaitingPost
 
 log = logging.getLogger(__name__)
@@ -167,11 +171,13 @@ class Worker:
                 changed = PostKey(workspace, decision.message.channel, decision.message.ts)
             else:
                 changed = PostKey(workspace, decision.channel, decision.ts)
+            # Noted first, and by message key: the message itself may arrive after its edit.
+            self.store.note_revision(self.owner, changed, event_id)
             post = self.store.waiting_post_of(changed)
             if post is None:
                 return EventStatus.DROPPED, "revisions_not_handled_yet"
             # Changed before its dry run: reading the original text would be wrong. Revisions are M2.
-            self._finish(post, DryRunOutcome.WITHHELD)
+            self._finish(post, DryRunOutcome.WITHHELD, result={"withheld": "changed"})
             return EventStatus.DONE, "withheld_changed_post"
         if not isinstance(decision, NewMessage):
             return EventStatus.DROPPED, "not_a_message"
@@ -210,11 +216,18 @@ class Worker:
 
     def _reply(self, post: WaitingPost, now: Decimal) -> None:
         key = post.key
-        read = self._messages(key)
         age = now - seconds(post.newest_ts)
-        if read is None or age > self.settings.slack.plan_expiry_hours * 3600:
-            log.info("post %s: withheld (%s)", key.ts, "unreadable" if read is None else "too old")
-            self._finish(key, DryRunOutcome.WITHHELD)
+        read = None
+        if self.store.post_has_revision(key):
+            why = "changed"  # an edit or a deletion, even one that arrived before the message it changes
+        elif age > self.settings.slack.plan_expiry_hours * 3600:
+            why = "too_old"
+        else:
+            read = self._messages(key)
+            why = "unreadable"
+        if read is None:
+            log.info("post %s: withheld (%s)", key.ts, why)
+            self._finish(key, DryRunOutcome.WITHHELD, result={"withheld": why})
             return
         messages, poster = read
         try:
@@ -224,15 +237,21 @@ class Worker:
             return
         if extraction.declined or not extraction.movements:
             log.info("post %s: no reply (%s)", key.ts, "declined" if extraction.declined else "not a movement")
-            self._finish(key, DryRunOutcome.SILENT)
+            self._finish(key, DryRunOutcome.SILENT, extraction.extractor, _record(extraction, (), late=False))
             return
         catalog = self.catalog()
         self.beat()  # a catalog read can take a while
-        late = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if age > LATE_AFTER_SECONDS else ()
+        late = age > LATE_AFTER_SECONDS
         try:
-            body = self._render(extraction, messages, poster, catalog, late)
+            views = self._views(extraction, messages, poster, catalog, late)
+            record = _record(extraction, views, late=late)
+            body = dry_run_reply(
+                views,
+                {part.pk: part.name for part in catalog.parts},
+                {location.pk: location.path for location in catalog.locations},
+            )
         except Exception as error:
-            self._broken(key, error)
+            self._broken(key, error, extraction.extractor)
             return
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
         # before the outcome is recorded posts the reply again at restart; a duplicate beats a silent drop.
@@ -247,29 +266,37 @@ class Worker:
                 unfurl_media=False,
             )
         except Exception as error:  # any Slack or network error: retry with backoff, then give up
-            self._post_failed(key, now, error)
+            self._post_failed(key, now, error, extraction.extractor, record)
             return
         self._failures.pop(key, None)
         reply_ts = response.get("ts")
         valid = isinstance(reply_ts, str) and _SLACK_TS.fullmatch(reply_ts)
-        self.store.finish_dry_run(self.owner, key, DryRunOutcome.REPLIED, reply_ts if valid else None)
+        self.store.finish_dry_run(
+            self.owner,
+            key,
+            DryRunOutcome.REPLIED,
+            reply_ts if valid else None,
+            extractor=extraction.extractor,
+            result=record,
+        )
 
-    def _render(
+    def _views(
         self,
         extraction: Extraction,
         messages: Sequence[MessageInput],
         poster: str,
         catalog: Catalog,
-        late: tuple[ReviewReason, ...],
-    ) -> dict[str, Any]:
+        late: bool,
+    ) -> list[MovementView]:
         text = "\n".join(message.text for message in messages)
-        views = [
+        lateness = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if late else ()
+        return [
             MovementView(
                 movement=movement,
                 items=[_part(item.item_text, catalog, poster) for item in movement.line_items],
                 source=_location(movement.source_text, catalog, poster),
                 destination=_location(movement.destination_text, catalog, poster),
-                reasons=late
+                reasons=lateness
                 + validate(
                     movement,
                     text,
@@ -279,30 +306,33 @@ class Worker:
             )
             for movement in extraction.movements
         ]
-        return dry_run_reply(
-            views,
-            {part.pk: part.name for part in catalog.parts},
-            {location.pk: location.path for location in catalog.locations},
-        )
 
-    def _post_failed(self, key: PostKey, now: Decimal, error: Exception) -> None:
+    def _post_failed(
+        self, key: PostKey, now: Decimal, error: Exception, extractor: str, record: Mapping[str, Any]
+    ) -> None:
         failures = self._failures.get(key) or _Failures(first=now, count=0, next_try=now)
         failures.count += 1
-        failures.next_try = now + min(2**failures.count, MAX_BACKOFF_SECONDS)
+        failures.next_try = now + min(2 ** min(failures.count, 16), MAX_BACKOFF_SECONDS)
         self._failures[key] = failures
         log.warning("post %s: reply failed (%s), attempt %d", key.ts, type(error).__name__, failures.count)
         if now - failures.first >= RETRY_FOR_SECONDS:
             self._failures.pop(key)
-            self._finish(key, DryRunOutcome.GAVE_UP)
+            self._finish(key, DryRunOutcome.GAVE_UP, extractor, record)
 
-    def _broken(self, key: PostKey, error: Exception) -> None:
+    def _broken(self, key: PostKey, error: Exception, extractor: str | None = None) -> None:
         """The pure pipeline raised on this post: it gets no reply, so it cannot stop every later post."""
         _log_failure("post", key.ts, error)
-        self._finish(key, DryRunOutcome.FAILED)
+        self._finish(key, DryRunOutcome.FAILED, extractor, {"error": _code(error)})
 
-    def _finish(self, key: PostKey, outcome: DryRunOutcome) -> None:
+    def _finish(
+        self,
+        key: PostKey,
+        outcome: DryRunOutcome,
+        extractor: str | None = None,
+        result: Mapping[str, Any] | None = None,
+    ) -> None:
         self.store.close_siblings(self.owner, key)
-        self.store.finish_dry_run(self.owner, key, outcome)
+        self.store.finish_dry_run(self.owner, key, outcome, extractor=extractor, result=result)
 
     def _messages(self, key: PostKey) -> tuple[Sequence[MessageInput], str] | None:
         """The post's messages as the extractor takes them, and the author of the first one.
@@ -340,6 +370,58 @@ def _part(text: str | None, catalog: Catalog, poster: str) -> Match:
 
 def _location(text: str | None, catalog: Catalog, poster: str) -> Match | None:
     return match_location(text, catalog, poster) if text else None
+
+
+def _match(match: Match | None) -> dict[str, Any] | None:
+    if match is None:
+        return None
+    return {
+        "status": match.status.value,
+        "rule": None if match.rule is None else match.rule.value,
+        "record": match.record,
+        "candidates": list(match.candidates),
+    }
+
+
+def _number(value: Decimal | None) -> str | None:
+    return None if value is None else format(value, "f")
+
+
+def _record(extraction: Extraction, views: Sequence[MovementView], *, late: bool) -> dict[str, Any]:
+    """What the dry run decided, for the audit trail: candidates as extracted, matches (InvenTree ids and the
+    rule), and every reason that kept a movement from "could apply". It quotes the post: stored, never logged."""
+    return {
+        "declined": extraction.declined,
+        "post_flags": sorted(flag.value for flag in extraction.post_flags),
+        "late": late,
+        "movements": [
+            {
+                "type": view.movement.movement_type.value,
+                "flags": sorted(flag.value for flag in view.movement.flags),
+                "source_text": view.movement.source_text,
+                "source": _match(view.source),
+                "destination_text": view.movement.destination_text,
+                "destination": _match(view.destination),
+                "items": [
+                    {
+                        "item_text": item.item_text,
+                        "quantity": _number(item.quantity),
+                        "unit": item.unit,
+                        "pack_size": _number(item.pack_size),
+                        "serials": list(item.serials),
+                        "part": _match(part),
+                    }
+                    for item, part in zip(view.movement.line_items, view.items, strict=True)
+                ],
+                "reasons": [
+                    {"code": reason.code.value, "source": reason.source.value, "detail": reason.detail}
+                    for reason in view.reasons
+                ],
+                "gate": sorted([code.value, detail] for code, detail in gate_reasons(view)),
+            }
+            for view in views
+        ],
+    }
 
 
 def _code(error: Exception) -> str:

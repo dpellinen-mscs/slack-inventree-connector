@@ -26,6 +26,7 @@ from stockthread.core.signals import (
     CONTAINERS,
     LATER,
     LATER_WORDS,
+    LENGTH_UNITS,
     NEGATION,
     NUMBER_WORDS,
     PLAN_OR_CONDITION,
@@ -82,7 +83,7 @@ _PREPOSITIONS = re.compile(r"(?:^|\s)(from|off|out of|to|into|onto|on|in|at|for|
 _SOURCE_WORDS = {"from", "off", "out of"}
 
 _EACH = {"each", "ea", "pc", "pcs", "piece", "pieces", "unit", "units", "x"}
-_LENGTHS = {"ft": "ft", "feet": "ft", "foot": "ft", "m": "m", "meter": "m", "meters": "m", "metre": "m", "metres": "m"}
+_LENGTHS = LENGTH_UNITS
 _NUMBER = r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
 """A number as written: "1,500" is fifteen hundred (a comma between digit groups is not a list comma)."""
 _LIST_COMMA = r"(?<!\d),|,(?!\d)"
@@ -102,7 +103,8 @@ _NOT_STOCK = re.compile(
 """Words that name time, people or events, or a report of what is left: "3 hours at the Smith job",
 "2 ONTs left on truck 1" are not movements."""
 _NOT_A_PLACE = re.compile(
-    rf"\b({LATER_WORDS}|today|yesterday|morning|afternoon|lol|jk|haha|kidding|maybe|\d{1, 2}(:\d{2})?\s*(am|pm))\b"
+    rf"\b({LATER_WORDS}|today|yesterday|morning|afternoon|lol|jk|haha|kidding|maybe"
+    r"|\d{1,2}(:\d{2})?\s*(am|pm))\b"
     r"|^(find|get|see|check|fix|help|do|make|go)\b",
     re.IGNORECASE,
 )

@@ -3,6 +3,7 @@
 from stockthread.store.db import (
     Attempt,
     DryRunOutcome,
+    DryRunRecord,
     EventKind,
     EventStatus,
     InstanceLocked,
@@ -20,6 +21,7 @@ from stockthread.store.db import (
 __all__ = [
     "Attempt",
     "DryRunOutcome",
+    "DryRunRecord",
     "EventKind",
     "EventStatus",
     "InstanceLocked",

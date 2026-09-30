@@ -83,7 +83,7 @@ def test_items_and_quantities_must_be_in_the_text() -> None:
     grounded = {
         "12": "took a dozen Disc 40 from main stock to truck 1",
         "2": "took two Disc 40 from main stock to truck 1",
-        "0.5": "took half a box of Disc 40 from main stock to truck 1",
+        "0.5": "took half a Disc 40 from main stock to truck 1",
         "1": "took a Disc 40 from main stock to truck 1",
     }
     for quantity, text in grounded.items():
@@ -315,6 +315,9 @@ def test_one_mention_grounds_one_line() -> None:
         ("ONTs", "2", "took 2.000 ONTs from shop to truck 1"),
         ("ONTs", "2", "took 2 million ONTs from shop to truck 1"),
         ("ONTs", "2", "took 2 grand worth of ONTs from shop to truck 1"),
+        ("ONTs", "1", "took 2 of the ONTs from shop to truck 1"),
+        ("ONTs", "1", "took two of the ONTs from shop to truck 1"),
+        ("ONTs", "1", "took 2 of those ONTs from shop to truck 1"),
     ],
 )
 def test_adversarial_quantities_are_not_grounded(item: str, quantity: str, text: str) -> None:
@@ -344,3 +347,73 @@ def test_other_actors_in_more_shapes(text: str) -> None:
 )
 def test_the_poster_is_not_another_actor(text: str) -> None:
     assert ReasonCode.ACTOR_NOT_POSTER not in codes(take(), text)
+
+
+def unit_take(quantity: str, unit: str | None, item: str = "cable") -> CandidateMovement:
+    return take(line_items=(LineItem(item, Decimal(quantity), unit),))
+
+
+@pytest.mark.parametrize(
+    ("text", "quantity"),
+    [
+        ("took 2 of the 5 Disc 40 from main stock to truck 1", "5"),
+        ("took two of the 5 Disc 40 from main stock to truck 1", "5"),
+        ("took 2 of 5 Disc 40 from main stock to truck 1", "5"),
+        ("took half a dozen Disc 40 from main stock to truck 1", "0.5"),
+        ("took half a dozen Disc 40 from main stock to truck 1", "12"),
+        ("took half dozen Disc 40 from main stock to truck 1", "0.5"),
+        ("took half a pair of Disc 40 from main stock to truck 1", "0.5"),
+    ],
+)
+def test_a_part_of_a_quantity_expression_is_not_the_quantity(text: str, quantity: str) -> None:
+    assert ReasonCode.QUANTITY_NOT_IN_TEXT in codes(take(quantity=quantity), text)
+
+
+@pytest.mark.parametrize(
+    ("text", "quantity"),
+    [
+        ("took 2 of the 5 Disc 40 from main stock to truck 1", "2"),
+        ("took two of the Disc 40 from main stock to truck 1", "2"),
+        ("took half a dozen Disc 40 from main stock to truck 1", "6"),
+    ],
+)
+def test_a_whole_quantity_expression_states_its_quantity(text: str, quantity: str) -> None:
+    assert ReasonCode.QUANTITY_NOT_IN_TEXT not in codes(take(quantity=quantity), text)
+
+
+@pytest.mark.parametrize(
+    ("text", "unit"),
+    [
+        ("took 2 ft cable from main stock to truck 1", "m"),  # swapped
+        ("took 2 ft cable from main stock to truck 1", None),  # left out
+        ("took 2 ft of cable from main stock to truck 1", "meters"),
+        ("took 2 cable from main stock to truck 1", "ft"),  # made up
+        ("took 2 cable from main stock to truck 1", "kg"),
+        ("took 2 boxes of cable from main stock to truck 1", "case"),
+        ("took 2 boxes of cable from main stock to truck 1", None),
+        ("took 2 m wire and 2 ft cable from main stock to truck 1", "m"),  # the other line's unit
+    ],
+)
+def test_a_unit_that_is_not_the_one_in_the_text_needs_review(text: str, unit: str | None) -> None:
+    reasons = validate(unit_take("2", unit), text, max_quantity=100)
+    assert ("quantity_not_in_text", "line 1: the unit is not the one in the text") in {
+        (reason.code.value, reason.detail) for reason in reasons
+    }
+
+
+@pytest.mark.parametrize(
+    ("text", "unit"),
+    [
+        ("took 2 ft cable from main stock to truck 1", "ft"),
+        ("took 2 feet of cable from main stock to truck 1", "ft"),
+        ("took 2 ft cable from main stock to truck 1", "feet"),
+        ("took 2 meters of cable from main stock to truck 1", "m"),
+        ("took 2 cable from main stock to truck 1", None),
+        ("took 2 pcs cable from main stock to truck 1", None),
+        ("took 2 pieces of cable from main stock to truck 1", "pcs"),
+        ("took 2 boxes of cable from main stock to truck 1", "box"),
+        ("took 2 boxes of cable from main stock to truck 1", "boxes"),
+    ],
+)
+def test_the_unit_in_the_text_is_accepted_in_any_spelling(text: str, unit: str | None) -> None:
+    assert ReasonCode.QUANTITY_NOT_IN_TEXT not in codes(unit_take("2", unit), text)
