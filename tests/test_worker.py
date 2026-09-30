@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from collections.abc import Iterator, Sequence
@@ -172,6 +173,20 @@ def test_a_clear_post_gets_one_dry_run_reply_in_its_thread(
     clock.at("1790000100.000000")
     assert worker.step() == 0
     assert len(slack.posted) == 1  # once only
+
+
+def test_a_posted_dry_run_is_logged_without_the_text_of_the_post(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="stockthread.worker")
+    enqueue(store, message("1790000000.000100", "took 2 Disc 40 from main stock to truck 1"))
+    worker.step()
+    assert "dry run posted" not in caplog.text
+    clock.at("1790000030.000000")
+    worker.step()
+    assert len(slack.posted) == 1
+    assert "post 1790000000.000100: dry run posted" in caplog.text
+    assert "Disc" not in caplog.text
 
 
 @pytest.mark.parametrize(
