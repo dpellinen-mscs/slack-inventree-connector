@@ -861,7 +861,11 @@ and every stock location, read from InvenTree at startup and again every
 5 minutes. A record with a missing or mistyped field fails the whole
 read, because a partial catalog would make a part look unknown. When a
 refresh fails, dry runs keep the last snapshot for up to an hour; after
-that, posts wait. Aliases and vehicle assignments are not read yet.
+that, posts wait. Aliases are not read yet. Vehicle assignments come from
+the `[vehicles]` settings (Slack user id to location path) and are resolved
+against every snapshot: a path counts only when it is one non-structural
+location's whole path, letter for letter. Otherwise that person has no
+vehicle, the log names them, and their "my truck" is unmatched.
 
 Deterministic. The rules run in this order:
 

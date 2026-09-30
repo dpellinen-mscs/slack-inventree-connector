@@ -24,14 +24,14 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 from stockthread import run as run_module
 from stockthread.__main__ import install_stop_handlers
-from stockthread.catalog import load_catalog
+from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import InvenTreeSettings, Settings, parse_settings
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.core.model import PostKey
 from stockthread.inventree import InvenTreeError, InvenTreeReader
 from stockthread.llm.extract import WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
-from stockthread.run import CatalogCache, run
+from stockthread.run import CatalogCache, run, with_vehicles
 from stockthread.store import DryRunOutcome, Store, new_lock_owner
 from stockthread.worker import RETRY_FOR_SECONDS, PostStillRunning, Worker
 
@@ -44,7 +44,11 @@ ENV = {"SLACK_BOT_TOKEN": "xoxb-synthetic", "SLACK_APP_TOKEN": "xapp-synthetic",
 
 
 def settings(
-    database: Path, transport: str = "socket", llm: dict[str, Any] | None = None, llm_key: str = ""
+    database: Path,
+    transport: str = "socket",
+    llm: dict[str, Any] | None = None,
+    llm_key: str = "",
+    vehicles: dict[str, str] | None = None,
 ) -> Settings:
     data: dict[str, Any] = {
         "slack": {"workspace_id": WORKSPACE, "app_id": APP, "channels": [CHANNEL], "transport": transport},
@@ -53,6 +57,8 @@ def settings(
     }
     if llm:
         data["llm"] = llm
+    if vehicles:
+        data["vehicles"] = vehicles
     return parse_settings(data, {**ENV, "SLACK_SIGNING_SECRET": "synthetic-secret", "LLM_API_KEY": llm_key})
 
 
@@ -716,3 +722,116 @@ def test_the_lock_outlives_a_call_to_the_model(tmp_path: Path) -> None:
     stale = run_module.lock_stale_after(settings(tmp_path / "stockthread.db", llm=llm)).total_seconds()
     assert stale == 150  # the call's deadline plus half a minute
     assert run_module.lock_stale_after(settings(tmp_path / "stockthread.db")) == timedelta(seconds=100)  # as before
+
+
+# `[vehicles]`: whose vehicle "my truck" is.
+
+SAM, LUIS, MIKE = "U0SAM0001", "U0LUIS0005", "U0MIKE0002"
+FLEET = Catalog(
+    parts=CATALOG.parts,
+    locations=(
+        LocationRecord(10, "Warehouse/Main Stock"),
+        LocationRecord(11, "Vehicles/Truck 1"),
+        LocationRecord(12, "Vehicles/Truck 2"),
+        LocationRecord(13, "Vehicles", structural=True),
+        LocationRecord(14, "Yard/Spare"),
+        LocationRecord(15, "Yard/Spare"),  # InvenTree should never hold a path twice; if it does, neither is chosen
+    ),
+)
+
+
+def test_a_vehicle_is_the_location_with_exactly_that_path() -> None:
+    catalog, missing = assign_vehicles(
+        FLEET, {SAM: "Vehicles/Truck 1", LUIS: "Vehicles/Truck 1", MIKE: "Vehicles/Truck 2"}
+    )
+    assert catalog.vehicles == {SAM: 11, LUIS: 11, MIKE: 12}  # two people may share one
+    assert missing == ()
+    assert (catalog.parts, catalog.locations) == (FLEET.parts, FLEET.locations)
+    assert FLEET.vehicles == {}
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "Truck 1",  # the name alone: the whole path is asked for
+        "vehicles/truck 1",
+        "Vehicles/Truck 1/",
+        "Vehicles / Truck 1",
+        "Vehicles/Truck 10",
+        "Vehicles/Truck",
+        "Vehicles",  # structural: it cannot hold stock
+        "Yard/Spare",  # twice in the snapshot
+        "11",
+    ],
+)
+def test_a_path_that_is_not_one_stock_location_gives_no_vehicle(path: str) -> None:
+    catalog, missing = assign_vehicles(FLEET, {SAM: path, MIKE: "Vehicles/Truck 2"})
+    assert catalog.vehicles == {MIKE: 12}
+    assert missing == (SAM,)
+
+
+def test_a_vehicle_that_is_not_found_is_logged_once_until_the_list_changes(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    snapshots = [CATALOG, CATALOG, FLEET, FLEET, CATALOG]
+    configured = settings(tmp_path / "stockthread.db", vehicles={SAM: "Vehicles/Truck 1", MIKE: "Vehicles/Truck 2"})
+    read = with_vehicles(lambda: snapshots.pop(0), configured)
+    assert read().vehicles == {SAM: 11}
+    assert read().vehicles == {SAM: 11}
+    assert [record.levelname for record in caplog.records] == ["WARNING"]
+    assert MIKE in caplog.text
+    assert SAM not in caplog.text
+    assert "Truck 2" not in caplog.text
+    assert read().vehicles == {SAM: 11, MIKE: 12}  # the location was created meanwhile
+    assert read().vehicles == {SAM: 11, MIKE: 12}
+    assert [record.levelname for record in caplog.records] == ["WARNING", "INFO"]
+    assert read().vehicles == {SAM: 11}  # and removed again
+    assert [record.levelname for record in caplog.records] == ["WARNING", "INFO", "WARNING"]
+
+
+def test_without_a_vehicles_section_nothing_is_logged(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+    read = with_vehicles(lambda: CATALOG, settings(tmp_path / "stockthread.db"))
+    assert read().vehicles == {}
+    assert caplog.records == []
+
+
+def test_a_catalog_outage_passes_through_the_vehicles(tmp_path: Path) -> None:
+    def down() -> Catalog:
+        raise InvenTreeError("GET /api/part/ failed: ConnectError")
+
+    with pytest.raises(InvenTreeError):
+        with_vehicles(down, settings(tmp_path / "stockthread.db", vehicles={SAM: "Vehicles/Truck 1"}))()
+
+
+@pytest.mark.parametrize(
+    ("vehicles", "matched"), [({SAM: "Vehicles/Truck 1"}, True), ({MIKE: "Vehicles/Truck 1"}, False)]
+)
+def test_my_truck_in_a_post_is_the_posters_vehicle_and_nobody_elses(
+    tmp_path: Path, stop: threading.Event, vehicles: dict[str, str], matched: bool
+) -> None:
+    database = tmp_path / "stockthread.db"
+    queued_message(database, "1790000000.000100", "took 2 Disc 40 from main stock to my truck")  # posted by Sam
+    client = FakeClient(stop)
+    configured = settings(database, vehicles=vehicles)
+    code = run(
+        configured,
+        stop,
+        slack_client=client,
+        catalog=with_vehicles(lambda: CATALOG, configured),
+        check=lambda _: "InvenTree 1.5.6 (API 530) is tested.",
+        connect=lambda app, token: FakeConnection(),
+        clock=lambda: datetime.fromtimestamp(1790000030, UTC),
+    )
+    assert code == 0
+    store = Store.open(database)
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, "1790000000.000100"))
+    store.close()
+    assert record is not None
+    assert record.result is not None
+    destination = record.result["movements"][0]["destination"]
+    if matched:
+        assert (destination["status"], destination["rule"], destination["record"]) == ("matched", "alias", 11)
+    else:
+        assert (destination["status"], destination["record"]) == ("unmatched", None)
