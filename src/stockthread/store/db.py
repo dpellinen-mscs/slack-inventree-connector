@@ -865,6 +865,47 @@ class Store:
             raise KeyError(event_id)
         return EventStatus(row[0]), int(row[1]), row[2]
 
+    # Catch-up after downtime
+
+    def message_placed(self, message: PostKey) -> bool:
+        """Whether the message is in a post already."""
+        row = self._db.execute(
+            "SELECT 1 FROM post_messages WHERE workspace_id = ? AND channel_id = ? AND ts = ?",
+            (message.workspace_id, message.channel_id, message.ts),
+        ).fetchone()
+        return row is not None
+
+    def catch_up_mark(self, workspace_id: str, channel_id: str) -> tuple[str, str] | None:
+        """Where the channel's catch-up started, and up to where its history has been read: two Slack
+        timestamps. None before the channel's first sweep."""
+        row = self._db.execute(
+            "SELECT since_ts, swept_to FROM catch_up WHERE workspace_id = ? AND channel_id = ?",
+            (workspace_id, channel_id),
+        ).fetchone()
+        return None if row is None else (row[0], row[1])
+
+    def mark_caught_up(self, workspace_id: str, channel_id: str, swept_to: str) -> None:
+        """A whole sweep of the channel has ended at `swept_to`. The first mark of a channel is also where
+        its catch-up starts from, for good. A mark never moves back: an older one changes nothing.
+
+        Needs no instance lock: like `enqueue_event`, it only records what was read from Slack.
+        """
+        if not _SLACK_TS.fullmatch(swept_to):
+            raise ValueError(f"not a Slack timestamp: {swept_to!r}")
+        with self._transaction():
+            mark = self.catch_up_mark(workspace_id, channel_id)
+            if mark is None:
+                self._db.execute(
+                    "INSERT INTO catch_up (workspace_id, channel_id, since_ts, swept_to, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (workspace_id, channel_id, swept_to, swept_to, self._now()),
+                )
+            elif seconds(swept_to) > seconds(mark[1]):
+                self._db.execute(
+                    "UPDATE catch_up SET swept_to = ?, updated_at = ? WHERE workspace_id = ? AND channel_id = ?",
+                    (swept_to, self._now(), workspace_id, channel_id),
+                )
+
     def release_lock(self, owner: str) -> None:
         with self._transaction():
             self._db.execute("DELETE FROM instance_lock WHERE id = 1 AND owner = ?", (owner,))

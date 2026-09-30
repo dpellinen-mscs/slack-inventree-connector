@@ -2,8 +2,9 @@
 
 Startup order: open the store and take the instance lock; put back events an earlier instance left
 unfinished; check the bot token (`auth.test`) and InvenTree (version and a first catalog read); then connect
-to Slack and run the worker loop in this thread. The listener stores and acknowledges on Bolt's threads;
-the worker processes from the queue here. Socket Mode only for now: HTTP serving needs a production WSGI
+to Slack, start catch-up, and run the worker loop in this thread. The listener stores and acknowledges on
+Bolt's threads, catch-up stores what Slack did not deliver on its own thread (slack/catchup.py), and the
+worker processes from the queue here. Socket Mode only for now: HTTP serving needs a production WSGI
 server and comes in a later release.
 """
 
@@ -16,6 +17,7 @@ import threading
 import time
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Protocol
 
 import certifi
@@ -29,6 +31,7 @@ from stockthread.core.matching import Catalog
 from stockthread.inventree import InvenTreeError, InvenTreeReader, check_version
 from stockthread.llm.extract import LLMExtractor, WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
+from stockthread.slack.catchup import SWEEP_SECONDS, CatchUp, HistoryClient
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
 from stockthread.worker import PostStillRunning, Worker
@@ -53,6 +56,8 @@ CATALOG_MARGIN_SECONDS = 30
 """A catalog read is cut off this long before the lock could go stale."""
 LLM_MARGIN_SECONDS = 30
 """The lock goes stale this long after a call to the LLM provider is cut off, at the earliest."""
+SWEEP_JOIN_SECONDS = 5.0
+"""How long a stop waits for a catch-up sweep to end."""
 CATALOG_UNSET = Catalog(parts=(), locations=())
 """Placeholder until startup has read the catalog; the worker does not run before that."""
 
@@ -255,6 +260,8 @@ def run(
         store.close()
         return 3
     connection: Connection | None = None
+    swept = threading.Event()
+    sweeping: threading.Thread | None = None
     try:
         worker = Worker(settings, store, owner, WebClient(), lambda: CATALOG_UNSET, clock, stopping=stop.is_set)
         requeued = store.requeue_unfinished(owner)
@@ -289,6 +296,18 @@ def run(
             connection = connect(app, app_token.get_secret_value())
             log.info("connecting to Slack over Socket Mode")
             connection.connect()
+            if settings.slack.catch_up_hours:
+                # From here on Slack delivers; what was posted before is read from the history. The time is
+                # taken after the connection is made: a message from the moment in between may then come
+                # both ways, and is placed once.
+                connected = Decimal(str(clock().timestamp()))
+                history = slack_client or history_client(bot_token)
+                sweeping = threading.Thread(
+                    target=catch_up, args=(settings, history, clock, connected, swept), name="catch-up", daemon=True
+                )
+                sweeping.start()
+            else:
+                log.info("catch-up is off (slack.catch_up_hours = 0): posts made during downtime are not read")
         except (IdentityError, InvenTreeError) as error:
             log.error("cannot start: %s", error)
             return 2
@@ -312,6 +331,9 @@ def run(
         log.error("another instance took over the database lock; stopping")
         return 1
     finally:
+        swept.set()
+        if sweeping is not None:
+            sweeping.join(SWEEP_JOIN_SECONDS)  # a call that hangs is left to end with the process
         try:
             if connection is not None:
                 connection.close()
@@ -320,6 +342,36 @@ def run(
                 store.release_lock(owner)
             finally:
                 store.close()
+
+
+def history_client(bot_token: str) -> WebClient:
+    """A client of its own for catch-up. It keeps slack_sdk's handler that waits out a rate limit: on the
+    catch-up thread a wait holds back nothing, and the instance lock is not its concern."""
+    client = WebClient(token=bot_token, ssl=slack_tls(), timeout=SLACK_TIMEOUT_SECONDS)
+    client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=2))
+    return client
+
+
+def catch_up(
+    settings: Settings, client: HistoryClient, clock: Callable[[], datetime], first: Decimal, stop: threading.Event
+) -> None:
+    """Sweep the channel history until `stop` is set: first up to `first` (when the connection to Slack was
+    made), then every SWEEP_SECONDS. Runs on its own thread, with its own store connection."""
+    store: Store | None = None
+    latest: Decimal | None = first
+    try:
+        while not stop.is_set():
+            try:
+                store = store or Store.open(settings.storage.database)
+                CatchUp(settings.slack, store, client, clock, stop.is_set).sweep(latest)
+                latest = None  # the first sweep is tried until it has run: it alone reaches up to `first`
+            except Exception as error:
+                # The class only: a message could quote a post.
+                log.warning("catch-up failed (%s); trying again at the next sweep", type(error).__name__)
+            stop.wait(SWEEP_SECONDS)
+    finally:
+        if store is not None:
+            store.close()
 
 
 def lock_stale_after(settings: Settings) -> timedelta:

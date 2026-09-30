@@ -61,6 +61,7 @@ from stockthread.core.model import (
 )
 from stockthread.core.validate import validate
 from stockthread.llm.extract import NoReading, ProviderError
+from stockthread.slack.catchup import is_catch_up
 from stockthread.slack.ingest import Deleted, Drop, Edited, NewMessage, Revised, ingest_event, revised_message
 from stockthread.slack.replies import MovementView, dry_run_reply, gate_reasons
 from stockthread.store import DryRunOutcome, EventStatus, LockLost, Store, WaitingPost
@@ -74,7 +75,8 @@ ROOT_WAIT_SECONDS = 6 * 60
 (after about 1 and 5 minutes). A root that never comes (a bot's post, or one older than the connector) is
 then left out."""
 LATE_AFTER_SECONDS = 10 * 60
-"""A post answered this long after its newest message carries the review reason late_ingest."""
+"""A post answered this long after its newest message carries the review reason late_ingest. So does a post
+with a message that catch-up found in the channel history, whatever its age."""
 RETRY_FOR_SECONDS = 15 * 60
 """How long posting a reply, or asking the LLM provider, is retried with backoff before the post is finished
 without a reply."""
@@ -231,14 +233,8 @@ class Worker:
         # Noted first, and by message key: the message itself may arrive after its edit. Read leniently, from
         # the raw event: the ingest checks drop some edits (a deleted root becomes a tombstone).
         found = revised_message(payload, self.settings.slack)
-        if found is not None:
-            changed = PostKey(self.settings.slack.workspace_id, *found)
-            self.store.note_revision(self.owner, changed, event_id)
-            post = self.store.waiting_post_of(changed)
-            if post is not None and post not in self._running:  # a reply on its way is settled by its call
-                # Changed before its dry run: reading the original text would be wrong. Revisions are M2.
-                self._finish(post, DryRunOutcome.WITHHELD, result={"withheld": "changed"})
-                return EventStatus.DONE, "withheld_changed_post"
+        if found is not None and self._note_change(PostKey(self.settings.slack.workspace_id, *found), event_id):
+            return EventStatus.DONE, "withheld_changed_post"
         decision = ingest_event(payload, self.settings.slack, _AlreadyStored())
         if isinstance(decision, Drop):
             return EventStatus.DROPPED, decision.reason.value
@@ -248,10 +244,16 @@ class Worker:
         if not isinstance(decision, NewMessage):
             return EventStatus.DROPPED, "not_a_message"
         message = decision.message
+        key = PostKey(workspace, message.channel, message.ts)
+        # The history shows the message edited, and it is in a post already, from the event Slack sent when it
+        # was made: that event has the text from before the edit.
+        edited_since = is_catch_up(decision.event_id) and message.edited_ts is not None
+        if edited_since and self.store.message_placed(key) and self._note_change(key, event_id):
+            return EventStatus.DONE, "withheld_changed_post"
         try:
             self.store.place_message(
                 self.owner,
-                PostKey(workspace, message.channel, message.ts),
+                key,
                 user_id=message.user,
                 thread_ts=message.thread_ts,
                 window_seconds=self.settings.slack.group_window_seconds,
@@ -260,6 +262,16 @@ class Worker:
         except ValueError:
             return EventStatus.FAILED, "bad_message"  # a timestamp not in Slack's form, or no user
         return EventStatus.DONE, ""
+
+    def _note_change(self, changed: PostKey, event_id: int) -> bool:
+        """Note that a message was edited or deleted. True when that withheld the post it is in."""
+        self.store.note_revision(self.owner, changed, event_id)
+        post = self.store.waiting_post_of(changed)
+        if post is None or post in self._running:  # a reply on its way is settled by its call
+            return False
+        # Changed before its dry run: reading the original text would be wrong. Revisions are M2.
+        self._finish(post, DryRunOutcome.WITHHELD, result={"withheld": "changed"})
+        return True
 
     def reply_due(self) -> int:
         now = self._now()
@@ -334,7 +346,7 @@ class Worker:
             log.info("post %s: withheld (%s)", key.ts, why)
             self._finish(key, DryRunOutcome.WITHHELD, result={"withheld": why})
             return True
-        messages, poster = read
+        messages, poster, caught_up = read
         try:
             extraction, unheard = self._extract(key, messages, now, ask)
         except LockLost:
@@ -363,7 +375,7 @@ class Worker:
             return True
         catalog = self.catalog()
         self.beat()  # a catalog read can take a while
-        late = age > LATE_AFTER_SECONDS
+        late = caught_up or age > LATE_AFTER_SECONDS
         try:
             views = self._views(extraction, messages, poster, catalog, late)
             decided = record(views, late)
@@ -541,14 +553,16 @@ class Worker:
         self.store.close_siblings(self.owner, key)
         self.store.finish_dry_run(self.owner, key, outcome, extractor=extractor, result=result)
 
-    def _messages(self, key: PostKey) -> tuple[Sequence[MessageInput], str] | None:
-        """The post's messages as the extractor takes them, and the author of the first one.
+    def _messages(self, key: PostKey) -> tuple[Sequence[MessageInput], str, bool] | None:
+        """The post's messages as the extractor takes them, the author of the first one, and whether any of
+        them was not delivered by Slack but found in the channel history (slack/catchup.py).
 
         None when any message cannot be read again (its body expired, it was grouped before the worker kept
         the link, or the ingest checks now drop it): a post is never read with a message left out.
         """
         messages: list[MessageInput] = []
         authors: list[str] = []
+        caught_up = False
         for ts, body in self.store.post_bodies(key):
             try:
                 payload = json.loads(body) if body else None
@@ -558,11 +572,12 @@ class Worker:
             if not isinstance(decision, NewMessage) or decision.message.ts != ts:
                 return None
             message = decision.message
+            caught_up = caught_up or is_catch_up(decision.event_id)
             authors.append(message.user)
             messages.append(MessageInput(message.ts, message.text, message.edited_ts, message.file_ids))
         if not messages:
             return None
-        return messages, authors[0]
+        return messages, authors[0], caught_up
 
     def _now(self) -> Decimal:
         now = self.clock()

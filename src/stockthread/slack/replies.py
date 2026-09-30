@@ -62,7 +62,7 @@ REASONS = {
     ReasonCode.STOCK_CHOICE: "Stock has to be picked from several stock items.",
     ReasonCode.NO_TARGET_STOCK_ITEM: "There is no stock of this part at the source.",
     ReasonCode.EXTRACTORS_DISAGREE: "The two extractors read the post differently.",
-    ReasonCode.LATE_INGEST: "The post arrived while the connector was down.",
+    ReasonCode.LATE_INGEST: "The post was read late: the connector was down, disconnected or waiting.",
     ReasonCode.PRECONDITION_FAILED: "Stock changed since the plan was made.",
 }
 

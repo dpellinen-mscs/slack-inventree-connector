@@ -66,3 +66,6 @@ Nothing is released yet. The connector cannot write stock in this state.
 - An LLM extractor behind a provider interface: a versioned prompt,
   a strict output schema (output that does not fit declines the post), masking of strings that
   look like credentials before text is sent, and an adapter for OpenAI-compatible endpoints.
+- Catch-up after downtime: posts made while the connector was down or disconnected are read from
+  the channel history (up to `slack.catch_up_hours`, and never from before the connector first
+  watched the channel) and answered with the review reason `late_ingest` (migration 0006).

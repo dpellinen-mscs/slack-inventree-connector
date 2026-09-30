@@ -212,11 +212,58 @@ needs.
   may come from the poster, so ingest passes them on with the user id, and
   review checks the user against the stored button row.
 - **Catch-up after downtime.** Slack does not replay events that were
-  missed while the connector was down. At startup and after a reconnect,
-  the connector reads the history of each allowlisted channel from the last
-  message it stored, up to a configured age (default 72 hours). Posts found
-  this way carry the review reason `late_ingest` and are never applied
-  automatically. Without this step, downtime would cause silent drift.
+  missed while the connector was down or disconnected. `slack/catchup.py`
+  reads the history of each allowlisted channel right after the connection
+  is made and every 15 minutes after that, which also covers a lost
+  connection, on a thread of its own. A message the connector does not
+  have is stored in the durable queue as the event Slack would have sent,
+  under the id `history:<channel>:<ts>`, and from there it is an event like
+  any other: the same ingest checks, grouping and dry run. A post with such
+  a message carries the review reason `late_ingest`, whatever its age, and
+  is never applied automatically. Without this step, downtime would cause
+  silent drift.
+  - **How far back.** Up to `slack.catch_up_hours` (default 72; 0 turns
+    catch-up off), and never behind the first sweep of the channel
+    (`catch_up` table, migration 0006). A new installation, or a channel
+    new to the allowlist, therefore does not answer the posts that were
+    there before it. A channel taken off the allowlist and put back is
+    caught up as after downtime. A post older than `plan_expiry_hours`
+    (default 24) is stored and withheld as too old, without a reply.
+  - **Threads.** `conversations.history` lists only top-level messages. A
+    thread whose newest reply is later than the last completed sweep (less
+    5 minutes) is read with `conversations.replies`. The listing of roots
+    reaches behind the channel's first sweep, so a new reply under an older
+    root is found, though that root is not stored. A reply under a root
+    older than the window is not found.
+  - **Not twice.** A message already in a post is skipped, and the queue
+    key stores a history message once. Sweeps after the first leave the
+    newest 2 minutes alone, since those events may still be on their way.
+    If both the event and the history copy are stored, the message is
+    placed once, from whichever is handled first.
+  - **Edits and deletions.** A message found already edited is read as it
+    is now. If a message is in a post that still waits for its dry run and
+    the history shows another edit than the stored event (or a tombstone),
+    the edit is stored as an event and the worker withholds the post. The
+    worker does the same when a history copy that shows an edit arrives
+    for a message already placed from its original event. A deletion made
+    during downtime is not seen: the message is just absent from the
+    history. Plan revisions (M2) re-read a post before a write.
+  - **Known limits.** A message that joins a post after its dry run gets
+    no second reply until plan revisions exist (M2). That includes a
+    thread root found by catch-up after its reply was answered alone. The
+    first start after upgrading from a version without catch-up is a
+    channel's first sweep, so that one downtime is not read. The mark is
+    the host's time: a clock more than a few minutes ahead of Slack's can
+    hide a reply from the next sweep.
+  - **Failures.** A channel that cannot be read (the app is not in it, a
+    rate limit, an answer not in Slack's form, more than 50,000 messages
+    in the window) is logged by Slack's error code or the error's class,
+    the other channels are still read, and it is not marked as swept, so the next sweep reads the same range again. Nothing here
+    needs the instance lock: a sweep only stores what it read.
+  - **Rate limits.** The two methods are Tier 3 for an app that a
+    workspace creates for itself from the manifest, which is how this one
+    is installed. A sweep costs one call per 200 messages in the window,
+    plus one per thread that moved.
 - **Grouping.** A photo with a caption arrives as one message. Sibling
   messages from the same user within a short window (default 5 seconds),
   and replies in the thread, join the same post. A message belongs to
@@ -257,7 +304,8 @@ needs.
   (`posts.dry_run_at`, `posts.reply_ts`, audit `dry_run_<outcome>`;
   migration 0004):
   - `replied`. A post answered more than 10 minutes after its newest
-    message carries `late_ingest`.
+    message carries `late_ingest`, and so does a post with a message that
+    catch-up found in the channel history.
   - `silent`: declined, or not a movement. No reply by design.
   - `withheld`: a message cannot be read again (its body expired), was
     edited or deleted before the dry run, or the post is older than
@@ -747,6 +795,7 @@ and needs no extra service.
 | `posts` | One row per post, unique on post key |
 | `post_messages` | Which post each message belongs to, unique on `(workspace, channel, ts)`: ids, author and thread, never text (migration 0003) |
 | `revised_messages` | Message keys that were edited or deleted, in any arrival order: ids only (migration 0004) |
+| `catch_up` | One row per channel: where its catch-up started, and how far its history has been read (migration 0006) |
 | `dry_runs` | One row per post: the outcome, the extractor, and the result as JSON (candidates, matches, reasons) (migration 0004) |
 | `plans` | Plan revisions with the hash of their input messages |
 | `extractions` | Extractor name and version, prompt version, raw output |

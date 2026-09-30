@@ -9,8 +9,10 @@ import signal
 import sqlite3
 import ssl
 import threading
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
@@ -49,9 +51,16 @@ def settings(
     llm: dict[str, Any] | None = None,
     llm_key: str = "",
     vehicles: dict[str, str] | None = None,
+    catch_up_hours: int = 72,
 ) -> Settings:
     data: dict[str, Any] = {
-        "slack": {"workspace_id": WORKSPACE, "app_id": APP, "channels": [CHANNEL], "transport": transport},
+        "slack": {
+            "workspace_id": WORKSPACE,
+            "app_id": APP,
+            "channels": [CHANNEL],
+            "transport": transport,
+            "catch_up_hours": catch_up_hours,
+        },
         "inventree": {"url": "http://inventree.local:8000"},
         "storage": {"database": str(database)},
     }
@@ -63,13 +72,22 @@ def settings(
 
 
 class FakeClient(WebClient):
-    """Bolt takes only a real WebClient: the two calls the connector makes are replaced."""
+    """Bolt takes only a real WebClient: the calls the connector makes are replaced."""
 
     def __init__(self, stop: threading.Event, team: str = WORKSPACE) -> None:
         super().__init__()
         self.stop = stop
         self.team = team
         self.posted: list[dict[str, Any]] = []
+        self.history: list[dict[str, Any]] = []
+        self.listed: list[dict[str, Any]] = []
+
+    def conversations_history(self, **kwargs: Any) -> Any:
+        self.listed.append(kwargs)
+        return {"ok": True, "messages": self.history, "has_more": False}
+
+    def conversations_replies(self, **kwargs: Any) -> Any:
+        raise AssertionError("no thread in these tests")
 
     def auth_test(self, **kwargs: Any) -> Any:
         return {"team_id": self.team, "bot_id": "B0STOCKBOT", "user_id": "U0STOCKBOT"}
@@ -835,3 +853,133 @@ def test_my_truck_in_a_post_is_the_posters_vehicle_and_nobody_elses(
         assert (destination["status"], destination["rule"], destination["record"]) == ("matched", "alias", 11)
     else:
         assert (destination["status"], destination["record"]) == ("unmatched", None)
+
+
+# Catch-up
+
+
+def watched_since(database: Path, ts: str) -> None:
+    """An earlier run made its first sweep of the channel at `ts`."""
+    store = Store.open(database)
+    store.mark_caught_up(WORKSPACE, CHANNEL, ts)
+    store.close()
+
+
+def test_a_post_made_while_the_connector_was_down_is_found_at_restart_and_answered_as_late(
+    tmp_path: Path, stop: threading.Event
+) -> None:
+    database = tmp_path / "stockthread.db"
+    watched_since(database, "1790000000.000000")
+    client = FakeClient(stop)
+    client.history = [
+        {"type": "message", "user": "U0SAM0001", "text": "took 2 Disc 40 from main stock to truck 1", "ts": MISSED}
+    ]
+    assert run_with(database, stop, FakeConnection(), slack_client=client) == 0
+    assert [reply["thread_ts"] for reply in client.posted] == [MISSED]
+    assert "The post was read late" in json.dumps(client.posted[0]["blocks"])
+    assert [(call["oldest"], call["latest"]) for call in client.listed] == [("1789740830.000000", "1790000030.000000")]
+    assert lock_is_free(database)
+    assert not [thread for thread in threading.enumerate() if thread.name == "catch-up"]
+
+
+MISSED = "1790000010.000100"
+
+
+def test_a_first_run_reads_no_history_and_with_zero_hours_no_run_does(tmp_path: Path, stop: threading.Event) -> None:
+    database = tmp_path / "stockthread.db"
+    queued_message(database, "1790000000.000100", "took 2 Disc 40 from main stock to truck 1")
+
+    class AfterTheFirstSweep(FakeClient):
+        def chat_postMessage(self, **kwargs: Any) -> Any:
+            store = Store.open(database)
+            deadline = time.monotonic() + 5
+            while store.catch_up_mark(WORKSPACE, CHANNEL) is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            store.close()
+            return super().chat_postMessage(**kwargs)
+
+    client = AfterTheFirstSweep(stop)
+    assert run_with(database, stop, FakeConnection(), slack_client=client) == 0
+    store = Store.open(database)
+    assert store.catch_up_mark(WORKSPACE, CHANNEL) == ("1790000030.000000", "1790000030.000000")
+    store.close()
+    assert client.listed == []
+
+    off = tmp_path / "off.db"
+    watched_since(off, "1790000000.000000")
+    queued_message(off, "1790000000.000100", "took 2 Disc 40 from main stock to truck 1")
+    stop.clear()
+    code = run(
+        settings(off, catch_up_hours=0),
+        stop,
+        slack_client=client,
+        catalog=lambda: CATALOG,
+        check=lambda _: "",
+        connect=lambda app, token: FakeConnection(),
+        clock=lambda: datetime.fromtimestamp(1790000030, UTC),
+    )
+    assert code == 0
+    assert client.listed == []
+
+
+def test_catch_up_sweeps_again_after_a_sweep_that_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    database = tmp_path / "stockthread.db"
+    watched_since(database, "1790000000.000000")
+    monkeypatch.setattr(run_module, "SWEEP_SECONDS", 0.01)
+    halt = threading.Event()
+    sweeps: list[Decimal | None] = []
+
+    class Sweeps(FakeClient):
+        def conversations_history(self, **kwargs: Any) -> Any:
+            sweeps.append(Decimal(kwargs["latest"]))
+            if len(sweeps) == 1:
+                raise RuntimeError("took 2 Disc 40")  # not a class catch-up expects
+            halt.set()
+            return super().conversations_history(**kwargs)
+
+    now = [1790000030]
+
+    def clock() -> datetime:
+        now[0] += 1000  # each later sweep stands further on
+        return datetime.fromtimestamp(now[0], UTC)
+
+    with caplog.at_level(logging.WARNING):
+        run_module.catch_up(settings(database), Sweeps(halt), clock, Decimal(1790000030), halt)
+    assert len(sweeps) == 2
+    assert sweeps[0] == Decimal(1790000030)
+    assert sweeps[1] == Decimal(now[0] - 120)  # the later sweeps leave the newest two minutes alone
+    assert "failed (RuntimeError)" in caplog.text
+    assert "Disc" not in caplog.text
+
+
+def test_catch_up_that_cannot_open_the_database_keeps_trying_with_its_first_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    database = tmp_path / "stockthread.db"
+    watched_since(database, "1790000000.000000")
+    monkeypatch.setattr(run_module, "SWEEP_SECONDS", 0.01)
+    halt = threading.Event()
+    opened: list[int] = []
+    real = Store.open
+
+    def open_store(path: Any) -> Store:
+        opened.append(1)
+        if len(opened) == 1:
+            raise sqlite3.OperationalError("synthetic")
+        return real(path)
+
+    monkeypatch.setattr(Store, "open", open_store)
+
+    class Once(FakeClient):
+        def conversations_history(self, **kwargs: Any) -> Any:
+            halt.set()
+            return super().conversations_history(**kwargs)
+
+    client = Once(halt)
+    clock = lambda: datetime.fromtimestamp(1790009000, UTC)  # noqa: E731
+    with caplog.at_level(logging.WARNING):
+        run_module.catch_up(settings(database), client, clock, Decimal(1790000030), halt)
+    assert "catch-up failed (OperationalError)" in caplog.text
+    assert [call["latest"] for call in client.listed] == ["1790000030.000000"]
