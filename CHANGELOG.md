@@ -34,3 +34,5 @@ Nothing is released yet. The connector cannot write stock in this state.
 - Grouping of Slack messages into posts (migration 0003): siblings from the same user within the
   window, thread replies with their root, in any arrival order; a message never changes post.
 - A threat model, first version (`docs/threat-model.md`).
+- The Slack listener on Bolt for Python, for Socket Mode and HTTP: payloads are checked, stored in the
+  durable queue and only then acknowledged. HTTP requests are always signature-checked.
