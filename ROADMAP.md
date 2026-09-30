@@ -64,7 +64,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 - [ ] Eval runner: scores either extractor against the corpus, using recorded fixtures in CI
 - [x] Validator: deterministic contradiction checks and text-level review reasons (`core/validate.py`)
 - [x] Matcher: exact, normalized, alias, then fuzzy candidates, for parts and locations (`core/matching.py`; the catalog snapshot from InvenTree comes with Resolve)
-- [ ] Dry-run reply in the Slack thread: what would change, and every review reason
+- [ ] Dry-run reply in the Slack thread: what would change, and every review reason (renderer done: `slack/replies.py`; posting comes with the Bolt listener)
 - [ ] Slack app manifests and the quickstart
 
 **DoD:** a post in an allowlisted channel gets a dry-run reply in its thread
