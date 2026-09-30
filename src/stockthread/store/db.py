@@ -269,7 +269,14 @@ class Store:
             return post_id
 
     def place_message(
-        self, owner: str, message: PostKey, *, user_id: str, thread_ts: str | None, window_seconds: int
+        self,
+        owner: str,
+        message: PostKey,
+        *,
+        user_id: str,
+        thread_ts: str | None,
+        window_seconds: int,
+        slack_event_id: int | None = None,
     ) -> tuple[PostKey, bool]:
         """Put a message in its post (design section 4, "Grouping"): the post key, and whether the post is new.
 
@@ -277,7 +284,8 @@ class Store:
         `False`. After a crash the first placement may have committed without a plan, so callers plan on
         every placement, not only when the post is new. `owner` must hold the instance lock, so two
         instances never group the same channel differently. Timestamps must be in Slack's exact form
-        ("1790000000.000100"): keys are compared as strings.
+        ("1790000000.000100"): keys are compared as strings. `slack_event_id` is the stored event the message
+        came from: the worker reads the message text from its raw body.
         """
         if not user_id or window_seconds < 0:
             raise ValueError("a message needs a user, and the window cannot be negative")
@@ -329,9 +337,10 @@ class Store:
                 post_id = int(cursor.lastrowid or 0)
                 self._audit(Actor.PLANNER, "post_created", post_id=post_id)
             self._db.execute(
-                "INSERT INTO post_messages (post_id, workspace_id, channel_id, ts, user_id, thread_ts, added_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (post_id, workspace, channel, message.ts, user_id, thread_ts, self._now()),
+                "INSERT INTO post_messages"
+                " (post_id, workspace_id, channel_id, ts, user_id, thread_ts, added_at, slack_event_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (post_id, workspace, channel, message.ts, user_id, thread_ts, self._now(), slack_event_id),
             )
             self._audit(Actor.PLANNER, "message_grouped", post_id=post_id)
             return key, created
@@ -357,6 +366,51 @@ class Store:
             )
             if cursor.rowcount:
                 self._audit(Actor.PLANNER, "siblings_closed", post_id=post_id)
+
+    def posts_waiting_for_dry_run(self) -> list[tuple[PostKey, str]]:
+        """Posts without a dry-run outcome yet, oldest first, each with the timestamp of its newest message."""
+        rows = self._db.execute(
+            "SELECT p.workspace_id, p.channel_id, p.ts, m.ts FROM posts p JOIN post_messages m ON m.post_id = p.id"
+            " WHERE p.dry_run_at IS NULL ORDER BY p.id"
+        ).fetchall()
+        newest: dict[PostKey, str] = {}
+        for workspace, channel, post_ts, ts in rows:
+            key = PostKey(workspace, channel, post_ts)
+            if key not in newest or seconds(ts) > seconds(newest[key]):
+                newest[key] = ts
+        return list(newest.items())
+
+    def post_bodies(self, key: PostKey) -> list[tuple[str, str | None]]:
+        """Each message of a post, oldest first: its timestamp, and the raw body of the event it came from.
+
+        The body is None when retention expired it, or when the message was grouped before migration 0004.
+        """
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        rows = self._db.execute(
+            "SELECT m.ts, e.body FROM post_messages m LEFT JOIN slack_events e ON e.id = m.slack_event_id"
+            " WHERE m.post_id = ?",
+            (post_id,),
+        ).fetchall()
+        return sorted(((row[0], row[1]) for row in rows), key=lambda row: seconds(row[0]))
+
+    def finish_dry_run(self, owner: str, key: PostKey, reply_ts: str | None) -> None:
+        """Record the post's dry-run outcome: the reply's timestamp, or None when it got no reply. Once only."""
+        if reply_ts is not None and not _SLACK_TS.fullmatch(reply_ts):
+            raise ValueError(f"not a Slack timestamp: {reply_ts!r}")
+        with self._transaction():
+            self._check_lock(owner)
+            post_id = self._post_id(key)
+            if post_id is None:
+                raise KeyError("no such post")
+            cursor = self._db.execute(
+                "UPDATE posts SET dry_run_at = ?, reply_ts = ? WHERE id = ? AND dry_run_at IS NULL",
+                (self._now(), reply_ts, post_id),
+            )
+            if cursor.rowcount != 1:
+                raise StateConflict("the post already has its dry-run outcome")
+            self._audit(Actor.PLANNER, "dry_run_replied" if reply_ts else "dry_run_silent", post_id=post_id)
 
     def create_plan(self, post: PostKey, input_hash: str, operations: Sequence[Operation]) -> int:
         """Store a new plan revision with one planned request per operation, and return its revision.

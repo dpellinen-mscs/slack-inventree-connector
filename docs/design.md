@@ -218,12 +218,32 @@ needs.
 - **After apply,** an edit, a deletion or a correction never writes by
   itself. It creates a review item that offers an undo. A revised plan can
   be approved only after the undo has been verified.
+- **Worker.** `worker.py` runs under the instance lock, in two steps.
+  `drain` claims stored events, runs the ingest checks again with the
+  current settings, and places each new message in its post; the message
+  keeps a link to its stored event, whose raw body is the only place its
+  text is kept. `reply_due` takes each post whose newest message is older
+  than the sibling window, extracts, validates and matches it, closes it to
+  siblings, posts the dry-run reply in the thread, and records the outcome
+  once (`posts.dry_run_at`, `posts.reply_ts`; migration 0004). A post that
+  is declined or is not a movement gets no reply, and neither does a post
+  with a message that cannot be read again (its body expired), because a
+  post is never read with a message left out. A crash between posting and
+  recording posts the reply again: a duplicate dry-run beats a silent drop.
+  A failed reply is retried, and after 5 failures in a row the post is
+  finished without one. A post that breaks the pipeline is logged and
+  finished without a reply, so it cannot stop later posts. Until M2, edits,
+  deletions, clicks and thread replies after the dry-run are recorded and
+  not acted on.
 - **Replies.** The dry-run reply (`slack/replies.py`) lists each movement
   with the matched part and location names next to the words as written,
   then every review reason in plain words. Text from the post and from the
   catalog is escaped, so neither can become a mention or a link. Candidate
   lists are capped at 5 in the display, and long sections are cut to fit
-  Slack's limits.
+  Slack's limits; a reply shows at most 20 movements (Slack allows 50
+  blocks), then says how many more there are. "Could apply" is printed only
+  when `gate_reasons` finds nothing: the caller's reasons plus every reason
+  the view itself shows (an unmatched part or place, a missing quantity).
 - **Interactivity.** Questions and receipts use Block Kit in the thread.
   A button carries only a random id of at least 128 bits that points to a
   row in the connector's database. The handler checks that the channel and

@@ -134,7 +134,17 @@ def test_no_message_text_is_stored(path: Path, store: Store) -> None:
     place(store, "1.000000")
     with sqlite3.connect(path) as raw:
         columns = {row[1] for row in raw.execute("PRAGMA table_info(post_messages)")}
-    assert columns == {"id", "post_id", "workspace_id", "channel_id", "ts", "user_id", "thread_ts", "added_at"}
+    assert columns == {
+        "id",
+        "post_id",
+        "workspace_id",
+        "channel_id",
+        "ts",
+        "user_id",
+        "thread_ts",
+        "added_at",
+        "slack_event_id",  # the text stays in the raw event, which retention expires
+    }
 
 
 def test_a_version_2_file_upgrades_with_its_posts_open(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,7 +156,7 @@ def test_a_version_2_file_upgrades_with_its_posts_open(path: Path, monkeypatch: 
     monkeypatch.setattr(store_db, "_migrations", lambda: real)
     upgraded = Store.open(path)
     upgraded.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
-    assert upgraded.schema_version == 3
+    assert upgraded.schema_version == len(real)
     assert place(upgraded, "1.000000") == (key("1.000000"), False)  # the old post's first message joins it
     assert place(upgraded, "3.000000") == (key("1.000000"), False)
     upgraded.close()

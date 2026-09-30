@@ -55,16 +55,16 @@ can write stock yet: only the test suite has a raw HTTP helper.
 
 ## M1: read-only extraction and matching, dry-run in Slack
 
-- [ ] Slack ingest over Socket Mode and HTTP, with signature verification on HTTP (listener done: `slack/listener.py` checks, stores, then acknowledges; serving and the worker come with `stockthread run`)
+- [ ] Slack ingest over Socket Mode and HTTP, with signature verification on HTTP (listener done: `slack/listener.py` checks, stores, then acknowledges; the worker is `worker.py`; serving comes with `stockthread run`)
 - [x] Workspace and app id checks, channel allowlist, subtype allowlist, bot filtering, deduplication (`slack/ingest.py`; in-memory dedup until the durable queue)
 - [ ] Durable event queue (store side done: `slack_events`, migration 0002), and catch-up from channel history after downtime
-- [ ] Grouping: photo with caption, sibling messages and threads become one post (rule and store done: `core/grouping.py`, migration 0003; wiring comes with the listener)
+- [x] Grouping: photo with caption, sibling messages and threads become one post (`core/grouping.py`, migration 0003; the worker places each message)
 - [x] Rule-based extractor that needs no LLM (`core/extract_rules.py`; one message per post for now, declines the rest)
 - [ ] LLM extractor behind a provider interface, with a strict output schema
 - [ ] Eval runner: scores either extractor against the corpus, using recorded fixtures in CI
 - [x] Validator: deterministic contradiction checks and text-level review reasons (`core/validate.py`)
 - [x] Matcher: exact, normalized, alias, then fuzzy candidates, for parts and locations (`core/matching.py`; the catalog snapshot from InvenTree comes with Resolve)
-- [ ] Dry-run reply in the Slack thread: what would change, and every review reason (renderer done: `slack/replies.py`; posting comes with the Bolt listener)
+- [ ] Dry-run reply in the Slack thread: what would change, and every review reason (renderer `slack/replies.py`; `worker.py` posts it once the sibling window has passed; live once `stockthread run` serves)
 - [ ] Slack app manifests and the quickstart
 
 **DoD:** a post in an allowlisted channel gets a dry-run reply in its thread
