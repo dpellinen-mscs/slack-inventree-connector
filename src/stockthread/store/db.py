@@ -452,14 +452,19 @@ class Store:
             self._audit("ingest", "revision_noted", slack_event_id=slack_event_id)
 
     def post_has_revision(self, key: PostKey) -> bool:
-        """Whether any message of the post was edited or deleted, in whatever order the events arrived."""
+        """Whether any message of the post, or the message it is keyed on, was edited or deleted, in whatever
+        order the events arrived."""
         post_id = self._post_id(key)
         if post_id is None:
             raise KeyError("no such post")
         row = self._db.execute(
-            "SELECT 1 FROM post_messages m JOIN revised_messages r"
-            " ON r.workspace_id = m.workspace_id AND r.channel_id = m.channel_id AND r.ts = m.ts"
-            " WHERE m.post_id = ? LIMIT 1",
+            "SELECT 1 FROM revised_messages r WHERE EXISTS ("
+            " SELECT 1 FROM post_messages m WHERE m.post_id = ?1"
+            " AND m.workspace_id = r.workspace_id AND m.channel_id = r.channel_id AND m.ts = r.ts"
+            ") OR EXISTS ("  # the thread root the post is keyed on, even when it never arrived
+            " SELECT 1 FROM posts p WHERE p.id = ?1"
+            " AND p.workspace_id = r.workspace_id AND p.channel_id = r.channel_id AND p.ts = r.ts"
+            ") LIMIT 1",
             (post_id,),
         ).fetchone()
         return row is not None
