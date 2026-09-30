@@ -226,6 +226,12 @@ class Extraction:
     """Name and version of the extractor, and of the prompt for an LLM extractor."""
     movements: tuple[CandidateMovement, ...]
     post_flags: frozenset[PostFlag] = field(default_factory=frozenset)
+    declined: bool = False
+    """The extractor could not read the post. No movements then does not mean "not a movement"."""
+
+    def __post_init__(self) -> None:
+        if self.declined and self.movements:
+            raise ValueError("a declined extraction has no movements")
 
 
 class MatchStatus(StrEnum):

@@ -59,7 +59,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 - [x] Workspace and app id checks, channel allowlist, subtype allowlist, bot filtering, deduplication (`slack/ingest.py`; in-memory dedup until the durable queue)
 - [ ] Durable event queue (store side done: `slack_events`, migration 0002), and catch-up from channel history after downtime
 - [ ] Grouping: photo with caption, sibling messages and threads become one post (rule and store done: `core/grouping.py`, migration 0003; wiring comes with the listener)
-- [ ] Rule-based extractor that needs no LLM
+- [x] Rule-based extractor that needs no LLM (`core/extract_rules.py`; one message per post for now, declines the rest)
 - [ ] LLM extractor behind a provider interface, with a strict output schema
 - [ ] Eval runner: scores either extractor against the corpus, using recorded fixtures in CI
 - [ ] Validator: deterministic contradiction checks and text-level review reasons
