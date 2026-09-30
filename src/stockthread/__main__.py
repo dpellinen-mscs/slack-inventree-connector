@@ -83,6 +83,7 @@ def check_config(path: Path) -> int:
         return 2
     print(json.dumps(settings.effective(), indent=2))
     print(settings.writes_line())
+    print(settings.llm_line())
     return 0
 
 

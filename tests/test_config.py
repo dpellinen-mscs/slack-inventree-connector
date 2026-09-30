@@ -222,11 +222,11 @@ def test_unreadable_or_invalid_file(tmp_path: Path) -> None:
 
 
 def test_effective_settings_redact_every_secret() -> None:
-    environ = {**ENV, "SLACK_SIGNING_SECRET": SIGNING_SECRET}
+    environ = {**ENV, "SLACK_SIGNING_SECRET": SIGNING_SECRET, "LLM_API_KEY": "key-synthetic"}
     settings = parse_settings(base(), environ)
     effective = settings.effective()
     dumped = json.dumps(effective) + repr(settings) + str(settings)
-    for secret in SECRET_VALUES:
+    for secret in (*SECRET_VALUES, "key-synthetic"):
         assert secret not in dumped
     assert effective["secrets"] == dict.fromkeys(effective["secrets"], REDACTED)
     assert effective["writes"] == {"enabled": False}
@@ -312,3 +312,47 @@ def test_a_key_cannot_forge_a_log_line() -> None:
     message = rejected(with_changes("policy", default_source={"x\nERROR forged": "Warehouse"}))
     assert "\nERROR forged" not in message
     assert "x\\nERROR forged" in message
+
+
+def test_no_llm_section_means_no_model() -> None:
+    settings = parse_settings(base(), {**ENV, "LLM_API_KEY": "key-synthetic"})
+    assert settings.llm is None
+    assert settings.effective()["llm"] is None
+    assert "no post leaves this machine" in settings.llm_line()
+
+
+def test_an_llm_section_names_the_endpoint_and_the_model() -> None:
+    data = {**base(), "llm": {"base_url": "https://llm.acme-fiber.example/v1", "model": "small-1"}}
+    settings = parse_settings(data, {**ENV, "LLM_API_KEY": "key-synthetic"})
+    assert settings.llm is not None
+    assert settings.llm.timeout_seconds == 30
+    assert settings.secrets.llm_api_key is not None
+    assert settings.effective()["secrets"]["llm_api_key"] == REDACTED
+    assert "key-synthetic" not in json.dumps(settings.effective()) + repr(settings)
+    assert settings.llm_line() == "Posts the rules cannot read are sent to the model small-1 at llm.acme-fiber.example."
+    local = {**base(), "llm": {"base_url": "http://localhost:11434/v1", "model": "small-1"}}
+    assert parse_settings(local, ENV).secrets.llm_api_key is None  # a local server needs no key
+
+
+@pytest.mark.parametrize(
+    ("llm", "key", "problem"),
+    [
+        ({"model": "small-1"}, None, "llm.base_url"),
+        ({"base_url": "https://llm.acme-fiber.example/v1"}, None, "llm.model"),
+        ({"base_url": "ftp://llm.acme-fiber.example", "model": "m"}, None, "the provider URL must be http"),
+        ({"base_url": "https://user:hunter2@llm.acme-fiber.example", "model": "m"}, None, "without credentials"),
+        ({"base_url": "https://llm.acme-fiber.example/v1?key=hunter2", "model": "m"}, None, "without a query"),
+        ({"base_url": "https://[hunter2/v1", "model": "m"}, None, "the provider URL must be http"),
+        ({"base_url": "http://llm.acme-fiber.example/v1", "model": "m"}, "key-synthetic", "only sent over https"),
+        ({"base_url": "https://llm.acme-fiber.example/v1", "model": "m", "timeout_seconds": 121}, None, "timeout"),
+        ({"base_url": "https://llm.acme-fiber.example/v1", "model": "m", "api_key": "hunter2"}, None, "llm.api_key"),
+    ],
+)
+def test_a_wrong_llm_section_is_refused_without_quoting_it(llm: dict[str, Any], key: str | None, problem: str) -> None:
+    environ = {**ENV, "LLM_API_KEY": key} if key else ENV
+    with pytest.raises(ConfigError, match=problem) as info:
+        parse_settings({**base(), "llm": llm}, environ)
+    assert "hunter2" not in str(info.value)
+    assert "key-synthetic" not in str(info.value)
+    assert info.value.__cause__ is None
+    assert info.value.__context__ is None

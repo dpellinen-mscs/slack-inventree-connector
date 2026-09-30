@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from typing import Annotated, Any, Protocol
@@ -197,6 +198,48 @@ class Provider(Protocol):
 
     def complete(self, system: str, user: str, schema: Mapping[str, Any]) -> str:
         """The model's answer as text: a JSON document that should fit `schema`."""
+
+
+class WithinDeadline:
+    """A provider whose call gives control back after `deadline` seconds, as a ProviderError.
+
+    A timeout on a connection bounds one socket operation, not the call: a name lookup has none, and a body
+    can drip. The call runs on a helper thread; one that ran out of time is left to end by itself, its
+    answer is dropped, and until it has ended no other call is started.
+    """
+
+    def __init__(self, provider: Provider, deadline: float) -> None:
+        self._provider = provider
+        self._deadline = deadline
+        self._last: threading.Event | None = None
+
+    @property
+    def model(self) -> str:
+        return self._provider.model
+
+    def complete(self, system: str, user: str, schema: Mapping[str, Any]) -> str:
+        if self._last is not None and not self._last.is_set():
+            raise ProviderError("an earlier call to the provider has not ended yet")
+        done = threading.Event()
+        answer: list[str | ProviderError] = []
+
+        def call() -> None:
+            try:
+                answer.append(self._provider.complete(system, user, schema))
+            except ProviderError as error:
+                answer.append(error)
+            except Exception as error:  # the class only: a message could quote the post
+                answer.append(ProviderError(f"{type(error).__name__} in the provider"))
+            finally:
+                done.set()
+
+        self._last = done
+        threading.Thread(target=call, name="llm-call", daemon=True).start()
+        if not done.wait(self._deadline):
+            raise ProviderError(f"the provider took longer than {self._deadline:.0f} s")
+        if isinstance(answer[0], ProviderError):
+            raise answer[0]
+        return answer[0]
 
 
 _Number = Annotated[Decimal, Strict()]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import signal
 import sqlite3
 import ssl
@@ -28,6 +29,7 @@ from stockthread.config import InvenTreeSettings, Settings, parse_settings
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.core.model import PostKey
 from stockthread.inventree import InvenTreeError, InvenTreeReader
+from stockthread.llm.openai_compatible import OpenAICompatible
 from stockthread.run import CatalogCache, run
 from stockthread.store import DryRunOutcome, Store, new_lock_owner
 from stockthread.worker import RETRY_FOR_SECONDS, PostStillRunning, Worker
@@ -40,13 +42,17 @@ CATALOG = Catalog(
 ENV = {"SLACK_BOT_TOKEN": "xoxb-synthetic", "SLACK_APP_TOKEN": "xapp-synthetic", "INVENTREE_TOKEN": "inv-synthetic"}
 
 
-def settings(database: Path, transport: str = "socket") -> Settings:
-    data = {
+def settings(
+    database: Path, transport: str = "socket", llm: dict[str, Any] | None = None, llm_key: str = ""
+) -> Settings:
+    data: dict[str, Any] = {
         "slack": {"workspace_id": WORKSPACE, "app_id": APP, "channels": [CHANNEL], "transport": transport},
         "inventree": {"url": "http://inventree.local:8000"},
         "storage": {"database": str(database)},
     }
-    return parse_settings(data, {**ENV, "SLACK_SIGNING_SECRET": "synthetic-secret"})
+    if llm:
+        data["llm"] = llm
+    return parse_settings(data, {**ENV, "SLACK_SIGNING_SECRET": "synthetic-secret", "LLM_API_KEY": llm_key})
 
 
 class FakeClient(WebClient):
@@ -615,3 +621,80 @@ def test_a_reply_on_its_way_is_checked_with_backoff_and_not_while_stopping(tmp_p
     assert worker.step() == 1
     assert reply_ts(tmp_path) == ["1790000099.000100"]
     store.close()
+
+
+def test_a_post_the_rules_decline_is_sent_to_the_configured_model(
+    tmp_path: Path, stop: threading.Event, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    database = tmp_path / "stockthread.db"
+    queued_message(database, "1790000000.000100", "gave truck 1 two Disc 40 from main stock")
+    asked: list[dict[str, Any]] = []
+    answer = {
+        "readable": True,
+        "post_flags": [],
+        "movements": [
+            {
+                "movement_type": "take_to_vehicle",
+                "line_items": [{"item_text": "Disc 40", "quantity": 2, "unit": None, "pack_size": None, "serials": []}],
+                "source_text": "main stock",
+                "destination_text": "truck 1",
+                "flags": [],
+            }
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(json.loads(request.content))
+        assert request.headers["authorization"] == "Bearer key-synthetic"
+        choice = {"message": {"content": json.dumps(answer)}, "finish_reason": "stop"}
+        return httpx.Response(200, json={"choices": [choice]})
+
+    closed: list[bool] = []
+
+    def provider(chosen: Settings) -> OpenAICompatible:
+        assert chosen.llm is not None
+        built = OpenAICompatible(
+            chosen.llm.base_url, chosen.llm.model, chosen.secrets.llm_api_key, transport=httpx.MockTransport(handler)
+        )
+        monkeypatch.setattr(built, "close", lambda: closed.append(True))
+        return built
+
+    monkeypatch.setattr(run_module, "llm_provider", provider)
+    llm = {"base_url": "https://llm.acme-fiber.example/v1", "model": "small-1"}
+    chosen = settings(database, llm=llm, llm_key="key-synthetic")
+    client = FakeClient(stop)
+    caplog.set_level(logging.INFO)
+    code = run(
+        chosen,
+        stop,
+        slack_client=client,
+        catalog=lambda: CATALOG,
+        check=lambda _: "InvenTree 1.5.6 (API 530) is tested.",
+        connect=lambda app, token: FakeConnection(),
+        clock=lambda: datetime.fromtimestamp(1790000030, UTC),
+    )
+    assert code == 0
+    assert [call["model"] for call in asked] == ["small-1"]
+    assert "gave truck 1 two Disc 40" in asked[0]["messages"][1]["content"]
+    assert [reply["thread_ts"] for reply in client.posted] == ["1790000000.000100"]
+    assert closed == [True]
+    assert "sent to the model small-1 at llm.acme-fiber.example" in caplog.text
+    assert "key-synthetic" not in caplog.text
+    assert "Disc 40" not in caplog.text
+
+
+def test_without_an_llm_section_no_provider_is_built(tmp_path: Path) -> None:
+    assert run_module.llm_provider(settings(tmp_path / "stockthread.db")) is None
+    built = run_module.llm_provider(
+        settings(tmp_path / "stockthread.db", llm={"base_url": "http://localhost:11434/v1", "model": "small-1"})
+    )
+    assert built is not None
+    assert built.model == "small-1"
+    built.close()
+
+
+def test_the_lock_outlives_a_call_to_the_model(tmp_path: Path) -> None:
+    llm = {"base_url": "http://localhost:11434/v1", "model": "small-1", "timeout_seconds": 120}
+    stale = run_module.lock_stale_after(settings(tmp_path / "stockthread.db", llm=llm)).total_seconds()
+    assert stale >= 120 + run_module.LLM_MARGIN_SECONDS
+    assert run_module.lock_stale_after(settings(tmp_path / "stockthread.db")) == timedelta(seconds=100)  # as before

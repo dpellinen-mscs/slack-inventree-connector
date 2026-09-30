@@ -27,6 +27,8 @@ from stockthread.catalog import load_catalog
 from stockthread.config import Settings
 from stockthread.core.matching import Catalog
 from stockthread.inventree import InvenTreeError, InvenTreeReader, check_version
+from stockthread.llm.extract import LLMExtractor, WithinDeadline
+from stockthread.llm.openai_compatible import OpenAICompatible
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
 from stockthread.worker import PostStillRunning, Worker
@@ -49,6 +51,8 @@ POST_DEADLINE_SECONDS = 30.0
 it posts."""
 CATALOG_MARGIN_SECONDS = 30
 """A catalog read is cut off this long before the lock could go stale."""
+LLM_MARGIN_SECONDS = 30
+"""The lock goes stale this long after a call to the LLM provider is cut off, at the earliest."""
 CATALOG_UNSET = Catalog(parts=(), locations=())
 """Placeholder until startup has read the catalog; the worker does not run before that."""
 
@@ -174,6 +178,18 @@ def check_inventree(settings: Settings) -> str:
     return asyncio.run(read())
 
 
+def llm_provider(settings: Settings) -> OpenAICompatible | None:
+    """The provider from the `[llm]` section, or None without one."""
+    if settings.llm is None:
+        return None
+    return OpenAICompatible(
+        settings.llm.base_url,
+        settings.llm.model,
+        settings.secrets.llm_api_key,
+        timeout_seconds=settings.llm.timeout_seconds,
+    )
+
+
 def slack_tls() -> ssl.SSLContext:
     """The system's certificate authorities plus certifi's, for the Web API and Socket Mode alike.
 
@@ -226,6 +242,7 @@ def run(
         if settings.writes.enabled:
             log.warning("writes.enabled has no effect in this version: it has no apply step yet")
         log.info("This version only posts dry runs: no stock is ever written.")
+        log.info(settings.llm_line())
         bot_token = settings.secrets.slack_bot_token.get_secret_value()
         client = slack_client or WebClient(token=bot_token, ssl=slack_tls())
         # No handler that sleeps for Slack's Retry-After inside a call: it could outlast the instance lock. A
@@ -262,7 +279,14 @@ def run(
             log.error("cannot start: %s reaching Slack", type(error).__name__)
             return 2
         worker.slack, worker.catalog = DeadlinePoster(client), cache
-        return _loop(worker, stop)
+        provider = llm_provider(settings)
+        if provider is None or settings.llm is None:
+            return _loop(worker, stop)
+        try:
+            worker.llm = LLMExtractor(WithinDeadline(provider, settings.llm.timeout_seconds))
+            return _loop(worker, stop)
+        finally:
+            provider.close()
     except LockLost:
         log.error("another instance took over the database lock; stopping")
         return 1
@@ -278,9 +302,11 @@ def run(
 
 
 def lock_stale_after(settings: Settings) -> timedelta:
-    """Longer than the worker can block between two beats: a reply (POST_DEADLINE_SECONDS), or a catalog read,
-    which is cut off CATALOG_MARGIN_SECONDS before this."""
-    return max(LOCK_STALE_AFTER, timedelta(seconds=4 * settings.inventree.timeout_seconds + 60))
+    """Longer than the worker can block between two beats: a reply (POST_DEADLINE_SECONDS), a catalog read,
+    which is cut off CATALOG_MARGIN_SECONDS before this, or a call to the LLM provider, which is cut off
+    LLM_MARGIN_SECONDS before this."""
+    llm = 0 if settings.llm is None else settings.llm.timeout_seconds + LLM_MARGIN_SECONDS
+    return max(LOCK_STALE_AFTER, timedelta(seconds=max(4 * settings.inventree.timeout_seconds + 60, llm)))
 
 
 def _loop(worker: Worker, stop: threading.Event) -> int:

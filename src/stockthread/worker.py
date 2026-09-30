@@ -10,6 +10,11 @@ Two steps, both run only by the holder of the instance lock:
    matches, closes the post to siblings, posts the dry-run reply in the thread, and records the outcome.
    A post that is not a movement, or that the extractor declines, gets no reply.
 
+The rule-based extractor reads every post first. A post it declines goes to the LLM extractor when one is
+configured (ADR 0011), and to nobody otherwise. The model's candidates pass the same validator and matcher.
+A provider that gives no answer is an outage: the post waits and is tried again with backoff, and after
+RETRY_FOR_SECONDS it is finished without a reply, as it would be with no model.
+
 Nothing here writes to InvenTree. Message text is read from the stored raw events and never logged. Edits,
 deletions and clicks are M2 (plan revisions and review). Until then every edit and deletion is noted by
 message key, in whatever order Slack delivers it, and a post that holds a noted message and has not had its
@@ -50,6 +55,7 @@ from stockthread.core.model import (
     ReviewReason,
 )
 from stockthread.core.validate import validate
+from stockthread.llm.extract import ProviderError
 from stockthread.slack.ingest import Deleted, Drop, Edited, NewMessage, Revised, ingest_event, revised_message
 from stockthread.slack.replies import MovementView, dry_run_reply, gate_reasons
 from stockthread.store import DryRunOutcome, EventStatus, LockLost, Store, WaitingPost
@@ -65,7 +71,8 @@ then left out."""
 LATE_AFTER_SECONDS = 10 * 60
 """A post answered this long after its newest message carries the review reason late_ingest."""
 RETRY_FOR_SECONDS = 15 * 60
-"""How long posting a reply is retried, with backoff, before the post is finished without one."""
+"""How long posting a reply, or asking the LLM provider, is retried with backoff before the post is finished
+without a reply."""
 MAX_BACKOFF_SECONDS = 60
 HEARTBEAT_SECONDS = 10.0
 """The worker beats the instance lock at most this often, before each batch and each post, so one long step
@@ -92,6 +99,12 @@ class SlackPoster(Protocol):
         unfurl_links: bool,
         unfurl_media: bool,
     ) -> Any: ...
+
+
+class PostExtractor(Protocol):
+    """The LLM extractor (`llm.extract.LLMExtractor`). Raises ProviderError when its provider gives no answer."""
+
+    def extract(self, messages: Sequence[MessageInput]) -> Extraction: ...
 
 
 class PostStillRunning(Exception):
@@ -138,6 +151,14 @@ class Worker:
     """Must return an aware datetime."""
     stopping: Callable[[], bool] = lambda: False
     """Checked between posts, so a stop request does not wait for a whole backlog."""
+    llm: PostExtractor | None = None
+    """Reads the posts the rule-based extractor declines. None: those posts get no reply."""
+    _llm_read: dict[PostKey, Extraction] = field(default_factory=dict)
+    """What the model read, kept until the post is finished: a reply that is tried again is not read again."""
+    _llm_quiet_until: Decimal = Decimal(0)
+    """The provider gave no answer: it is not asked again, for any post, before this time."""
+    _llm_asked: bool = False
+    """The provider was asked in this step."""
     _failures: dict[PostKey, _Failures] = field(default_factory=dict)
     _running: dict[PostKey, _Sent] = field(default_factory=dict)
     """Replies whose Slack call has not returned. Nothing else is posted until it has."""
@@ -220,6 +241,7 @@ class Worker:
 
     def reply_due(self) -> int:
         now = self._now()
+        self._llm_asked = False
         window = self.settings.slack.group_window_seconds
         done = 0
         for post in self.store.posts_waiting_for_dry_run():
@@ -244,6 +266,8 @@ class Worker:
             self.beat()
             self._reply(post, now)
             done += 1
+            if self._llm_asked:
+                break  # a model call is slow: the queue is drained again (an edit may have come) before the next
         return done
 
     def _reply(self, post: WaitingPost, now: Decimal) -> None:
@@ -263,10 +287,14 @@ class Worker:
             return
         messages, poster = read
         try:
-            extraction = extract_rules.extract(messages)
+            extraction, llm_unavailable = self._extract(key, messages, now)
+        except LockLost:
+            raise
         except Exception as error:
             self._broken(key, error)
             return
+        if extraction is None:
+            return  # waits for the LLM provider
 
         def record(views: Sequence[MovementView], late: bool) -> dict[str, Any]:
             return _record(
@@ -276,6 +304,7 @@ class Worker:
                 poster=poster,
                 messages=messages,
                 max_quantity=self.settings.policy.max_quantity,
+                llm_unavailable=llm_unavailable,
             )
 
         if extraction.declined or not extraction.movements:
@@ -300,6 +329,43 @@ class Worker:
         # before the outcome is recorded posts the reply again at restart; a duplicate beats a silent drop.
         self.store.close_siblings(self.owner, key)
         self._post(key, now, _Sent(extraction.extractor, decided, body))
+
+    def _extract(self, key: PostKey, messages: Sequence[MessageInput], now: Decimal) -> tuple[Extraction | None, bool]:
+        """The extraction, and whether the LLM provider was given up on. None: the post waits for the provider.
+
+        Rules first. Only a post they decline is sent to the model, so text the rules can read never leaves
+        the machine, and the model cannot change what the rules read.
+        """
+        by_rule = extract_rules.extract(messages)
+        if self.llm is None or not by_rule.declined:
+            return by_rule, False
+        read = self._llm_read.get(key)
+        if read is not None:
+            return read, False
+        failures = self._failures.get(key) or _Failures(first=now, count=0, next_try=now)
+        if now >= self._llm_quiet_until:
+            self._llm_asked = True
+            self.beat(now=True)  # the call has the whole stale window (run.lock_stale_after)
+            try:
+                read = self.llm.extract(messages)
+            except ProviderError as error:
+                failures.count += 1
+                self._llm_quiet_until = now + min(2 ** min(failures.count, 16), MAX_BACKOFF_SECONDS)
+                # The sentence quotes nothing (llm.extract.ProviderError).
+                log.warning("post %s: no answer from the LLM provider (%s), attempt %d", key.ts, error, failures.count)
+            self.beat()
+        if read is not None:
+            self._failures.pop(key, None)  # posting the reply has its own retries
+            self._llm_read[key] = read
+            return read, False
+        if now - failures.first >= RETRY_FOR_SECONDS:
+            self._failures.pop(key, None)
+            log.warning("post %s: gave up on the LLM provider", key.ts)
+            return by_rule, True
+        # One last try on time, as for a reply.
+        failures.next_try = min(max(self._llm_quiet_until, now + 1), failures.first + RETRY_FOR_SECONDS)
+        self._failures[key] = failures
+        return None, False
 
     def _post(self, key: PostKey, now: Decimal, sent: _Sent) -> None:
         """Post the reply, or take the result of the call that is still posting it, and record what it shows."""
@@ -330,6 +396,7 @@ class Worker:
             return
         self._running.pop(key, None)
         self._failures.pop(key, None)
+        self._llm_read.pop(key, None)
         reply_ts = response.get("ts")
         valid = isinstance(reply_ts, str) and _SLACK_TS.fullmatch(reply_ts)
         self.store.finish_dry_run(
@@ -397,6 +464,7 @@ class Worker:
         extractor: str | None = None,
         result: Mapping[str, Any] | None = None,
     ) -> None:
+        self._llm_read.pop(key, None)
         self.store.close_siblings(self.owner, key)
         self.store.finish_dry_run(self.owner, key, outcome, extractor=extractor, result=result)
 
@@ -461,11 +529,13 @@ def _record(
     poster: str,
     messages: Sequence[MessageInput],
     max_quantity: int,
+    llm_unavailable: bool = False,
 ) -> dict[str, Any]:
     """What the dry run decided, for the audit trail: candidates as extracted, matches (InvenTree ids and the
     rule), and every reason that kept a movement from "could apply". It quotes the post: stored, never logged."""
     return {
         "declined": extraction.declined,
+        "llm_unavailable": llm_unavailable,  # declined by rule, and the model was never heard
         "post_flags": sorted(flag.value for flag in extraction.post_flags),
         "late": late,
         "poster": poster,  # personal aliases match by poster

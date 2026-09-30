@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 import time
 from collections.abc import Mapping
 from decimal import Decimal
@@ -23,6 +24,7 @@ from stockthread.llm.extract import (
     SYSTEM_PROMPT,
     LLMExtractor,
     ProviderError,
+    WithinDeadline,
     mask_secrets,
     parse_output,
     user_prompt,
@@ -309,3 +311,65 @@ def test_masking_takes_linear_time(text: str) -> None:
     started = time.monotonic()
     mask_secrets(text)
     assert time.monotonic() - started < 2
+
+
+class _Slow:
+    model = "test-model"
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.calls = 0
+
+    def complete(self, system: str, user: str, schema: Any) -> str:
+        self.calls += 1
+        self.release.wait(5)
+        return "late"
+
+
+class _Answers:
+    model = "test-model"
+
+    def __init__(self, answer: str | Exception) -> None:
+        self.answer = answer
+
+    def complete(self, system: str, user: str, schema: Any) -> str:
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+def test_a_call_within_the_deadline_passes_through() -> None:
+    provider = WithinDeadline(_Answers("{}"), 5)
+    assert provider.model == "test-model"
+    assert provider.complete("system", "user", {}) == "{}"
+    assert provider.complete("system", "user", {}) == "{}"
+
+
+def test_a_call_past_the_deadline_is_a_provider_error_and_no_second_call_starts_while_it_runs() -> None:
+    slow = _Slow()
+    provider = WithinDeadline(slow, 0.05)
+    with pytest.raises(ProviderError, match="took longer than 0 s"):
+        provider.complete("system", "user", {})
+    with pytest.raises(ProviderError, match="has not ended yet"):
+        provider.complete("system", "user", {})
+    assert slow.calls == 1
+    slow.release.set()
+    for _ in range(100):
+        if provider._last is not None and provider._last.is_set():
+            break
+        time.sleep(0.01)
+    slow.release.clear()
+    with pytest.raises(ProviderError, match="took longer"):  # the late answer was dropped, not returned here
+        provider.complete("system", "user", {})
+    assert slow.calls == 2
+    slow.release.set()
+
+
+def test_an_error_in_the_provider_comes_back_as_a_provider_error_that_quotes_nothing() -> None:
+    with pytest.raises(ProviderError, match="HTTP 503"):
+        WithinDeadline(_Answers(ProviderError("the provider answered HTTP 503")), 5).complete("s", "u", {})
+    with pytest.raises(ProviderError) as info:
+        WithinDeadline(_Answers(RuntimeError("took 2 Disc 40")), 5).complete("s", "u", {})
+    assert str(info.value) == "RuntimeError in the provider"
+    assert info.value.__cause__ is None
+    assert info.value.__context__ is None

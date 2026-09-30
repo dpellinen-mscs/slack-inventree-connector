@@ -34,22 +34,7 @@ class OpenAICompatible:
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        url = urlsplit(base_url)
-        if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
-            raise ValueError("the provider URL must be http(s)://host[:port][/path], without credentials")
-        if url.query or url.fragment or not base_url.isascii() or not base_url.isprintable() or " " in base_url:
-            raise ValueError("the provider URL must be http(s)://host[:port][/path], without a query")
-        if url.scheme == "http" and api_key is not None and not _is_local(url.hostname):
-            raise ValueError("an API key is only sent over https, or to a server on this machine")
-        if not model or not model.isprintable():
-            raise ValueError("the model name is empty or not printable")
-        key = None if api_key is None else api_key.get_secret_value()
-        if key is not None and not (key.isascii() and key.isprintable() and " " not in key):
-            raise ValueError("the API key must be printable ASCII without spaces")
-        try:
-            self._url = httpx.URL(base_url.rstrip("/") + "/chat/completions")
-        except httpx.InvalidURL:
-            raise ValueError("the provider URL must be http(s)://host[:port][/path]") from None
+        self._url = check_endpoint(base_url, model, api_key)
         self._model = model
         self._api_key = api_key
         # trust_env off: a proxy from the environment would see the post, and the key of a local server.
@@ -98,6 +83,29 @@ class OpenAICompatible:
                 return bytes(raw)
         except (httpx.HTTPError, httpx.InvalidURL, UnicodeError, ValueError, TypeError) as error:
             return f"{type(error).__name__} reaching the provider"
+
+
+def check_endpoint(base_url: str, model: str, api_key: SecretStr | None) -> httpx.URL:
+    """The URL that is called, or a ValueError that names what is wrong and never quotes a value."""
+    try:
+        url = urlsplit(base_url)
+    except ValueError:  # its message can quote the URL
+        url = urlsplit("")
+    if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
+        raise ValueError("the provider URL must be http(s)://host[:port][/path], without credentials")
+    if url.query or url.fragment or not base_url.isascii() or not base_url.isprintable() or " " in base_url:
+        raise ValueError("the provider URL must be http(s)://host[:port][/path], without a query")
+    if url.scheme == "http" and api_key is not None and not _is_local(url.hostname):
+        raise ValueError("an API key is only sent over https, or to a server on this machine")
+    if not model or not model.isprintable():
+        raise ValueError("the model name is empty or not printable")
+    key = None if api_key is None else api_key.get_secret_value()
+    if key is not None and not (key.isascii() and key.isprintable() and " " not in key):
+        raise ValueError("the API key must be printable ASCII without spaces")
+    try:
+        return httpx.URL(base_url.rstrip("/") + "/chat/completions")
+    except httpx.InvalidURL:
+        raise ValueError("the provider URL must be http(s)://host[:port][/path]") from None
 
 
 def _content(raw: bytes) -> str:
