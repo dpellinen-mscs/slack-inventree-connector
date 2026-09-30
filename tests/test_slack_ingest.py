@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from stockthread.config import SlackSettings
+from stockthread.slack import ingest
 from stockthread.slack.ingest import (
     Challenge,
     Click,
@@ -19,8 +20,10 @@ from stockthread.slack.ingest import (
     Edited,
     NewMessage,
     RecentEvents,
+    Revised,
     ingest_action,
     ingest_event,
+    revised_message,
     unwrap_socket,
 )
 
@@ -190,21 +193,98 @@ def test_a_click_from_another_organization_is_dropped() -> None:
     assert ingest_action(body, SETTINGS) == Drop(DropReason.WRONG_WORKSPACE)
 
 
-@pytest.mark.parametrize(("subtype", "reason"), [
-    ("bot_message", DropReason.BOT),
-    ("channel_join", DropReason.SUBTYPE_NOT_ALLOWED),
-    ("tombstone", DropReason.SUBTYPE_NOT_ALLOWED),  # a deleted parent that still has replies
-])  # fmt: skip
-def test_an_edit_must_still_be_a_post(subtype: str, reason: DropReason) -> None:
+def test_an_edit_by_a_bot_is_dropped() -> None:
+    body = changed()
+    body["event"]["message"]["subtype"] = "bot_message"
+    assert ingest_event(body, SETTINGS, RecentEvents()) == Drop(DropReason.BOT)
+
+
+@pytest.mark.parametrize("subtype", ["channel_join", "tombstone"])  # tombstone: a deleted parent with replies
+def test_an_edit_that_is_no_longer_a_post_is_kept_as_a_revision(subtype: str) -> None:
     body = changed()
     body["event"]["message"]["subtype"] = subtype
-    assert ingest_event(body, SETTINGS, RecentEvents()) == Drop(reason)
+    seen = RecentEvents()
+    assert ingest_event(body, SETTINGS, seen) == Revised(body["event_id"], "C0ACME001", body["event"]["message"]["ts"])
+    assert ingest_event(body, SETTINGS, seen) == Drop(DropReason.DUPLICATE_EVENT)
 
 
 def test_a_change_without_an_edit_is_not_an_edit() -> None:
-    body = changed()  # a link preview arrives as message_changed with no "edited"
-    del body["event"]["message"]["edited"]
+    body = changed()  # a link preview arrives as message_changed with no "edited" and the same text
+    event = body["event"]
+    del event["message"]["edited"]
+    event["message"]["text"] = event["previous_message"]["text"]
+    event["message"]["attachments"] = [{"title": "synthetic preview"}]
     assert ingest_event(body, SETTINGS, RecentEvents()) == Drop(DropReason.UNCHANGED)
+
+
+@pytest.mark.parametrize("missing", ["edited", "user", "previous_message"])
+def test_a_changed_text_the_checks_cannot_read_in_full_is_kept_as_a_revision(missing: str) -> None:
+    body = changed()
+    event = body["event"]
+    if missing == "previous_message":
+        del event["message"]["edited"], event["previous_message"]  # nothing says what was there before
+    else:
+        del event["message"][missing]
+    assert ingest_event(body, SETTINGS, RecentEvents()) == Revised(
+        body["event_id"], "C0ACME001", event["message"]["ts"]
+    )
+
+
+def test_a_deletion_that_names_its_message_only_in_the_previous_one_is_kept() -> None:
+    body = copy.deepcopy(load(EVENTS / "message_deleted.json")["body"])
+    event = body["event"]
+    ts = event.pop("deleted_ts")
+    event["previous_message"] = {"type": "message", "user": "U0SAM0001", "text": "synthetic", "ts": ts}
+    assert ingest_event(body, SETTINGS, RecentEvents()) == Revised(body["event_id"], "C0ACME001", ts)
+
+
+@pytest.mark.parametrize(
+    "field", ["team_id", "api_app_id", "channel", "event_id", "bot_id", "user_team", "team", "previous_team"]
+)
+def test_a_revision_from_elsewhere_stays_dropped(field: str) -> None:
+    body = changed()
+    body["event"]["message"]["subtype"] = "tombstone"
+    if field == "channel":
+        body["event"]["channel"] = "C0OTHER01"
+    elif field == "user_team":
+        body["event"]["message"]["user_team"] = "T0OTHER99"
+    elif field == "team":
+        body["event"]["team"] = "T0OTHER99"
+    elif field == "previous_team":
+        body["event"]["previous_message"]["user_team"] = "T0OTHER99"
+    elif field == "bot_id":
+        body["event"]["previous_message"]["bot_id"] = "B0OTHER01"
+    elif field == "event_id":
+        del body["event_id"]
+    else:
+        body[field] = "X0OTHER01"
+    assert isinstance(ingest_event(body, SETTINGS, RecentEvents()), Drop)
+
+
+@pytest.mark.parametrize("field", ["team_id", "api_app_id", "channel", "user_team"])
+def test_the_lenient_reading_checks_where_a_revision_comes_from_by_itself(field: str) -> None:
+    body = changed()
+    assert revised_message(body, SETTINGS) == ("C0ACME001", body["event"]["message"]["ts"])
+    if field == "channel":
+        body["event"]["channel"] = "C0OTHER01"
+    elif field == "user_team":
+        body["event"]["message"]["user_team"] = "T0OTHER99"
+    else:
+        body[field] = "X0OTHER01"
+    assert revised_message(body, SETTINGS) is None
+
+
+@pytest.mark.parametrize("reason", [DropReason.WRONG_APP, DropReason.WRONG_WORKSPACE, DropReason.CHANNEL_NOT_ALLOWED])
+def test_a_drop_for_where_a_payload_comes_from_is_never_read_again(reason: DropReason) -> None:
+    assert reason not in ingest._MAY_HIDE_A_REVISION
+    assert DropReason.BOT not in ingest._MAY_HIDE_A_REVISION
+
+
+def test_an_edit_without_its_own_ts_is_found_by_the_previous_message() -> None:
+    body = changed()
+    ts = body["event"]["message"].pop("ts")
+    assert body["event"]["previous_message"]["ts"] == ts
+    assert ingest_event(body, SETTINGS, RecentEvents()) == Revised(body["event_id"], "C0ACME001", ts)
 
 
 def test_a_reply_under_a_post_edited_earlier_is_not_another_edit() -> None:

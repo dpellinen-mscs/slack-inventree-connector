@@ -16,7 +16,9 @@ message key, in whatever order Slack delivers it, and a post that holds a noted 
 dry run is withheld: its original text would be wrong.
 
 Every finished post keeps a record of what was decided and why (`Store.dry_run`): the extractor, the
-candidates, every match with its rule and ids, and the review reasons.
+candidates, every match with its rule and ids, and the review reasons. The record is the decision the reply
+shows: a reply whose Slack call is slow to return is not decided again, and its post is not finished (not
+given up on, not withheld) before the call has ended.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
 
-from stockthread.config import Settings, SlackSettings
+from stockthread.config import Settings
 from stockthread.core import extract_rules
 from stockthread.core.grouping import seconds
 from stockthread.core.matching import Catalog, match_location, match_part
@@ -48,7 +50,7 @@ from stockthread.core.model import (
     ReviewReason,
 )
 from stockthread.core.validate import validate
-from stockthread.slack.ingest import Deleted, Drop, Edited, NewMessage, ingest_event
+from stockthread.slack.ingest import Deleted, Drop, Edited, NewMessage, Revised, ingest_event, revised_message
 from stockthread.slack.replies import MovementView, dry_run_reply, gate_reasons
 from stockthread.store import DryRunOutcome, EventStatus, LockLost, Store, WaitingPost
 
@@ -92,6 +94,11 @@ class SlackPoster(Protocol):
     ) -> Any: ...
 
 
+class PostStillRunning(Exception):
+    """A reply was handed to Slack and the call has not returned yet. It may still be sent: the next try for
+    the same thread takes its result (or its error) and sends nothing again (run.DeadlinePoster)."""
+
+
 class _AlreadyStored:
     """The listener stored the event once; the worker runs the checks again without deduplicating."""
 
@@ -104,6 +111,18 @@ class _Failures:
     first: Decimal
     count: int
     next_try: Decimal
+
+
+@dataclass
+class _Sent:
+    """A reply handed to Slack, with the decision it shows. While its call is still running the post is
+    neither decided again nor finished: what is recorded is what was sent."""
+
+    extractor: str
+    decided: Mapping[str, Any]
+    body: Mapping[str, Any]
+    checks: int = 0
+    next_check: Decimal = Decimal(0)
 
 
 @dataclass
@@ -120,6 +139,8 @@ class Worker:
     stopping: Callable[[], bool] = lambda: False
     """Checked between posts, so a stop request does not wait for a whole backlog."""
     _failures: dict[PostKey, _Failures] = field(default_factory=dict)
+    _running: dict[PostKey, _Sent] = field(default_factory=dict)
+    """Replies whose Slack call has not returned. Nothing else is posted until it has."""
     _beat_at: float = float("-inf")
     _quiet_until: Decimal = Decimal(0)
     """Slack rate-limited a reply: nothing is posted before this time."""
@@ -166,11 +187,12 @@ class Worker:
             return EventStatus.FAILED, "body_not_json"
         # Noted first, and by message key: the message itself may arrive after its edit. Read leniently, from
         # the raw event: the ingest checks drop some edits (a deleted root becomes a tombstone).
-        changed = _revised(payload, self.settings.slack)
-        if changed is not None:
+        found = revised_message(payload, self.settings.slack)
+        if found is not None:
+            changed = PostKey(self.settings.slack.workspace_id, *found)
             self.store.note_revision(self.owner, changed, event_id)
             post = self.store.waiting_post_of(changed)
-            if post is not None:
+            if post is not None and post not in self._running:  # a reply on its way is settled by its call
                 # Changed before its dry run: reading the original text would be wrong. Revisions are M2.
                 self._finish(post, DryRunOutcome.WITHHELD, result={"withheld": "changed"})
                 return EventStatus.DONE, "withheld_changed_post"
@@ -178,7 +200,7 @@ class Worker:
         if isinstance(decision, Drop):
             return EventStatus.DROPPED, decision.reason.value
         workspace = self.settings.slack.workspace_id
-        if isinstance(decision, Edited | Deleted):
+        if isinstance(decision, Edited | Deleted | Revised):
             return EventStatus.DROPPED, "revisions_not_handled_yet"
         if not isinstance(decision, NewMessage):
             return EventStatus.DROPPED, "not_a_message"
@@ -201,6 +223,15 @@ class Worker:
         window = self.settings.slack.group_window_seconds
         done = 0
         for post in self.store.posts_waiting_for_dry_run():
+            sent = self._running.get(post.key)
+            if sent is not None:
+                if sent.next_check <= now and not self.stopping():
+                    self.beat()
+                    self._post(post.key, now, sent)
+                    done += 1
+                continue
+            if self._running:
+                continue  # one call at a time: a reply is still on its way
             if seconds(post.newest_ts) + window + GRACE_SECONDS >= now:
                 continue  # a sibling may still come
             if not post.has_key_message and seconds(post.key.ts) + ROOT_WAIT_SECONDS >= now:
@@ -268,7 +299,11 @@ class Worker:
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
         # before the outcome is recorded posts the reply again at restart; a duplicate beats a silent drop.
         self.store.close_siblings(self.owner, key)
-        # close_siblings has just checked that the lock is still ours (an instance that lost it while it was
+        self._post(key, now, _Sent(extraction.extractor, decided, body))
+
+    def _post(self, key: PostKey, now: Decimal, sent: _Sent) -> None:
+        """Post the reply, or take the result of the call that is still posting it, and record what it shows."""
+        # The store has just checked that the lock is still ours (an instance that lost it while it was
         # blocked never posts). The beat makes the heartbeat fresh, so the post has the whole stale window: the
         # poster must return well within it (run.DeadlinePoster).
         self.beat(now=True)
@@ -276,14 +311,24 @@ class Worker:
             response = self.slack.chat_postMessage(
                 channel=key.channel_id,
                 thread_ts=key.ts,
-                text=body["text"],
-                blocks=body["blocks"],
+                text=sent.body["text"],
+                blocks=sent.body["blocks"],
                 unfurl_links=False,
                 unfurl_media=False,
             )
-        except Exception as error:  # any Slack or network error: retry with backoff, then give up
-            self._post_failed(key, now, error, extraction.extractor, decided)
+        except PostStillRunning:
+            # Not a failure yet: the call may still send. The post stays open, with this decision, until the
+            # call has ended; giving up now could leave a reply in Slack that the record denies.
+            sent.checks += 1
+            sent.next_check = now + min(2 ** min(sent.checks, 16), MAX_BACKOFF_SECONDS)
+            self._running[key] = sent
+            log.warning("post %s: reply still on its way to Slack, check %d", key.ts, sent.checks)
             return
+        except Exception as error:  # any Slack or network error: retry with backoff, then give up
+            self._running.pop(key, None)
+            self._post_failed(key, now, error, sent.extractor, sent.decided)
+            return
+        self._running.pop(key, None)
         self._failures.pop(key, None)
         reply_ts = response.get("ts")
         valid = isinstance(reply_ts, str) and _SLACK_TS.fullmatch(reply_ts)
@@ -292,8 +337,8 @@ class Worker:
             key,
             DryRunOutcome.REPLIED,
             reply_ts if valid else None,
-            extractor=extraction.extractor,
-            result=decided,
+            extractor=sent.extractor,
+            result=sent.decided,
         )
 
     def _views(
@@ -383,43 +428,6 @@ class Worker:
         if now.tzinfo is None:
             raise ValueError("the worker clock must return an aware datetime")
         return Decimal(str(now.timestamp()))
-
-
-def _revised(payload: object, slack: SlackSettings) -> PostKey | None:
-    """The message that an event edits or deletes, or None: also for events the ingest checks drop.
-
-    An edit counts when the text or the files differ from before, when the message became a tombstone (a
-    deleted thread root), or when the event does not say what was there before. A link preview or a new
-    thread reply changes neither.
-    """
-    if not isinstance(payload, dict) or payload.get("team_id") != slack.workspace_id:
-        return None
-    event = payload.get("event")
-    if not isinstance(event, dict):
-        return None
-    channel, subtype = event.get("channel"), event.get("subtype")
-    if event.get("type") != "message" or channel not in slack.channels:
-        return None
-    previous = event.get("previous_message")
-    if subtype == "message_deleted":
-        ts = event.get("deleted_ts") or (previous.get("ts") if isinstance(previous, dict) else None)
-    elif subtype == "message_changed":
-        inner = event.get("message")
-        if not isinstance(inner, dict):
-            return None
-        ts = inner.get("ts")
-        if isinstance(previous, dict) and inner.get("subtype") != "tombstone" and _shown(inner) == _shown(previous):
-            return None
-    else:
-        return None
-    if not isinstance(ts, str) or not _SLACK_TS.fullmatch(ts):
-        return None
-    return PostKey(slack.workspace_id, channel, ts)
-
-
-def _shown(message: dict[str, Any]) -> tuple[object, list[object]]:
-    files = message.get("files")
-    return message.get("text"), [file.get("id") for file in files if isinstance(file, dict)] if files else []
 
 
 def _part(text: str | None, catalog: Catalog, poster: str) -> Match:
