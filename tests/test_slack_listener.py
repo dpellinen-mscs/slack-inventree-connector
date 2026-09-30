@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -253,3 +254,16 @@ def test_an_app_answers_only_its_own_transport(db: Path, stores: Callable[[], St
     assert app_for("socket", stores).dispatch(http_request(fixture)).status == 401
     assert app_for("http", stores).dispatch(BoltRequest(body=fixture["body"], mode="socket_mode")).status == 401
     assert stored(db) == []
+
+
+def test_a_bot_token_in_the_environment_causes_no_warning_from_bolt(
+    stores: Callable[[], Store], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The quickstart exports SLACK_BOT_TOKEN. Bolt reads it on its own and warns twice that it is unused.
+    monkeypatch.setenv("SLACK_BOT_TOKEN", TOKEN)
+    logger = logging.getLogger("stockthread.slack.listener")
+    with caplog.at_level(logging.WARNING):
+        app_for("socket", stores)
+        assert caplog.records == []
+        logger.warning("As you gave `client` as well, `token` will be unused.")
+    assert len(caplog.records) == 1  # only while the app is built: the filter is gone afterwards

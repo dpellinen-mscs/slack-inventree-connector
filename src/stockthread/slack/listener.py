@@ -23,6 +23,7 @@ from typing import Any, Protocol
 
 from slack_bolt import Ack, App, BoltRequest, BoltResponse
 from slack_bolt.authorization import AuthorizeResult
+from slack_bolt.logger.messages import warning_client_prioritized_and_token_skipped, warning_token_skipped
 from slack_sdk import WebClient
 
 from stockthread.config import SlackSettings
@@ -113,6 +114,13 @@ class Listener:
         return decision
 
 
+_UNUSED_TOKEN_WARNINGS = frozenset({warning_client_prioritized_and_token_skipped(), warning_token_skipped()})
+
+
+def _not_about_the_unused_token(record: logging.LogRecord) -> bool:
+    return record.getMessage() not in _UNUSED_TOKEN_WARNINGS
+
+
 def build_app(
     settings: SlackSettings,
     identity: BotIdentity,
@@ -136,15 +144,20 @@ def build_app(
             bot_user_id=identity.bot_user_id,
         )
 
-    app = App(
-        client=client or WebClient(),  # `authorize` gives each request the bot token
-        authorize=authorize,
-        signing_secret=signing_secret if http else None,
-        request_verification_enabled=http,
-        process_before_response=True,  # acknowledge only after the handler has stored the payload
-        token_verification_enabled=False,  # `identify` has called auth.test already
-        logger=log,
-    )
+    # Bolt reads SLACK_BOT_TOKEN from the environment itself, and then warns that it will not use it.
+    log.addFilter(_not_about_the_unused_token)
+    try:
+        app = App(
+            client=client or WebClient(),  # `authorize` gives each request the bot token
+            authorize=authorize,
+            signing_secret=signing_secret if http else None,
+            request_verification_enabled=http,
+            process_before_response=True,  # acknowledge only after the handler has stored the payload
+            token_verification_enabled=False,  # `identify` has called auth.test already
+            logger=log,
+        )
+    finally:
+        log.removeFilter(_not_about_the_unused_token)
 
     @app.middleware
     def _only_own_transport(req: BoltRequest, resp: BoltResponse, next: Callable[[], BoltResponse]) -> BoltResponse:
