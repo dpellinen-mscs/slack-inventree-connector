@@ -23,6 +23,7 @@ Current version: see [`VERSION`](VERSION).
 | `schema/case-file.schema.json` | JSON Schema for a case file, with the lists of types, flags and tags |
 | `tools/validate_corpus.py` | Corpus checker, standard library only |
 | `tools/score.py` | Reference scorer, standard library only |
+| `recorded/*.json` | One model's raw answers to the corpus, per file (none yet) |
 
 ## A case
 
@@ -329,6 +330,54 @@ The scorer prints the metrics and lists every hard failure. With
 `--fail-on-hard` it exits with 1 if there is one. It refuses a predictions
 file that was made for another corpus version.
 
+### Recording a model
+
+A model is scored from a recording of its answers, so CI needs no provider
+and no key. The corpus is synthetic: recording sends no real post.
+
+```sh
+export LLM_BASE_URL=https://…/v1 LLM_MODEL=… LLM_API_KEY=…   # any OpenAI-compatible endpoint
+.venv/bin/python -m stockthread.llm.record eval --out eval/recorded/<model>.json
+.venv/bin/pytest tests/llm/test_recorded_corpus.py -s
+```
+
+The file holds the model's raw answer for every case, or the sentence that
+says why there was none, and a hash of the request body as the adapter
+sends it (model name, prompt, post as sent, schema, and parameters such as
+the temperature). The endpoint is not part of the hash: keep a model name
+meaning the same server. An answer whose hash no longer fits is never
+scored: after a change to the prompt, the schema, the masking or the
+request, run the command again. It keeps the answers that still fit and
+asks only for the rest. It refuses a file that holds another model's
+answers, or that is not a recording, and leaves it as it is: use one file
+per model.
+
+The test reads each recording back through the extractor the worker uses
+and prints two reports: the model reading every post, and the pipeline as
+the worker runs it, where the model reads only the posts the rule-based
+extractor declines. The bar has two parts:
+
+- The pipeline has no hard failure.
+- Every case has a recorded answer. A recording made while the provider
+  was rate-limited or down fails the test until the command has been run
+  again, because a case without an answer is scored on the rules alone. A
+  case the model itself refuses or does not finish (recorded with
+  `no_reading`) may be listed by id in `NO_READING_EXPECTED` in the test;
+  it is then scored as left unread.
+
+**Once a recording is committed**, the corpus and the recording move
+together:
+
+- A change to a case's `expected` values only (a PATCH) needs nothing: the
+  requests are the same, every hash still fits, and the recording is
+  scored against the corrected corpus. The `corpus_version` in the file
+  only says when it was made.
+- A new case, or a change to a post's text, has no fitting answer, and the
+  test fails with "record again". Whoever has access to that model runs
+  the command again; it asks only for the new cases. A contributor without
+  access says so in the pull request, and a maintainer records before the
+  merge.
+
 ## Versioning
 
 `VERSION` follows MAJOR.MINOR.PATCH.
@@ -363,3 +412,5 @@ Until 1.0.0 the conventions may still change in a MINOR version.
    The schema tests are skipped unless the `jsonschema` package is
    installed. CI always runs them.
 7. Bump `VERSION`.
+8. If `eval/recorded/` holds a recording, a new case needs the model's
+   answer: see "Recording a model".
