@@ -48,3 +48,6 @@ Nothing is released yet. The connector cannot write stock in this state.
   record of what was decided and why (candidates, matches, reasons).
 - The validator reads a quantity expression as a whole ("2 of the 5", "half a dozen") and checks the
   unit against the text: a swapped, missing or made-up unit needs review.
+- An LLM extractor behind a provider interface, not yet wired into the worker: a versioned prompt,
+  a strict output schema (output that does not fit declines the post), masking of strings that
+  look like credentials before text is sent, and an adapter for OpenAI-compatible endpoints.
