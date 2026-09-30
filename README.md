@@ -65,8 +65,12 @@ install an app. About 15 minutes.
 What to expect in this version:
 
 - Nothing is written to InvenTree, whatever `writes.enabled` says.
-- The built-in extractor reads simple one-line posts. What it cannot read, it leaves unanswered;
-  the LLM extractor on the [roadmap](ROADMAP.md) handles the rest.
+- The built-in extractor reads simple one-line posts. What it cannot read, it leaves unanswered.
+- Optionally, a model reads the posts the built-in extractor cannot: uncomment the `[llm]` section
+  in `stockthread.toml` and point it at any OpenAI-compatible endpoint (a hosted provider with
+  `LLM_API_KEY` set, or a local server such as Ollama). Only those posts are sent, their text then
+  leaves this machine unless the endpoint is local, and strings that look like credentials are
+  masked first. No model has been scored on the eval corpus yet: treat it as experimental.
 - A vehicle is a stock location: create one per vehicle in InvenTree ("Truck 1") and name it in the
   post. "My truck" is not mapped to a location yet.
 - The database is one file, `stockthread.db`, next to the settings. It holds the raw Slack events.

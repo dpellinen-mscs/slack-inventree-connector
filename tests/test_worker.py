@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+import time
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -15,7 +16,8 @@ import pytest
 from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
-from stockthread.core.model import PostKey
+from stockthread.core.model import CandidateMovement, Extraction, LineItem, MessageInput, MovementType, PostKey
+from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.ingest import Drop, Revised
 from stockthread.slack.listener import Listener
 from stockthread.store import DryRunOutcome, LockLost, StateConflict, Store
@@ -897,3 +899,624 @@ def test_a_long_retry_after_near_the_end_still_gets_its_last_try_on_time(
     clock.at(f"{1790000030 + RETRY_FOR_SECONDS}.000000")  # the wait is capped at the retry period
     worker.step()
     assert audit(path) == ["dry_run_gave_up"]
+
+
+# The LLM extractor: only what the rules decline goes to the model, and an outage waits.
+
+OTHER = "1790000001.000100"
+LLM_KEY = PostKey(WORKSPACE, CHANNEL, ROOT)
+GAVE = "gave truck 1 two Disc 40 from main stock"  # the rules do not know "gave": declined
+MODEL = "llm-0.1/test-model"
+
+
+def read(quantity: int = 2, item: str = "Disc 40") -> Extraction:
+    movement = CandidateMovement(
+        MovementType.TAKE_TO_VEHICLE, (LineItem(item, Decimal(quantity)),), "main stock", "truck 1"
+    )
+    return Extraction(MODEL, (movement,))
+
+
+class FakeLLM:
+    def __init__(self, *answers: Extraction | Exception) -> None:
+        self.answers = list(answers)
+        self.calls: list[list[str]] = []
+
+    def extract(self, messages: Sequence[MessageInput]) -> Extraction:
+        self.calls.append([message.text for message in messages])
+        answer = self.answers.pop(0) if self.answers else ProviderError("the provider answered HTTP 503")
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def worker_with(llm: FakeLLM, store: Store, slack: FakeSlack, clock: Clock) -> Worker:
+    return Worker(settings(), store, OWNER, slack, lambda: CATALOG, clock, llm=llm)
+
+
+def due(worker: Worker, clock: Clock, at: int = 1790000030) -> None:
+    worker.step()
+    clock.at(f"{at}.000000")
+    worker.step()
+
+
+def read_and_answered(worker: Worker, clock: Clock) -> None:
+    """The post is due and the model is asked; the step after that posts the reply (or finishes the post)."""
+    due(worker, clock)
+    worker.step()
+
+
+def test_a_post_the_rules_decline_is_read_by_the_model_and_gets_its_dry_run(
+    store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    llm = FakeLLM(read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    read_and_answered(worker, clock)
+    assert llm.calls == [[GAVE]]
+    assert [reply["thread_ts"] for reply in slack.posted] == [ROOT]
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.outcome is DryRunOutcome.REPLIED
+    assert record.extractor == MODEL
+    assert record.result is not None
+    assert record.result["llm_unavailable"] is False
+    assert record.result["movements"][0]["items"][0]["part"]["record"] == 1
+    clock.at("1790000100.000000")
+    worker.step()
+    assert len(llm.calls) == 1
+    assert len(slack.posted) == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "took 2 Disc 40 from main stock to truck 1",  # the rules read it
+        "can someone bring 2 Disc 40 to truck 1?",  # the rules say: a request, not a movement
+        "anyone want lunch?",
+    ],
+)
+def test_a_post_the_rules_can_read_never_goes_to_the_model(
+    store: Store, slack: FakeSlack, clock: Clock, text: str
+) -> None:
+    llm = FakeLLM(read(quantity=50))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, text))
+    due(worker, clock)
+    assert llm.calls == []
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.extractor == extract_rules.EXTRACTOR
+
+
+def test_siblings_are_sent_as_one_post(store: Store, slack: FakeSlack, clock: Clock) -> None:
+    llm = FakeLLM(read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, "took 2 Disc 40 from main stock"))
+    enqueue(store, message("1790000003.000100", "to truck 1"))
+    read_and_answered(worker, clock)
+    assert llm.calls == [["took 2 Disc 40 from main stock", "to truck 1"]]
+    assert len(slack.posted) == 1
+
+
+def test_what_the_model_reads_is_still_checked_against_the_text(store: Store, slack: FakeSlack, clock: Clock) -> None:
+    llm = FakeLLM(read(quantity=5))  # the post says two
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    read_and_answered(worker, clock)
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.result is not None
+    movement = record.result["movements"][0]
+    assert [reason["source"] for reason in movement["reasons"]] != []
+    assert movement["gate"] != []  # it could not apply without a person
+
+
+def test_a_post_the_model_declines_gets_no_reply(store: Store, slack: FakeSlack, clock: Clock, path: Path) -> None:
+    llm = FakeLLM(Extraction(MODEL, (), declined=True))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    read_and_answered(worker, clock)
+    assert slack.posted == []
+    assert replies(path) == [(ROOT, None, True)]
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert (record.outcome, record.extractor) == (DryRunOutcome.SILENT, MODEL)
+    clock.at("1790000100.000000")
+    worker.step()
+    assert len(llm.calls) == 1
+
+
+def test_a_provider_outage_makes_the_post_wait_and_it_is_tried_again_with_backoff(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    down = ProviderError("the provider answered HTTP 503")
+    llm = FakeLLM(down, down, read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    due(worker, clock)
+    assert len(llm.calls) == 1
+    assert replies(path) == [(ROOT, None, False)]  # still waiting
+    clock.at("1790000031.000000")
+    worker.step()
+    assert len(llm.calls) == 1  # 2 s after the first failure, not before
+    clock.at("1790000032.000000")
+    worker.step()
+    assert len(llm.calls) == 2
+    clock.at("1790000035.000000")
+    worker.step()
+    assert len(llm.calls) == 2  # 4 s after the second
+    clock.at("1790000036.000000")
+    worker.step()
+    assert len(llm.calls) == 3
+    worker.step()
+    assert len(slack.posted) == 1
+    assert "HTTP 503" in caplog.text
+    assert GAVE not in caplog.text
+    assert "Disc" not in caplog.text
+
+
+def test_after_a_long_outage_the_post_is_finished_without_a_reply_and_says_why(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    llm = FakeLLM()  # always down
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    due(worker, clock)
+    for passed in range(1, RETRY_FOR_SECONDS):
+        clock.at(f"{1790000030 + passed}.000000")
+        worker.step()
+    assert replies(path) == [(ROOT, None, False)]
+    assert len(llm.calls) <= 12 + RETRY_FOR_SECONDS // MAX_BACKOFF_SECONDS  # backoff, capped at a minute
+    clock.at(f"{1790000030 + RETRY_FOR_SECONDS}.000000")
+    worker.step()
+    assert replies(path) == [(ROOT, None, True)]
+    assert slack.posted == []
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.result is not None
+    assert (record.outcome, record.extractor) == (DryRunOutcome.SILENT, extract_rules.EXTRACTOR)
+    assert record.result["declined"] is True
+    assert record.result["llm_unavailable"] is True
+    calls = len(llm.calls)
+    clock.at(f"{1790000090 + RETRY_FOR_SECONDS}.000000")
+    worker.step()
+    assert len(llm.calls) == calls
+
+
+def test_an_outage_costs_one_call_per_interval_however_many_posts_wait(
+    store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    llm = FakeLLM()
+    worker = worker_with(llm, store, slack, clock)
+    for number in range(5):
+        enqueue(store, message(f"179000000{number}.000100", GAVE, user=f"U0TECH000{number}"))
+    due(worker, clock)
+    assert len(llm.calls) == 1
+    clock.at("1790000031.000000")
+    worker.step()
+    assert len(llm.calls) == 1
+    clock.at("1790000032.000000")
+    worker.step()
+    assert len(llm.calls) == 2
+    # The backoff grows with the outage, not with one post's tries: the first post is withheld (edited), and
+    # the next one still waits 4 s, then 8 s.
+    store.note_revision(OWNER, PostKey(WORKSPACE, CHANNEL, "1790000000.000100"), None)
+    clock.at("1790000035.000000")
+    worker.step()
+    assert len(llm.calls) == 2
+    clock.at("1790000036.000000")
+    worker.step()
+    assert len(llm.calls) == 3
+    clock.at("1790000043.000000")
+    worker.step()
+    assert len(llm.calls) == 3
+    clock.at("1790000044.000000")
+    worker.step()
+    assert len(llm.calls) == 4
+    assert PostKey(WORKSPACE, CHANNEL, "1790000000.000100") not in worker._llm_waiting  # finished: nothing is kept
+
+
+def test_the_queue_is_drained_between_two_model_calls(store: Store, slack: FakeSlack, clock: Clock, path: Path) -> None:
+    llm = FakeLLM(read(), read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    enqueue(store, message(OTHER, GAVE, user="U0LUIS0005"))
+    due(worker, clock)
+    assert len(llm.calls) == 1  # one call in a step
+    edit = message("1790000020.000100", "", subtype="message_changed")
+    edit["event"]["message"] = {"type": "message", "user": "U0LUIS0005", "text": "gave truck 1 three", "ts": OTHER}
+    edit["event"].pop("user")
+    enqueue(store, edit)
+    worker.step()
+    assert len(llm.calls) == 1  # the edit came first: the changed post is withheld, not read
+    withheld = store.dry_run(PostKey(WORKSPACE, CHANNEL, OTHER))
+    assert withheld is not None
+    assert withheld.outcome is DryRunOutcome.WITHHELD
+
+
+def test_a_reply_that_is_tried_again_does_not_ask_the_model_again(store: Store, slack: FakeSlack, clock: Clock) -> None:
+    llm = FakeLLM(read(), read(quantity=9))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    slack.failures = 1
+    read_and_answered(worker, clock)
+    assert slack.posted == []
+    clock.at("1790000040.000000")
+    worker.step()
+    assert len(slack.posted) == 1
+    assert len(llm.calls) == 1
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["movements"][0]["items"][0]["quantity"] == "2"
+    assert worker._llm_read == {}
+    assert worker._failures == {}
+    assert worker._llm_waiting == {}
+
+
+def test_a_reply_that_fails_after_an_outage_gets_its_own_retry_window(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    llm = FakeLLM(ProviderError("down"), read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    due(worker, clock)
+    slack.failures = 10_000
+    start = 1790000030 + RETRY_FOR_SECONDS - 60
+    clock.at(f"{start}.000000")  # the model answers just before the outage limit
+    worker.step()
+    assert len(llm.calls) == 2
+    worker.step()  # the first reply that fails
+    clock.at(f"{start + 120}.000000")
+    worker.step()
+    assert replies(path) == [(ROOT, None, False)]  # the reply is still being tried
+    clock.at(f"{start + RETRY_FOR_SECONDS}.000000")
+    worker.step()
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert (record.outcome, record.extractor) == (DryRunOutcome.GAVE_UP, MODEL)
+    assert len(llm.calls) == 2
+
+
+def test_an_error_inside_the_extractor_fails_the_post_and_not_the_worker(
+    store: Store, slack: FakeSlack, clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    llm = FakeLLM(RuntimeError(GAVE), read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    enqueue(store, message(OTHER, GAVE, user="U0LUIS0005"))
+    due(worker, clock)
+    worker.step()
+    worker.step()
+    first = store.dry_run(LLM_KEY)
+    assert first is not None
+    assert first.outcome is DryRunOutcome.FAILED
+    assert [reply["thread_ts"] for reply in slack.posted] == [OTHER]
+    assert GAVE not in caplog.text
+
+
+def test_the_lock_is_beaten_right_before_the_model_is_asked_and_a_lost_lock_stops(
+    store: Store, slack: FakeSlack, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llm = FakeLLM(read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    worker.step()
+    clock.at("1790000030.000000")
+    beats: list[int] = []
+    heartbeat = store.heartbeat
+
+    def counted(owner: str) -> None:
+        beats.append(len(llm.calls))
+        heartbeat(owner)
+
+    monkeypatch.setattr(store, "heartbeat", counted)
+    worker._beat_at = time.monotonic()  # a fresh beat: only `now=True` beats again
+    worker.step()
+    assert 0 in beats
+    assert len(llm.calls) == 1
+
+    def lost(owner: str) -> None:
+        raise LockLost
+
+    enqueue(store, message("1790000040.000100", GAVE))
+    clock.at("1790000090.000000")
+    monkeypatch.setattr(store, "heartbeat", lost)
+    with pytest.raises(LockLost):
+        worker.step()
+    assert len(llm.calls) == 1
+
+
+class SlowLLM(FakeLLM):
+    """Every call takes `seconds` on the worker's clock before it answers or fails."""
+
+    def __init__(self, clock: Clock, seconds: int, *answers: Extraction | Exception) -> None:
+        super().__init__(*answers)
+        self.clock, self.seconds = clock, seconds
+        self.at: list[float] = []
+
+    def extract(self, messages: Sequence[MessageInput]) -> Extraction:
+        self.at.append(self.clock.now.timestamp())
+        self.clock.now += timedelta(seconds=self.seconds)
+        return super().extract(messages)
+
+
+def poll(worker: Worker, clock: Clock, seconds: int) -> None:
+    end = clock.now + timedelta(seconds=seconds)
+    while clock.now < end:
+        clock.now += timedelta(seconds=1)
+        worker.step()
+
+
+@pytest.mark.parametrize("seconds", [30, 61, 120])
+def test_a_provider_that_is_slow_to_fail_is_still_backed_off_from_and_holds_no_other_post_back(
+    store: Store, slack: FakeSlack, clock: Clock, seconds: int
+) -> None:
+    llm = SlowLLM(clock, seconds)  # always down, after a long wait
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    enqueue(store, message(OTHER, TAKE, user=LUIS))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()  # the declined post is first, but the slow call is made last
+    assert len(llm.calls) == 1
+    assert [reply["thread_ts"] for reply in slack.posted] == [OTHER]  # sent before the call began
+    assert llm.at[0] == 1790000030
+    poll(worker, clock, 1)
+    assert len(llm.calls) == 1
+    poll(worker, clock, 600)
+    ended = [start + seconds for start in llm.at]
+    waits = [start - end for start, end in zip(llm.at[1:], ended, strict=False)]
+    assert len(waits) >= 5
+    # Counted from the end of the call that failed, and capped at a minute.
+    assert waits == ([2, 4, 8, 16, 32] + [MAX_BACKOFF_SECONDS] * len(waits))[: len(waits)]
+
+
+def test_a_post_that_gains_a_message_after_the_model_read_it_is_read_again(
+    store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    llm = FakeLLM(read(), read(quantity=3))
+    worker = worker_with(llm, store, slack, clock)
+    catalogs: list[Catalog | Exception] = [ConnectionError("synthetic outage"), CATALOG]
+    worker.catalog = lambda: _next(catalogs)
+    enqueue(store, message(ROOT, GAVE))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    with pytest.raises(ConnectionError):
+        worker.step()  # read by the model, then the catalog is down: the post stays open
+    assert len(llm.calls) == 1
+    enqueue(store, message("1790000031.000100", "sorry, three Disc 40 not two", thread_ts=ROOT))
+    clock.at("1790000032.000000")
+    worker.step()
+    clock.at("1790000060.000000")
+    worker.step()
+    assert llm.calls == [[GAVE], [GAVE, "sorry, three Disc 40 not two"]]
+    worker.step()
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["movements"][0]["items"][0]["quantity"] == "3"
+    assert worker._llm_read == {}
+
+
+def _next(catalogs: list[Catalog | Exception]) -> Catalog:
+    found = catalogs.pop(0) if len(catalogs) > 1 else catalogs[0]
+    if isinstance(found, Exception):
+        raise found
+    return found
+
+
+ONT = "gave truck 1 two ONT 100 from main stock"
+
+
+def test_in_an_outage_the_posts_that_wait_take_turns_and_each_gets_a_last_call_of_its_own(
+    store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    llm = FakeLLM()
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    enqueue(store, message(OTHER, ONT, user=LUIS))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    poll(worker, clock, RETRY_FOR_SECONDS - 2)
+    assert llm.calls[:4] == [[GAVE], [ONT], [GAVE], [ONT]]
+    assert abs(llm.calls.count([GAVE]) - llm.calls.count([ONT])) <= 1
+    assert len(llm.calls) <= 12 + RETRY_FOR_SECONDS // MAX_BACKOFF_SECONDS  # still one call per interval
+    llm.answers = [ProviderError("down"), read(item="ONT 100")]  # the provider is back for the second post
+    poll(worker, clock, 4)
+    first, second = store.dry_run(LLM_KEY), store.dry_run(PostKey(WORKSPACE, CHANNEL, OTHER))
+    assert first is not None
+    assert first.outcome is DryRunOutcome.SILENT
+    assert first.result is not None
+    assert first.result["llm_unavailable"] is True
+    assert second is not None
+    assert second.outcome is DryRunOutcome.REPLIED
+    assert llm.calls[-1] == [ONT]
+
+
+def test_a_post_the_model_refuses_is_finished_alone_and_holds_no_other_post_back(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A healthy provider that answers, but never with a reading of the first post.
+    llm = FakeLLM(NoReading("the model did not finish its answer"), read(item="ONT 100"))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    enqueue(store, message(OTHER, ONT, user=LUIS))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    refused = store.dry_run(LLM_KEY)
+    assert refused is not None
+    assert refused.result is not None
+    assert (refused.outcome, refused.extractor) == (DryRunOutcome.SILENT, extract_rules.EXTRACTOR)
+    assert refused.result["llm_no_reading"] is True
+    assert refused.result["llm_unavailable"] is False
+    worker.step()  # no backoff: the next post is asked in the very next step
+    worker.step()
+    assert llm.calls == [[GAVE], [ONT]]
+    assert [reply["thread_ts"] for reply in slack.posted] == [OTHER]
+    assert worker._failures == {}
+    assert worker._llm_waiting == {}
+    assert worker._llm_quiet_until == 0
+    assert "did not finish" in caplog.text
+    assert "Disc" not in caplog.text
+    poll(worker, clock, 120)
+    assert len(llm.calls) == 2  # the refused post is never sent again
+
+
+def test_a_refusal_during_an_outage_ends_the_backoff(store: Store, slack: FakeSlack, clock: Clock) -> None:
+    llm = FakeLLM(ProviderError("down"), NoReading("refused"), read(item="ONT 100"))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    enqueue(store, message(OTHER, ONT, user=LUIS))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()  # the first post: down
+    poll(worker, clock, 2)  # the second post's turn: refused, so the provider is back
+    assert worker._llm_failed == 0
+    poll(worker, clock, 2)
+    assert llm.calls == [[GAVE], [ONT], [GAVE]]
+    assert [reply["thread_ts"] for reply in slack.posted] == [ROOT]
+
+
+class Flapping(FakeLLM):
+    """Answers every third call (it declines the post); the others fail."""
+
+    def extract(self, messages: Sequence[MessageInput]) -> Extraction:
+        self.calls.append([message.text for message in messages])
+        if len(self.calls) % 3 == 0:
+            return Extraction(MODEL, (), declined=True)
+        raise ProviderError("the provider answered HTTP 503")
+
+
+def test_many_waiting_posts_never_crowd_a_step_out(store: Store, slack: FakeSlack, clock: Clock) -> None:
+    # More posts wait for the provider than a step handles, and the provider's answers keep its backoff short:
+    # the calls must go on, and a post the rules read must not wait behind them.
+    llm = Flapping()
+    worker = worker_with(llm, store, slack, clock)
+    for number in range(2 * MAX_POSTS_PER_STEP):
+        enqueue(store, message(f"{1790000000 + 10 * number}.000100", GAVE))
+    worker.step()
+    clock.at("1790000500.000000")
+    worker.step()
+    poll(worker, clock, 100)
+    before = len(llm.calls)
+    assert before >= 40  # a call every 2 or 4 seconds
+    enqueue(store, message("1790000590.000100", TAKE, user=LUIS))
+    poll(worker, clock, 40)
+    assert len(llm.calls) > before
+    assert [reply["thread_ts"] for reply in slack.posted] == ["1790000590.000100"]
+    poll(worker, clock, RETRY_FOR_SECONDS)
+    assert store.posts_waiting_for_dry_run() == []
+    assert worker._llm_waiting == {}
+    assert len({call[0] for call in llm.calls}) == 1  # and every call was for a post
+
+
+def test_a_reply_slack_keeps_refusing_does_not_stop_the_model_calls(
+    store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    llm = FakeLLM()
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, TAKE))  # the rules read it, and Slack takes no reply
+    enqueue(store, message(OTHER, GAVE, user=LUIS))
+    slack.failures = 10_000
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    poll(worker, clock, 60)
+    assert len(llm.calls) >= 5
+    assert LLM_KEY in worker._failures
+    assert list(worker._llm_waiting) == [PostKey(WORKSPACE, CHANNEL, OTHER)]
+
+
+@pytest.mark.parametrize(
+    ("last_answer", "outcome", "unheard"),
+    [
+        (NoReading("the model refused the post"), DryRunOutcome.SILENT, "llm_no_reading"),
+        (read(), DryRunOutcome.REPLIED, None),
+    ],
+)
+def test_the_last_call_for_a_post_may_still_be_answered(
+    store: Store,
+    slack: FakeSlack,
+    clock: Clock,
+    last_answer: Extraction | Exception,
+    outcome: DryRunOutcome,
+    unheard: str | None,
+) -> None:
+    llm = FakeLLM()
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    due(worker, clock)
+    poll(worker, clock, RETRY_FOR_SECONDS - 1)
+    assert store.dry_run(LLM_KEY) is None
+    llm.answers = [last_answer]
+    poll(worker, clock, 2)
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.outcome is outcome
+    assert record.result["llm_unavailable"] is False
+    assert record.result["llm_no_reading"] is (unheard == "llm_no_reading")
+    assert worker._llm_waiting == {}
+    assert worker._llm_quiet_until == 0  # the provider is back: nothing else waits the old backoff out
+
+
+def test_a_post_that_arrives_during_an_outage_gets_its_turn(store: Store, slack: FakeSlack, clock: Clock) -> None:
+    llm = FakeLLM()
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    due(worker, clock)
+    poll(worker, clock, 120)
+    enqueue(store, message("1790000150.000100", ONT, user=LUIS))
+    before = len(llm.calls)
+    poll(worker, clock, 300)
+    since = llm.calls[before:]
+    assert len(since) >= 4
+    assert [ONT] in since[:2]  # never asked: once it is due, its turn comes first
+    assert abs(since.count([ONT]) - since.count([GAVE])) <= 1
+
+
+class EditedMeanwhile(FakeLLM):
+    """While the model reads the post, its author edits it."""
+
+    def __init__(self, store: Store, *answers: Extraction | Exception) -> None:
+        super().__init__(*answers)
+        self.store = store
+
+    def extract(self, messages: Sequence[MessageInput]) -> Extraction:
+        edit = message("1790000029.000100", "", subtype="message_changed")
+        edit["event"]["message"] = {"type": "message", "user": SAM, "text": "gave truck 1 three Disc 40", "ts": ROOT}
+        edit["event"].pop("user")
+        enqueue(self.store, edit)
+        return super().extract(messages)
+
+
+def test_an_edit_that_arrives_while_the_model_reads_the_post_withholds_it(
+    store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    llm = EditedMeanwhile(store, read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    due(worker, clock)
+    assert len(llm.calls) == 1
+    assert slack.posted == []  # not in the step of the call: the queue is drained first
+    worker.step()
+    assert slack.posted == []
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.result is not None
+    assert (record.outcome, record.result["withheld"]) == (DryRunOutcome.WITHHELD, "changed")
+    assert worker._llm_read == {}
+
+
+def test_a_finished_post_keeps_nothing_of_what_the_model_read(store: Store, slack: FakeSlack, clock: Clock) -> None:
+    llm = FakeLLM(Extraction(MODEL, (), declined=True))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    read_and_answered(worker, clock)
+    assert worker._llm_read == {}
+    assert worker._failures == {}
+    assert worker._llm_waiting == {}

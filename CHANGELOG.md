@@ -54,6 +54,11 @@ Nothing is released yet. The connector cannot write stock in this state.
   record of what was decided and why (candidates, matches, reasons).
 - The validator reads a quantity expression as a whole ("2 of the 5", "half a dozen") and checks the
   unit against the text: a swapped, missing or made-up unit needs review.
-- An LLM extractor behind a provider interface, not yet wired into the worker: a versioned prompt,
+- An optional `[llm]` settings section (`base_url`, `model`, `timeout_seconds`; key in `LLM_API_KEY`).
+  With it, a post the rule-based extractor declines is read by the model, and gets a dry run like
+  any other. Without it, no post leaves the machine. A provider outage makes the post wait; after
+  15 minutes it is left unanswered and its record says so (ADR 0011). A post the model refuses or
+  does not finish is left unanswered at once, with `llm_no_reading` in its record.
+- An LLM extractor behind a provider interface: a versioned prompt,
   a strict output schema (output that does not fit declines the post), masking of strings that
   look like credentials before text is sent, and an adapter for OpenAI-compatible endpoints.

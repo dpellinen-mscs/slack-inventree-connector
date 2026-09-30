@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import SecretStr
 
-from stockthread.llm.extract import MAX_OUTPUT_CHARS, ProviderError
+from stockthread.llm.extract import MAX_OUTPUT_CHARS, NoReading, ProviderError
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 MAX_RESPONSE_BYTES = 1_000_000
@@ -34,22 +34,7 @@ class OpenAICompatible:
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        url = urlsplit(base_url)
-        if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
-            raise ValueError("the provider URL must be http(s)://host[:port][/path], without credentials")
-        if url.query or url.fragment or not base_url.isascii() or not base_url.isprintable() or " " in base_url:
-            raise ValueError("the provider URL must be http(s)://host[:port][/path], without a query")
-        if url.scheme == "http" and api_key is not None and not _is_local(url.hostname):
-            raise ValueError("an API key is only sent over https, or to a server on this machine")
-        if not model or not model.isprintable():
-            raise ValueError("the model name is empty or not printable")
-        key = None if api_key is None else api_key.get_secret_value()
-        if key is not None and not (key.isascii() and key.isprintable() and " " not in key):
-            raise ValueError("the API key must be printable ASCII without spaces")
-        try:
-            self._url = httpx.URL(base_url.rstrip("/") + "/chat/completions")
-        except httpx.InvalidURL:
-            raise ValueError("the provider URL must be http(s)://host[:port][/path]") from None
+        self._url = check_endpoint(base_url, model, api_key)
         self._model = model
         self._api_key = api_key
         # trust_env off: a proxy from the environment would see the post, and the key of a local server.
@@ -100,23 +85,67 @@ class OpenAICompatible:
             return f"{type(error).__name__} reaching the provider"
 
 
+def check_endpoint(base_url: str, model: str, api_key: SecretStr | None) -> httpx.URL:
+    """The URL that is called, or a ValueError that names what is wrong and never quotes a value."""
+    try:
+        url = urlsplit(base_url)
+    except ValueError:  # its message can quote the URL
+        url = urlsplit("")
+    if url.scheme not in ("http", "https") or not url.hostname or "@" in url.netloc:
+        raise ValueError("the provider URL must be http(s)://host[:port][/path], without credentials")
+    try:
+        port = url.port
+    except ValueError:
+        port = 0
+    if port == 0:
+        raise ValueError("the provider URL has an invalid port")
+    if url.path.rstrip("/").endswith("/chat/completions"):
+        raise ValueError("the provider URL is the base URL, without /chat/completions")
+    if url.query or url.fragment or not base_url.isascii() or not base_url.isprintable() or " " in base_url:
+        raise ValueError("the provider URL must be http(s)://host[:port][/path], without a query")
+    if url.scheme == "http" and api_key is not None and not _is_local(url.hostname):
+        raise ValueError("an API key is only sent over https, or to a server on this machine")
+    if not model.strip() or not model.isprintable():
+        raise ValueError("the model name is empty or not printable")
+    key = None if api_key is None else api_key.get_secret_value()
+    if key is not None and not (key.isascii() and key.isprintable() and " " not in key):
+        raise ValueError("the API key must be printable ASCII without spaces")
+    try:
+        return httpx.URL(base_url.rstrip("/") + "/chat/completions")
+    except httpx.InvalidURL:
+        raise ValueError("the provider URL must be http(s)://host[:port][/path]") from None
+
+
 def _content(raw: bytes) -> str:
-    """The text of the first choice. A refusal, a cut-off answer or another shape is a ProviderError."""
+    """The text of the first choice.
+
+    A NoReading when the answer is about this one post and would be the same again: the model refused it, or
+    its answer was cut off by a limit, filtered, or too long. Any other shape is a ProviderError, an outage
+    that is tried again: a server under load can answer 200 with nothing in it.
+    """
     content: Any = None
+    refusal: Any = None
     finish: Any = "unread"
     try:
         answer = json.loads(raw)
         choice = answer["choices"][0]
         content = choice["message"]["content"]
+        refusal = choice["message"].get("refusal")
         finish = choice.get("finish_reason")
     except (ValueError, LookupError, TypeError, AttributeError, RecursionError):
         pass
     if finish == "unread":
         raise ProviderError("the provider's answer is not a chat completion")
+    if finish in ("length", "content_filter"):
+        raise NoReading("the model did not finish its answer")  # cut off by a limit, or filtered
+    if content is None and isinstance(refusal, str) and refusal:
+        raise NoReading("the model refused the post")
     if finish not in (None, "stop"):
-        raise ProviderError("the model did not finish its answer")  # cut off by a limit, or filtered
-    if not isinstance(content, str) or not content or len(content) > MAX_OUTPUT_CHARS:
-        raise ProviderError("the model gave no answer, or one that is too long")  # also a refusal
+        raise ProviderError("the model did not finish its answer")
+    if not isinstance(content, str) or not content:
+        raise ProviderError("the model gave no answer")
+    if len(content) > MAX_OUTPUT_CHARS:
+        raise NoReading("the model's answer is too long")
     return content
 
 

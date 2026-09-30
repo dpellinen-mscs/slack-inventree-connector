@@ -16,6 +16,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
 
+from stockthread.llm.openai_compatible import check_endpoint
+
 REDACTED = "***"
 _TOML_POSITION = re.compile(r"\(at (line \d+, column \d+)\)")
 _SECRET_TEXT = re.compile(r"[\x21-\x7e]+")
@@ -32,6 +34,7 @@ SECRET_ENV: dict[str, tuple[str, str]] = {
     "SLACK_APP_TOKEN": ("slack_app_token", "xapp-"),
     "SLACK_SIGNING_SECRET": ("slack_signing_secret", ""),
     "INVENTREE_TOKEN": ("inventree_token", ""),
+    "LLM_API_KEY": ("llm_api_key", ""),
 }
 
 
@@ -116,11 +119,24 @@ class StorageSettings(_Section):
     database: str = Field(default="stockthread.db", min_length=1)
 
 
+class LLMSettings(_Section):
+    """The model that reads the posts the rule-based extractor declines. No `[llm]` section: no post ever
+    leaves the machine, and those posts get no reply."""
+
+    base_url: str = Field(min_length=1)
+    """An OpenAI-compatible endpoint, such as "http://localhost:11434/v1" for a local server."""
+    model: str = Field(min_length=1)
+    timeout_seconds: int = Field(default=30, ge=1, le=120)
+    """For a whole call. A post whose call fails is tried again, and after 15 minutes left unanswered."""
+
+
 class Secrets(_Section):
     slack_bot_token: SecretStr
     slack_app_token: SecretStr | None = None
     slack_signing_secret: SecretStr | None = None
     inventree_token: SecretStr
+    llm_api_key: SecretStr | None = None
+    """Optional: a local server needs none. Unused without an `[llm]` section."""
 
 
 class Settings(_Section):
@@ -131,6 +147,7 @@ class Settings(_Section):
     apply: ApplySettings = ApplySettings()
     undo: UndoSettings = UndoSettings()
     storage: StorageSettings = StorageSettings()
+    llm: LLMSettings | None = None
     secrets: Secrets
 
     @model_validator(mode="after")
@@ -141,6 +158,14 @@ class Settings(_Section):
             raise ValueError("HTTP mode needs SLACK_SIGNING_SECRET")
         if self.apply.settle_seconds <= self.inventree.timeout_seconds:
             raise ValueError("apply.settle_seconds must be longer than inventree.timeout_seconds")
+        if self.llm is not None:
+            problem = None
+            try:
+                check_endpoint(self.llm.base_url, self.llm.model, self.secrets.llm_api_key)
+            except ValueError as error:
+                problem = f"llm: {error}"  # a fixed sentence: it quotes no value
+            if problem is not None:
+                raise ValueError(problem)
         return self
 
     def effective(self) -> dict[str, Any]:
@@ -157,6 +182,13 @@ class Settings(_Section):
             return "Stock writes are OFF. Every movement is a dry-run."
         auto = ", ".join(self.policy.auto_apply) or "none"
         return f"Stock writes are ON. Automatic apply for: {auto}. Everything else waits for Apply."
+
+    def llm_line(self) -> str:
+        """One line for the startup log that says whether post text is sent to a model, and where."""
+        if self.llm is None:
+            return "No LLM is configured: no post leaves this machine, and posts the rules cannot read get no reply."
+        host = urllib.parse.urlsplit(self.llm.base_url).hostname
+        return f"Posts the rules cannot read are sent to the model {self.llm.model} at {host}."
 
 
 def load_settings(path: Path, environ: Mapping[str, str]) -> Settings:

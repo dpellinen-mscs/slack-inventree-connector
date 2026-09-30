@@ -9,7 +9,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from stockthread.llm.extract import MAX_OUTPUT_CHARS, OUTPUT_SCHEMA, ProviderError
+from stockthread.llm.extract import MAX_OUTPUT_CHARS, OUTPUT_SCHEMA, NoReading, ProviderError
 from stockthread.llm.openai_compatible import MAX_RESPONSE_BYTES, OpenAICompatible
 
 KEY = "sk-synthetic-key-for-tests"
@@ -84,6 +84,42 @@ def test_anything_but_a_finished_answer_is_a_provider_error_that_quotes_nothing(
     assert "Disc" not in message
     assert raised.value.__cause__ is None
     assert raised.value.__context__ is None
+
+
+REFUSAL = {
+    "choices": [
+        {"message": {"role": "assistant", "content": None, "refusal": "I cannot read that."}, "finish_reason": "stop"}
+    ]
+}
+
+
+@pytest.mark.parametrize(
+    ("answer", "about_this_post"),
+    [
+        (httpx.Response(200, json=REFUSAL), True),
+        (httpx.Response(200, json=completion(finish="length")), True),
+        (httpx.Response(200, json=completion(finish="content_filter")), True),
+        (httpx.Response(200, json=completion("x" * (MAX_OUTPUT_CHARS + 1))), True),
+        (httpx.Response(429, text="slow down"), False),
+        (httpx.Response(400, json=completion()), False),
+        (httpx.Response(200, text="not json"), False),
+        (httpx.Response(200, json={"choices": []}), False),
+        (httpx.Response(200, content=b"x" * (MAX_RESPONSE_BYTES + 1)), False),
+        # 200 with nothing in it, or an ending nobody asked for: a server in trouble, not an answer about the post.
+        (httpx.Response(200, json=completion(None)), False),
+        (httpx.Response(200, json=completion("")), False),
+        (httpx.Response(200, json=completion(["parts"])), False),
+        (httpx.Response(200, json=completion(finish="tool_calls")), False),
+        (httpx.Response(200, json=completion(finish="error")), False),
+    ],
+)
+def test_an_answer_that_is_no_reading_of_the_post_is_told_apart_from_an_outage(
+    answer: httpx.Response, about_this_post: bool
+) -> None:
+    with pytest.raises(ProviderError) as raised:
+        provider(lambda request: answer).complete("system", "2 Disc 40 on my truck", {})
+    assert isinstance(raised.value, NoReading) is about_this_post
+    assert "cannot read" not in str(raised.value)  # the model's own words may quote the post
 
 
 def test_an_error_status_is_refused_even_with_a_well_formed_body() -> None:
