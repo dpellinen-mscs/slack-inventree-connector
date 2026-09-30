@@ -60,7 +60,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 - [ ] Durable event queue (store side done: `slack_events`, migration 0002), and catch-up from channel history after downtime
 - [x] Grouping: photo with caption, sibling messages and threads become one post (`core/grouping.py`, migration 0003; the worker places each message)
 - [x] Rule-based extractor that needs no LLM (`core/extract_rules.py`; one message per post for now, declines the rest)
-- [ ] LLM extractor behind a provider interface, with a strict output schema (`llm/extract.py`: prompt `llm-0.1`, strict parser, secret masking; `llm/openai_compatible.py`; not yet configured, wired into the worker or scored on a model)
+- [ ] LLM extractor behind a provider interface, with a strict output schema (`llm/extract.py`: prompt `llm-0.1`, strict parser, secret masking; `llm/openai_compatible.py`; `[llm]` settings; the worker asks it for the posts the rules decline, ADR 0011; not yet scored on a model)
 - [ ] Eval runner: scores either extractor against the corpus, using recorded fixtures in CI
 - [x] Validator: deterministic contradiction checks and text-level review reasons (`core/validate.py`)
 - [x] Matcher: exact, normalized, alias, then fuzzy candidates, for parts and locations (`core/matching.py`; the catalog snapshot from InvenTree comes with Resolve)

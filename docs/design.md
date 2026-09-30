@@ -807,7 +807,14 @@ send to InvenTree.
   JSON schema for the output. v1.0 ships one adapter for OpenAI-compatible
   endpoints (`llm/openai_compatible.py`), which covers hosted providers
   and local servers. More adapters can follow. The provider is optional at
-  install time. It is not wired into the worker yet.
+  install time: without an `[llm]` section no post leaves the machine.
+  - The worker asks the model only for a post the rule-based extractor
+    declines (ADR 0011). Its candidates pass the same validator and
+    matcher. A provider that gives no answer makes the post wait; it is
+    asked again with backoff, and after 15 minutes the post is finished
+    without a reply and its record says `llm_unavailable`. A call has a
+    whole-call deadline (`llm.timeout_seconds`), and the instance lock
+    outlives it.
   - The model sees the message texts and how many files each has. It sees
     no user ids (a mention is sent as "@someone"), no timestamps, no
     catalog and no aliases.
@@ -960,7 +967,8 @@ Errors name the setting and never repeat its value.
 [`stockthread.example.toml`](../stockthread.example.toml) lists every
 setting with its default, and `stockthread check-config` validates a file. The startup
 log prints the effective settings with secrets redacted, and states in one
-line whether writes are on.
+line whether writes are on, and in another whether post text is sent to a
+model and to which host.
 
 ## 13. Proposed v1.0 scope **(decision pending)**
 

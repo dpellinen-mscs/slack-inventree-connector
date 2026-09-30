@@ -16,6 +16,7 @@ editing history.
 | [0008](0008-mit-license.md) | The project is licensed under MIT | Accepted |
 | [0009](0009-audit-store.md) | The audit store: stdlib sqlite3, SQL migrations, guards in the database | Accepted |
 | [0010](0010-no-attribution.md) | No attribution of prior work or users | Accepted |
+| [0011](0011-llm-after-the-rules.md) | The model reads only what the rules decline, and only when configured | Accepted |
 
 ## Template
 

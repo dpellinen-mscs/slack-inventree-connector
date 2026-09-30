@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from stockthread.config import REDACTED, ConfigError, Settings, load_settings, parse_settings
+from stockthread.config import REDACTED, ConfigError, LLMSettings, Settings, load_settings, parse_settings
 
 MINIMAL = """
 [slack]
@@ -356,3 +356,15 @@ def test_a_wrong_llm_section_is_refused_without_quoting_it(llm: dict[str, Any], 
     assert "key-synthetic" not in str(info.value)
     assert info.value.__cause__ is None
     assert info.value.__context__ is None
+
+
+def test_the_llm_section_of_the_example_file_is_valid_once_uncommented(tmp_path: Path) -> None:
+    example = (Path(__file__).resolve().parent.parent / "stockthread.example.toml").read_text(encoding="utf-8")
+    start = example.index("# [llm]")
+    section = "\n".join(line.removeprefix("# ") for line in example[start:].splitlines())
+    path = tmp_path / "stockthread.toml"
+    path.write_text(example[:start] + section, encoding="utf-8")
+    settings = load_settings(path, ENV)
+    assert settings.llm is not None
+    assert settings.llm.timeout_seconds == LLMSettings.model_fields["timeout_seconds"].default
+    assert "at localhost" in settings.llm_line()
