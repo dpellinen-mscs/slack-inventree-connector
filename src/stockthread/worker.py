@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -64,6 +65,10 @@ LATE_AFTER_SECONDS = 10 * 60
 RETRY_FOR_SECONDS = 15 * 60
 """How long posting a reply is retried, with backoff, before the post is finished without one."""
 MAX_BACKOFF_SECONDS = 60
+HEARTBEAT_SECONDS = 10.0
+"""The worker beats the instance lock at most this often, before each batch and each post, so one long step
+(Slack or InvenTree slow to answer) never lets the lock look stale."""
+MAX_POSTS_PER_STEP = 20
 DRAIN_BATCH = 50
 MAX_DRAIN_BATCHES = 20
 """A step drains at most this many batches. While events are still pending no post is due, so a backlog
@@ -73,7 +78,18 @@ _SLACK_TS = re.compile(r"\d{1,10}\.\d{6}")
 
 
 class SlackPoster(Protocol):
-    def chat_postMessage(self, **kwargs: Any) -> Any: ...  # slack_sdk's name
+    """The one Web API call the worker makes (slack_sdk's `WebClient`)."""
+
+    def chat_postMessage(
+        self,
+        *,
+        channel: str,
+        thread_ts: str,
+        text: str,
+        blocks: Sequence[dict[str, Any]],
+        unfurl_links: bool,
+        unfurl_media: bool,
+    ) -> Any: ...
 
 
 class _AlreadyStored:
@@ -101,7 +117,18 @@ class Worker:
     """The current catalog snapshot. A failure here is an outage: it propagates, and the post waits."""
     clock: Callable[[], datetime]
     """Must return an aware datetime."""
+    stopping: Callable[[], bool] = lambda: False
+    """Checked between posts, so a stop request does not wait for a whole backlog."""
     _failures: dict[PostKey, _Failures] = field(default_factory=dict)
+    _beat_at: float = float("-inf")
+    _quiet_until: Decimal = Decimal(0)
+    """Slack rate-limited a reply: nothing is posted before this time."""
+
+    def beat(self, *, now: bool = False) -> None:
+        """Beat the instance lock's heartbeat, at most every HEARTBEAT_SECONDS unless `now`. Raises LockLost."""
+        if now or time.monotonic() - self._beat_at >= HEARTBEAT_SECONDS:
+            self.store.heartbeat(self.owner)
+            self._beat_at = time.monotonic()
 
     def step(self) -> int:
         """Drain the queue and, once it is empty, reply to the posts that are due. Returns how much was done."""
@@ -112,6 +139,7 @@ class Worker:
         """Handle pending events: how many, and whether the queue is empty now."""
         done = 0
         for _ in range(MAX_DRAIN_BATCHES):
+            self.beat()
             events = self.store.claim_events(self.owner, limit=DRAIN_BATCH)
             for event in events:
                 try:
@@ -180,6 +208,9 @@ class Worker:
             failures = self._failures.get(post.key)
             if failures is not None and failures.next_try > now:
                 continue
+            if self.stopping() or done >= MAX_POSTS_PER_STEP or now < self._quiet_until:
+                break  # the rest wait for the next step, or until Slack takes replies again
+            self.beat()
             self._reply(post, now)
             done += 1
         return done
@@ -221,6 +252,7 @@ class Worker:
             self._finish(key, DryRunOutcome.SILENT, extraction.extractor, record((), False))
             return
         catalog = self.catalog()
+        self.beat()  # a catalog read can take a while
         late = age > LATE_AFTER_SECONDS
         try:
             views = self._views(extraction, messages, poster, catalog, late)
@@ -236,9 +268,18 @@ class Worker:
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
         # before the outcome is recorded posts the reply again at restart; a duplicate beats a silent drop.
         self.store.close_siblings(self.owner, key)
+        # close_siblings has just checked that the lock is still ours (an instance that lost it while it was
+        # blocked never posts). The beat makes the heartbeat fresh, so the post has the whole stale window: the
+        # poster must return well within it (run.DeadlinePoster).
+        self.beat(now=True)
         try:
             response = self.slack.chat_postMessage(
-                channel=key.channel_id, thread_ts=key.ts, unfurl_links=False, unfurl_media=False, **body
+                channel=key.channel_id,
+                thread_ts=key.ts,
+                text=body["text"],
+                blocks=body["blocks"],
+                unfurl_links=False,
+                unfurl_media=False,
             )
         except Exception as error:  # any Slack or network error: retry with backoff, then give up
             self._post_failed(key, now, error, extraction.extractor, decided)
@@ -287,7 +328,12 @@ class Worker:
     ) -> None:
         failures = self._failures.get(key) or _Failures(first=now, count=0, next_try=now)
         failures.count += 1
-        failures.next_try = now + min(2 ** min(failures.count, 16), MAX_BACKOFF_SECONDS)
+        asked = _retry_after(error)
+        if asked:
+            self._quiet_until = now + asked  # for every post, not only this one
+        failures.next_try = now + max(min(2 ** min(failures.count, 16), MAX_BACKOFF_SECONDS), asked)
+        if now < failures.first + RETRY_FOR_SECONDS:
+            failures.next_try = min(failures.next_try, failures.first + RETRY_FOR_SECONDS)  # one last try on time
         self._failures[key] = failures
         log.warning("post %s: reply failed (%s), attempt %d", key.ts, type(error).__name__, failures.count)
         if now - failures.first >= RETRY_FOR_SECONDS:
@@ -445,6 +491,17 @@ def _record(
             for view in views
         ],
     }
+
+
+def _retry_after(error: Exception) -> int:
+    """The seconds a rate-limited Slack call asks to wait (its Retry-After header), or 0. The worker waits
+    between steps and never inside a call, so the instance lock keeps its heartbeat."""
+    headers: Any = getattr(getattr(error, "response", None), "headers", None) or {}
+    try:
+        stated = next(value for name, value in dict(headers).items() if str(name).lower() == "retry-after")
+        return min(max(int(stated), 0), RETRY_FOR_SECONDS)
+    except (StopIteration, TypeError, ValueError):
+        return 0
 
 
 def _code(error: Exception) -> str:

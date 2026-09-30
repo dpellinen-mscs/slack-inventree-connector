@@ -22,6 +22,7 @@ from stockthread.worker import (
     DRAIN_BATCH,
     GRACE_SECONDS,
     MAX_BACKOFF_SECONDS,
+    MAX_POSTS_PER_STEP,
     RETRY_FOR_SECONDS,
     ROOT_WAIT_SECONDS,
     Worker,
@@ -512,6 +513,25 @@ def test_an_edit_before_the_dry_run_withholds_the_post(
     assert slack.posted == []
 
 
+def test_a_step_answers_a_bounded_number_of_posts_and_stops_when_asked(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    stopping = [False]
+    worker = Worker(settings(), store, OWNER, slack, lambda: CATALOG, clock, stopping=lambda: stopping[0])
+    for n in range(MAX_POSTS_PER_STEP + 2):
+        enqueue(store, message(f"1790000000.{n:06d}", "took 2 Disc 40 from main stock to truck 1", user=f"U0T{n:04d}"))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert len(slack.posted) == MAX_POSTS_PER_STEP
+    stopping[0] = True
+    worker.step()
+    assert len(slack.posted) == MAX_POSTS_PER_STEP
+    stopping[0] = False
+    worker.step()
+    assert len(slack.posted) == MAX_POSTS_PER_STEP + 2
+
+
 TAKE = "took 2 Disc 40 from main stock to truck 1"
 ROOT = "1790000000.000100"
 
@@ -668,6 +688,63 @@ def test_a_post_the_pipeline_breaks_on_records_the_error_class(
     assert (record.outcome, record.result) == (DryRunOutcome.FAILED, {"error": "error_runtime_error"})
 
 
+class RateLimited(Exception):
+    """Shaped like slack_sdk's SlackApiError: a response with headers."""
+
+    def __init__(self, headers: dict[str, Any]) -> None:
+        super().__init__("ratelimited")
+        self.response = type("Response", (), {"headers": headers})()
+
+
+@pytest.mark.parametrize(
+    ("headers", "waits"),
+    [({"Retry-After": "120"}, 120), ({"retry-after": 45}, 45), ({"Retry-After": "soon"}, 2), ({}, 2)],
+)
+def test_a_rate_limited_reply_waits_between_steps_for_as_long_as_slack_asks(
+    headers: dict[str, Any], waits: int, worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    calls: list[int] = []
+    post = slack.chat_postMessage
+
+    def limited(**kwargs: Any) -> dict[str, Any]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RateLimited(headers)  # returns at once: nothing sleeps inside the call
+        return post(**kwargs)
+
+    slack.chat_postMessage = limited  # type: ignore[method-assign]
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    clock.at(f"{1790000030 + waits - 1}.000000")
+    worker.step()
+    assert len(calls) == 1  # not before the time Slack named
+    clock.at(f"{1790000030 + waits}.000000")
+    worker.step()
+    assert len(slack.posted) == 1
+    assert audit(path) == ["dry_run_replied"]
+
+
+def test_an_instance_that_lost_the_lock_while_it_was_blocked_does_not_post(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    def catalog() -> Catalog:
+        with sqlite3.connect(path) as raw:  # the read took so long that another instance took the lock over
+            raw.execute("UPDATE instance_lock SET owner = 'instance-b'")
+        return CATALOG
+
+    worker = Worker(settings(), store, OWNER, slack, catalog, clock)
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.beat(now=True)  # a fresh beat: the throttled one would not look again for 10 seconds
+    with pytest.raises(LockLost):
+        worker.step()
+    assert slack.posted == []  # the new holder posts the one reply
+    assert replies(path) == [(ROOT, None, False)]
+
+
 def tombstone(ts: str, at: str) -> dict[str, Any]:
     """What Slack sends when a thread root that has replies is deleted."""
     event = edit_of(ts, at, TAKE, "This message was deleted.")
@@ -726,3 +803,55 @@ def test_a_reply_under_a_root_that_was_deleted_and_never_arrived_gets_no_dry_run
     worker.step()
     assert slack.posted == []
     assert audit(path) == ["dry_run_withheld"]
+
+
+def test_the_heartbeat_is_fresh_when_a_reply_is_posted_and_a_rate_limit_quiets_every_post(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    def heartbeat() -> str:
+        with sqlite3.connect(path) as raw:
+            return str(raw.execute("SELECT heartbeat_at FROM instance_lock").fetchone()[0])
+
+    seen: list[str] = []
+    calls: list[int] = []
+    post = slack.chat_postMessage
+
+    def limited(**kwargs: Any) -> dict[str, Any]:
+        seen.append(heartbeat())
+        calls.append(1)
+        if len(calls) == 1:
+            raise RateLimited({"Retry-After": "120"})
+        return post(**kwargs)
+
+    slack.chat_postMessage = limited  # type: ignore[method-assign]
+    enqueue(store, message(ROOT, TAKE))
+    enqueue(store, message("1790000000.000200", "took 1 ONT 100 from main stock to truck 1", user=LUIS))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.beat(now=True)  # the throttled beat would not come again for 10 seconds
+    before = heartbeat()
+    worker.step()
+    assert seen[0] > before  # beaten right before the post, so the post has the whole stale window
+    assert len(calls) == 1  # the second post did not even try: Slack asked everyone to wait
+    clock.at("1790000149.000000")
+    worker.step()
+    assert len(calls) == 1
+    clock.at("1790000150.000000")
+    worker.step()
+    assert len(slack.posted) == 2
+
+
+def test_a_long_retry_after_near_the_end_still_gets_its_last_try_on_time(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    def limited(**kwargs: Any) -> dict[str, Any]:
+        raise RateLimited({"Retry-After": "99999"})
+
+    slack.chat_postMessage = limited  # type: ignore[method-assign]
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    clock.at(f"{1790000030 + RETRY_FOR_SECONDS}.000000")  # the wait is capped at the retry period
+    worker.step()
+    assert audit(path) == ["dry_run_gave_up"]
