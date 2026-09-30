@@ -41,6 +41,8 @@ Nothing is released yet. The connector cannot write stock in this state.
   same database. HTTP serving is not built yet. A rate-limited reply is tried again after the time
   Slack names, without blocking, and the catalog read has a time limit, so the instance lock never
   goes stale under a working instance.
+- The store refuses a change of a row id under any of its names (`rowid`, `oid`), not only `id`
+  (migration 0005).
 - A Slack app manifest for Socket Mode (`manifests/slack-socket.json`) with the minimum scopes, and a
   quickstart in the README.
 - Slack connections verify against the system's certificate authorities plus certifi's, so a
