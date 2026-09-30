@@ -50,16 +50,7 @@ class OpenAICompatible:
         self._client.close()
 
     def complete(self, system: str, user: str, schema: Mapping[str, Any]) -> str:
-        body = {
-            "model": self._model,
-            "temperature": 0,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "extraction", "strict": True, "schema": schema},
-            },
-        }
-        result = self._post(body)
+        result = self._post(request_body(self._model, system, user, schema))
         if isinstance(result, str):
             # Raised here, outside every handler: an exception kept as context would hold the request, with
             # the post and the key.
@@ -83,6 +74,20 @@ class OpenAICompatible:
                 return bytes(raw)
         except (httpx.HTTPError, httpx.InvalidURL, UnicodeError, ValueError, TypeError) as error:
             return f"{type(error).__name__} reaching the provider"
+
+
+def request_body(model: str, system: str, user: str, schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Everything the endpoint is sent for one call. A recorded answer is an answer to exactly this
+    (`llm.record.request_hash`)."""
+    return {
+        "model": model,
+        "temperature": 0,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "extraction", "strict": True, "schema": schema},
+        },
+    }
 
 
 def check_endpoint(base_url: str, model: str, api_key: SecretStr | None) -> httpx.URL:

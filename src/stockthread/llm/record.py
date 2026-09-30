@@ -4,8 +4,9 @@
 
 The corpus is synthetic: recording sends no real post. A recording holds, for every case, the model's raw
 answer (or the sentence that says why there was none) and a hash of the request that produced it. When the
-prompt, the schema or the masking changes, the hash no longer fits and the case must be recorded again:
-running the command on an existing file keeps the answers that still fit and asks only for the rest.
+prompt, the schema, the masking or the request's parameters change, the hash no longer fits and the case must
+be recorded again: running the command on an existing file of the same model keeps the answers that still fit
+and asks only for the rest. A file that holds another model's answers is never overwritten.
 
 `replay` reads a recording back through the same `LLMExtractor` the worker uses.
 """
@@ -29,12 +30,13 @@ from stockthread.llm.extract import (
     PROMPT_VERSION,
     SYSTEM_PROMPT,
     LLMExtractor,
+    NoReading,
     Provider,
     ProviderError,
     WithinDeadline,
     user_prompt,
 )
-from stockthread.llm.openai_compatible import DEFAULT_TIMEOUT_SECONDS, OpenAICompatible
+from stockthread.llm.openai_compatible import DEFAULT_TIMEOUT_SECONDS, OpenAICompatible, request_body
 
 FORMAT = 1
 
@@ -55,9 +57,12 @@ def corpus_messages(post: Mapping[str, Any]) -> list[MessageInput]:
     ]
 
 
-def request_hash(messages: Sequence[MessageInput]) -> str:
-    """Of everything the model is sent for this post: the prompt, the post as it is sent, and the schema."""
-    sent = [SYSTEM_PROMPT, user_prompt([message for message in messages if not message.deleted]), OUTPUT_SCHEMA]
+def request_hash(messages: Sequence[MessageInput], model: str) -> str:
+    """Of the request body the endpoint is sent for this post: the model's name, the prompt, the post as it is
+    sent, the schema, and the parameters the adapter adds. Not the endpoint: which server a model name means
+    is for the person who records to keep the same."""
+    live = [message for message in messages if not message.deleted]
+    sent = request_body(model, SYSTEM_PROMPT, user_prompt(live), OUTPUT_SCHEMA)
     return hashlib.sha256(json.dumps(sent, sort_keys=True).encode()).hexdigest()
 
 
@@ -84,7 +89,8 @@ class _Recorded:
     def complete(self, system: str, user: str, schema: Mapping[str, Any]) -> str:
         output = self._answer.get("output")
         if not isinstance(output, str):
-            raise ProviderError(str(self._answer.get("error", "no answer was recorded")))
+            kind = NoReading if self._answer.get("no_reading") else ProviderError
+            raise kind(str(self._answer.get("error", "no answer was recorded")))
         return output
 
 
@@ -94,14 +100,16 @@ def record(
     corpus_version: str,
     earlier: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Ask the model for every case that `earlier` holds no fitting answer for."""
+    """Ask the model for every case that `earlier` holds no fitting answer for.
+
+    `earlier` must be a recording of the same model in the same format (`continues`)."""
     kept: dict[str, Mapping[str, Any]] = {}
-    if earlier and (earlier.get("model"), earlier.get("format")) == (provider.model, FORMAT):
+    if earlier:
         kept = {answer["id"]: answer for answer in earlier.get("answers", []) if "output" in answer}
     answers: list[Mapping[str, Any]] = []
     for case in cases:
         messages = corpus_messages(case["post"])
-        request = request_hash(messages)
+        request = request_hash(messages, provider.model)
         known = kept.get(case["id"])
         if known is not None and known.get("request_sha256") == request:
             answers.append(known)
@@ -113,6 +121,8 @@ def record(
             answer["output"] = listening.heard  # None: a post with no message was not sent
         except ProviderError as error:
             answer["error"] = str(error)
+            if isinstance(error, NoReading):
+                answer["no_reading"] = True  # the provider answered: the worker would not wait or ask again
         answers.append(answer)
     return {
         "format": FORMAT,
@@ -127,13 +137,27 @@ def replay(recording: Mapping[str, Any], case: Mapping[str, Any]) -> Extraction:
     """The extraction the worker would get for this case from the recorded answer.
 
     Raises LookupError when the recording has no answer for the request as it is sent today (the prompt, the
-    schema or the masking changed since), and ProviderError when the provider gave none.
+    schema, the masking or a parameter changed since, or the case is new), and ProviderError when the
+    provider gave none (NoReading when it answered, but with no reading of the post).
     """
     messages = corpus_messages(case["post"])
     answer = next((answer for answer in recording["answers"] if answer["id"] == case["id"]), None)
-    if answer is None or answer.get("request_sha256") != request_hash(messages):
+    if answer is None or answer.get("request_sha256") != request_hash(messages, str(recording["model"])):
         raise LookupError(f"case {case['id']}: no recorded answer fits the request; record again")
     return LLMExtractor(_Recorded(str(recording["model"]), answer)).extract(messages)
+
+
+def continues(earlier: object, model: str) -> str | None:
+    """Why the file at --out cannot be continued with this model, or None when it can."""
+    if not isinstance(earlier, dict) or not isinstance(earlier.get("answers"), list):
+        return "the file at --out is not a recording; choose another --out"
+    if earlier.get("format") != FORMAT:
+        return "the file at --out is a recording in another format; choose another --out"
+    if earlier.get("model") != model:
+        return "the file at --out holds another model's answers; choose another --out"
+    if not all(isinstance(answer, dict) and isinstance(answer.get("id"), str) for answer in earlier["answers"]):
+        return "the file at --out is not a recording; choose another --out"
+    return None
 
 
 def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.environ) -> int:
@@ -151,7 +175,17 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     except ValueError as error:
         print(f"ERROR {error}", file=sys.stderr)
         return 2
-    earlier = json.loads(args.out.read_text(encoding="utf-8")) if args.out.exists() else None
+    earlier = None
+    if args.out.exists():
+        try:
+            earlier = json.loads(args.out.read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            earlier = "unreadable"
+        refused = continues(earlier, model)
+        if refused:  # never overwritten: it may be a whole recording that was paid for
+            endpoint.close()
+            print(f"ERROR {refused}", file=sys.stderr)
+            return 2
     version = (args.corpus / "VERSION").read_text(encoding="utf-8").strip()
     try:
         recording = record(corpus_cases(args.corpus), WithinDeadline(endpoint, args.timeout), version, earlier)

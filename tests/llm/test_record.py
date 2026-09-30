@@ -11,7 +11,8 @@ import pytest
 
 from stockthread.llm import record as record_module
 from stockthread.llm.extract import PROMPT_VERSION, ProviderError
-from stockthread.llm.record import corpus_cases, main, record, replay
+from stockthread.llm.openai_compatible import request_body
+from stockthread.llm.record import continues, corpus_cases, main, record, replay
 
 EVAL = Path(__file__).resolve().parents[2] / "eval"
 NOTHING = json.dumps({"readable": True, "movements": [], "post_flags": []})
@@ -82,10 +83,17 @@ def test_an_answer_to_another_request_or_from_another_model_is_not_kept(monkeypa
     record(changed, provider, "9.9.9", earlier=first)
     assert len(provider.asked) == 1
 
-    other = FakeProvider(NOTHING, NOTHING)
-    other.model = "other-model"
-    record(CASES, other, "9.9.9", earlier=first)
-    assert len(other.asked) == 2
+    with pytest.raises(LookupError, match="record again"):
+        replay({**first, "model": "other-model"}, CASES[0])  # the hash covers the model's name
+
+    def with_a_limit(model: str, system: str, user: str, schema: Mapping[str, Any]) -> dict[str, Any]:
+        return {**request_body(model, system, user, schema), "max_tokens": 100}
+
+    with monkeypatch.context() as patched:  # and every parameter the adapter sends
+        patched.setattr(record_module, "request_body", with_a_limit)
+        with pytest.raises(LookupError, match="record again"):
+            replay(first, CASES[0])
+    replay(first, CASES[0])
 
     monkeypatch.setattr(record_module, "SYSTEM_PROMPT", "a new prompt")
     with pytest.raises(LookupError, match="record again"):
@@ -135,3 +143,42 @@ def test_the_command_records_the_whole_corpus_and_continues_a_recording(
     recording = json.loads(out.read_text(encoding="utf-8"))
     assert recording["model"] == "small-1"
     assert all(not replay(recording, case).declined for case in cases)
+
+
+@pytest.mark.parametrize(
+    ("held", "why"),
+    [
+        (json.dumps({"format": 1, "model": "small-1", "answers": [{"id": "kept"}]}), "another model"),
+        (json.dumps({"format": 0, "model": "small-2", "answers": []}), "another format"),
+        ('{"format": 1, "model": "small-2", "answers": [{"id": "cut', "not a recording"),
+        (json.dumps([{"id": "one"}]), "not a recording"),
+        (json.dumps({"format": 1, "model": "small-2", "answers": ["one"]}), "not a recording"),
+        (json.dumps({"format": 1, "model": "small-2"}), "not a recording"),
+    ],
+)
+def test_a_file_that_is_not_this_models_recording_is_refused_and_left_as_it_is(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, held: str, why: str
+) -> None:
+    class Endpoint(FakeProvider):
+        def __init__(self, base_url: str, model: str, key: Any, timeout_seconds: float) -> None:
+            super().__init__()
+            self.model = model
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(record_module, "OpenAICompatible", Endpoint)
+    out = tmp_path / "small-1.json"
+    out.write_text(held, encoding="utf-8")
+    environ = {"LLM_BASE_URL": "http://localhost:11434/v1", "LLM_MODEL": "small-2"}
+    assert main([str(EVAL), "--out", str(out)], environ) == 2
+    printed = capsys.readouterr()
+    assert printed.err.startswith("ERROR ")
+    assert why in printed.err
+    assert out.read_text(encoding="utf-8") == held
+
+
+def test_continues_names_no_reason_for_the_same_model() -> None:
+    recording = record(CASES, FakeProvider(NOTHING, NOTHING), "9.9.9")
+    assert continues(recording, "test-model") is None
+    assert continues(recording, "other-model") is not None
