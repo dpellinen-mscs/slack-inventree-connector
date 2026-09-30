@@ -803,10 +803,36 @@ send to InvenTree.
   - Nothing is left unread: text after a comma that ends a location, or a
     number word after a quantity ("two dozen", "twenty five", "a
     hundred"), declines the post. "1,500" is one quantity.
-- **LLM extractor.** A provider interface with a strict JSON schema for
-  the output. v1.0 ships one adapter for OpenAI-compatible endpoints,
-  which covers hosted providers and local servers. More adapters can
-  follow. The provider is optional at install time.
+- **LLM extractor** (`llm/extract.py`). A provider interface with a strict
+  JSON schema for the output. v1.0 ships one adapter for OpenAI-compatible
+  endpoints (`llm/openai_compatible.py`), which covers hosted providers
+  and local servers. More adapters can follow. The provider is optional at
+  install time. It is not wired into the worker yet.
+  - The model sees the message texts and how many files each has. It sees
+    no user ids (a mention is sent as "@someone"), no timestamps, no
+    catalog and no aliases.
+  - Strings that look like credentials are masked before the text is sent:
+    known token shapes, long runs of letters and digits, a password in a
+    URL, phone numbers, and the word after a label such as "password:" or
+    "gate code is". Part numbers with dashes, MAC addresses and links are
+    sent as written. This is a second layer: no pattern finds every
+    secret, only the first word of a passphrase is replaced, and the docs
+    say that text leaves the machine.
+  - The answer is parsed strictly. Output that does not fit the schema in
+    any field (an extra field, a quantity as text, an unknown flag, a name
+    over two lines, a key given twice, a number out of bounds) **declines** the post. Nothing
+    is repaired or half-read.
+  - The model can add a post flag and never remove one: the flags found by
+    rule in the text are raised whatever the model answers.
+  - A provider that gives no finished answer (unreachable, an error status,
+    a refusal, an answer cut off by a limit) is an outage, not a reading:
+    `ProviderError`. Errors never quote the request, the response or the
+    key. An API key is sent only over https, or to a server on the same
+    machine. Proxy settings from the environment are not used, and
+    redirects are not followed.
+  - No model has been scored yet: that needs recorded provider outputs.
+    The corpus test for this extractor checks only that the schema can say
+    every expected extraction and that the parser reads it back whole.
 - **Disagreement.** When both extractors run and disagree on a quantity, a
   movement type or a location, that is a review reason.
 - **Versioning.** Prompt and schema are versioned, and the version is
