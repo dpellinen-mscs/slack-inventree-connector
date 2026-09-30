@@ -58,6 +58,8 @@ Nothing is released yet. The connector cannot write stock in this state.
   With it, a post the rule-based extractor declines is read by the model, and gets a dry run like
   any other. Without it, no post leaves the machine. A provider outage makes the post wait; after
   15 minutes it is left unanswered and its record says so (ADR 0011).
+- `python -m stockthread.llm.record`: records a model's raw answers to the eval corpus, so a model is
+  scored in CI without a provider. No model has been recorded yet.
 - An LLM extractor behind a provider interface: a versioned prompt,
   a strict output schema (output that does not fit declines the post), masking of strings that
   look like credentials before text is sent, and an adapter for OpenAI-compatible endpoints.

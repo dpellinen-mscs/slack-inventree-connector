@@ -23,6 +23,7 @@ Current version: see [`VERSION`](VERSION).
 | `schema/case-file.schema.json` | JSON Schema for a case file, with the lists of types, flags and tags |
 | `tools/validate_corpus.py` | Corpus checker, standard library only |
 | `tools/score.py` | Reference scorer, standard library only |
+| `recorded/*.json` | One model's raw answers to the corpus, per file (none yet) |
 
 ## A case
 
@@ -328,6 +329,28 @@ results are then ignored, also for the exact match.
 The scorer prints the metrics and lists every hard failure. With
 `--fail-on-hard` it exits with 1 if there is one. It refuses a predictions
 file that was made for another corpus version.
+
+### Recording a model
+
+A model is scored from a recording of its answers, so CI needs no provider
+and no key. The corpus is synthetic: recording sends no real post.
+
+```sh
+export LLM_BASE_URL=https://…/v1 LLM_MODEL=… LLM_API_KEY=…   # any OpenAI-compatible endpoint
+.venv/bin/python -m stockthread.llm.record eval --out eval/recorded/<model>.json
+.venv/bin/pytest tests/llm/test_recorded_corpus.py -s
+```
+
+The file holds the model's raw answer for every case, or the sentence that
+says why there was none, and a hash of the request (prompt, post as sent,
+schema). An answer whose hash no longer fits is never scored: after a
+change to the prompt, the schema or the masking, run the command again. It
+keeps the answers that still fit and asks only for the rest.
+
+The test reads each recording back through the extractor the worker uses
+and prints two reports: the model reading every post, and the pipeline as
+the worker runs it, where the model reads only the posts the rule-based
+extractor declines. The pipeline must have no hard failure.
 
 ## Versioning
 
