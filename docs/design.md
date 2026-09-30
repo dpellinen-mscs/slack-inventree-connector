@@ -257,12 +257,11 @@ needs.
     for a message already placed from its original event. A deletion made
     during downtime is not seen: the message is just absent from the
     history. Plan revisions (M2) re-read a post before a write.
-  - **Known limits.** A message that joins a post after its dry run gets
-    no second reply until plan revisions exist (M2). That includes a
-    thread root found by catch-up after its reply was answered alone, and
-    a sibling or reply posted within seconds of the point a sweep ends at,
-    when its event is lost too: the next sweep finds it after the first
-    was answered. The
+  - **Known limits.** A message that joins a post after its dry run (a
+    thread root found by catch-up after its reply was answered alone, or
+    a reply posted within seconds of the point a sweep ends at, when its
+    event is lost too) is answered by a revised dry run (see "Plan
+    revisions"). A sibling found that way starts a post of its own. The
     first start after upgrading from a version without catch-up is a
     channel's first sweep, so that one downtime is not read. The mark is
     the host's time: a clock more than a few minutes ahead of Slack's can
@@ -298,6 +297,40 @@ needs.
   thread makes the revision stale: its buttons are removed and a new plan
   is built. An approval names one revision and succeeds only if that
   revision is still current. Plans expire (default 24 hours).
+  - **Revised dry runs (built).** Every dry run records the newest
+    message it read (`read_through`; migration 0007). A message that joins
+    the post later (a thread reply, or a root that arrives after its reply
+    was answered alone) makes the post due again, as revision 2, 3, and so
+    on (`dry_run_revisions`), under the same window and grace. The whole
+    post is read again, and the result is compared with the reply that
+    stands in the thread, if any:
+    - the same movements, matches and reasons: `unchanged`, nothing is
+      posted, so a "thanks" under a post the model reads the same way
+      stays quiet (`late_ingest` is left out of the comparison: it says
+      when a post was read, not what it says);
+    - different: a *Revised dry run* reply is posted (`replied`);
+    - no movement any more (declined, not a movement, withheld because a
+      message was edited or deleted or cannot be read, or failed): one
+      notice that the dry run above no longer stands (`retracted`). After
+      that nothing stands, and later revisions without a movement post
+      nothing.
+    When the LLM provider gave no answer or no reading, the notice says
+    that, not that the thread changed. The rule-based extractor declines
+    every post of more than one message, so without an LLM extractor the first thread reply under an
+    answered post takes its reply back. That is the safe reading: the
+    reply may have changed the movement. A post whose first message is
+    older than `plan_expiry_hours` is not revised at all, whatever the age
+    of the new message: its reply has expired with its plan, so there is
+    nothing to take back. The message is kept in the post. This also
+    bounds what each step reads. An edit or a deletion alone after the
+    dry run is noted but does not start a revision yet; the next message
+    does, and it is then withheld as `changed`. Catch-up notes an edit it
+    finds in the history for any post, not only one waiting for its first
+    dry run.
+    Known limits: posts waiting for their first dry run are answered
+    before revisions, so a backlog delays revisions. A first dry run that
+    ended `gave_up` may still have reached Slack (the call can fail after
+    Slack took it); a revision treats it as "no reply stands".
 - **After apply,** an edit, a deletion or a correction never writes by
   itself. It creates a review item that offers an undo. A revised plan can
   be approved only after the undo has been verified.
@@ -807,8 +840,9 @@ and needs no extra service.
 | `posts` | One row per post, unique on post key |
 | `post_messages` | Which post each message belongs to, unique on `(workspace, channel, ts)`: ids, author and thread, never text (migration 0003) |
 | `revised_messages` | Message keys that were edited or deleted, in any arrival order: ids only (migration 0004) |
+| `dry_run_revisions` | Revisions 2, 3, ... of a post's dry run: what each read through, its outcome, record and posted reply (migration 0007) |
 | `catch_up` | One row per channel: where its catch-up started, and how far its history has been read (migration 0006) |
-| `dry_runs` | One row per post: the outcome, the extractor, and the result as JSON (candidates, matches, reasons) (migration 0004) |
+| `dry_runs` | A post's first dry run: the outcome, the extractor, and the result as JSON (candidates, matches, reasons) (migration 0004), and the newest message it read (migration 0007) |
 | `plans` | Plan revisions with the hash of their input messages |
 | `extractions` | Extractor name and version, prompt version, raw output |
 | `candidates` | Candidate movements and line items |

@@ -83,6 +83,8 @@ The quickstart reaches the first dry-run in about 15 minutes.
 - [ ] Answers by button or by thread reply update the candidate and re-run validation
 - [ ] Authorization: who may answer and who may approve, by button and by thread reply
 - [ ] Plan revisions: an edit, a deletion or a new thread message makes a plan stale
+  - [x] A new message after the dry run gets a revised dry run, or a notice that the reply no longer stands
+  - [ ] An edit or a deletion after the dry run starts a revision by itself
 - [ ] Source selection: choose concrete stock items for each line, serials included
 - [ ] Plan expiry
 - [ ] Setup check: users without a vehicle, token roles, locations that are missing

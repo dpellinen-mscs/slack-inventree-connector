@@ -25,6 +25,14 @@ deletions and clicks are M2 (plan revisions and review). Until then every edit a
 message key, in whatever order Slack delivers it, and a post that holds a noted message and has not had its
 dry run is withheld: its original text would be wrong.
 
+A message that joins a post after its dry run (a thread reply, or a root that catch-up found later) makes the
+post due again, as revision 2, 3, ... It is read whole, as before, and:
+- reads as the reply that stands: recorded as `unchanged`, nothing posted;
+- reads as a different movement: a revised dry run is posted in the thread;
+- can no longer be read as a movement (declined, withheld, failed) while a reply stands: a notice that the
+  reply above no longer stands is posted (`retracted`). Without a standing reply, nothing is posted.
+A revision is measured for expiry from the post's first message, not the new one: the movement is that old.
+
 Every finished post keeps a record of what was decided and why (`Store.dry_run`): the extractor, the
 candidates, every match with its rule and ids, and the review reasons. The record is the decision the reply
 shows: a reply whose Slack call is slow to return is not decided again, and its post is not finished (not
@@ -63,7 +71,7 @@ from stockthread.core.validate import validate
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.catchup import is_catch_up
 from stockthread.slack.ingest import Deleted, Drop, Edited, NewMessage, Revised, ingest_event, revised_message
-from stockthread.slack.replies import MovementView, dry_run_reply, gate_reasons
+from stockthread.slack.replies import MovementView, dry_run_reply, gate_reasons, retraction_notice
 from stockthread.store import DryRunOutcome, EventStatus, LockLost, Store, WaitingPost
 
 log = logging.getLogger(__name__)
@@ -153,9 +161,14 @@ class _Sent:
     """A reply handed to Slack, with the decision it shows. While its call is still running the post is
     neither decided again nor finished: what is recorded is what was sent."""
 
-    extractor: str
-    decided: Mapping[str, Any]
+    extractor: str | None
+    decided: Mapping[str, Any] | None
     body: Mapping[str, Any]
+    revision: int = 1
+    read: tuple[str, ...] | None = None
+    """The timestamps of the messages the decision read (None: all the post holds when it is recorded)."""
+    outcome: DryRunOutcome = DryRunOutcome.REPLIED
+    """REPLIED, or RETRACTED for a notice that the reply above no longer stands."""
     checks: int = 0
     next_check: Decimal = Decimal(0)
 
@@ -278,7 +291,8 @@ class Worker:
         window = self.settings.slack.group_window_seconds
         done = 0
         for_the_model: list[WaitingPost] = []
-        for post in self.store.posts_waiting_for_dry_run():
+        expiry = self.settings.slack.plan_expiry_hours * 3600
+        for post in self.store.posts_waiting_for_dry_run(revisable_since=now - expiry):
             sent = self._running.get(post.key)
             if sent is not None:
                 if sent.next_check <= now and not self.stopping():
@@ -290,8 +304,8 @@ class Worker:
                 continue  # one call at a time: a reply is still on its way
             if seconds(post.newest_ts) + window + GRACE_SECONDS >= now:
                 continue  # a sibling may still come
-            if not post.has_key_message and seconds(post.key.ts) + ROOT_WAIT_SECONDS >= now:
-                continue  # the thread root may still come
+            if post.revision == 1 and not post.has_key_message and seconds(post.key.ts) + ROOT_WAIT_SECONDS >= now:
+                continue  # the thread root may still come (a revision was answered without it once already)
             failures = self._failures.get(post.key)
             if failures is not None and failures.next_try > now:
                 continue
@@ -334,25 +348,33 @@ class Worker:
         is only made with `ask`."""
         key = post.key
         age = now - seconds(post.newest_ts)
+        # A revision's movement is as old as the post: a new reply does not make a week-old movement current.
+        since = seconds(post.key.ts) if post.revision > 1 else seconds(post.newest_ts)
         read = None
-        if self.store.post_has_revision(key):
+        too_old = now - since > self.settings.slack.plan_expiry_hours * 3600
+        if too_old and post.revision > 1:
+            why = "too_old"  # first: the reply above has expired, so there is nothing to take back
+        elif self.store.post_has_revision(key):
             why = "changed"  # an edit or a deletion, even one that arrived before the message it changes
-        elif age > self.settings.slack.plan_expiry_hours * 3600:
+        elif too_old:
             why = "too_old"
         else:
             read = self._messages(key)
             why = "unreadable"
         if read is None:
             log.info("post %s: withheld (%s)", key.ts, why)
-            self._finish(key, DryRunOutcome.WITHHELD, result={"withheld": why})
+            # Unread, but decided on the messages the post holds now: one that joins later makes a revision.
+            held = tuple(self.store.post_messages(key))
+            self._conclude(post, now, DryRunOutcome.WITHHELD, None, {"withheld": why}, why=why, read=held)
             return True
         messages, poster, caught_up = read
+        seen = tuple(message.ts for message in messages)
         try:
             extraction, unheard = self._extract(key, messages, now, ask)
         except LockLost:
             raise
         except Exception as error:
-            self._broken(key, error)
+            self._broken(post, now, error, read=seen)
             return True
         if extraction is None:
             return False  # waits for the LLM provider, or for the queue to be drained after its call
@@ -371,11 +393,16 @@ class Worker:
 
         if extraction.declined or not extraction.movements:
             log.info("post %s: no reply (%s)", key.ts, "declined" if extraction.declined else "not a movement")
-            self._finish(key, DryRunOutcome.SILENT, extraction.extractor, record((), False))
+            # A model that did not answer, or gave no reading, says nothing about the thread: the notice says so.
+            unread = "unread" if unheard else None
+            self._conclude(
+                post, now, DryRunOutcome.SILENT, extraction.extractor, record((), False), why=unread, read=seen
+            )
             return True
         catalog = self.catalog()
         self.beat()  # a catalog read can take a while
         late = caught_up or age > LATE_AFTER_SECONDS
+        standing = self._standing(post)
         try:
             views = self._views(extraction, messages, poster, catalog, late)
             decided = record(views, late)
@@ -383,15 +410,58 @@ class Worker:
                 views,
                 {part.pk: part.name for part in catalog.parts},
                 {location.pk: location.path for location in catalog.locations},
+                revised=standing is not None,
             )
         except Exception as error:
-            self._broken(key, error, extraction.extractor)
+            self._broken(post, now, error, extraction.extractor, read=seen)
+            return True
+        if standing is not None and _same_reading(standing, decided):
+            log.info("post %s: revision %d reads as the reply that stands", key.ts, post.revision)
+            self._finish(key, DryRunOutcome.UNCHANGED, extraction.extractor, decided, post.revision, seen)
             return True
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
         # before the outcome is recorded posts the reply again at restart; a duplicate beats a silent drop.
         self.store.close_siblings(self.owner, key)
-        self._post(key, now, _Sent(extraction.extractor, decided, body))
+        self._post(key, now, _Sent(extraction.extractor, decided, body, post.revision, seen))
         return True
+
+    def _standing(self, post: WaitingPost) -> Mapping[str, Any] | None:
+        """For a revision: what the reply that stands in the thread decided, or {} when its record expired.
+        None: no reply stands (none was posted, or a notice took it back)."""
+        if post.revision == 1:
+            return None
+        standing: Mapping[str, Any] | None = None
+        for record in self.store.dry_run_history(post.key):
+            if record.outcome is DryRunOutcome.REPLIED:
+                standing = record.result or {}
+            elif record.outcome is DryRunOutcome.RETRACTED:
+                standing = None
+        return standing
+
+    def _conclude(
+        self,
+        post: WaitingPost,
+        now: Decimal,
+        outcome: DryRunOutcome,
+        extractor: str | None,
+        result: Mapping[str, Any],
+        *,
+        why: str | None = None,
+        read: tuple[str, ...] | None = None,
+    ) -> None:
+        """Finish a post that gets no dry-run reply. A revision whose post had a reply standing posts a notice
+        that it no longer does, except when the post is too old: its reply has expired by then."""
+        reason = why or ("silent" if outcome is DryRunOutcome.SILENT else "failed")
+        if reason == "too_old" or self._standing(post) is None:
+            self._finish(post.key, outcome, extractor, result, post.revision, read)
+            return
+        log.info("post %s: revision %d takes the reply back (%s)", post.key.ts, post.revision, reason)
+        decided = {**result, "retracted": reason, "instead_of": outcome.value}
+        self._post(
+            post.key,
+            now,
+            _Sent(extractor, decided, retraction_notice(reason), post.revision, read, DryRunOutcome.RETRACTED),
+        )
 
     def _extract(
         self, key: PostKey, messages: Sequence[MessageInput], now: Decimal, ask: bool
@@ -474,7 +544,7 @@ class Worker:
             return
         except Exception as error:  # any Slack or network error: retry with backoff, then give up
             self._running.pop(key, None)
-            self._post_failed(key, now, error, sent.extractor, sent.decided)
+            self._post_failed(key, now, error, sent)
             return
         self._running.pop(key, None)
         self._failures.pop(key, None)
@@ -485,12 +555,19 @@ class Worker:
         self.store.finish_dry_run(
             self.owner,
             key,
-            DryRunOutcome.REPLIED,
+            sent.outcome,
             reply_ts if valid else None,
             extractor=sent.extractor,
             result=sent.decided,
+            revision=sent.revision,
+            read=sent.read,
         )
-        log.info("post %s: dry run posted", key.ts)
+        if sent.outcome is DryRunOutcome.RETRACTED:
+            log.info("post %s: revision %d notice posted", key.ts, sent.revision)
+        elif sent.revision > 1:
+            log.info("post %s: revision %d dry run posted", key.ts, sent.revision)
+        else:
+            log.info("post %s: dry run posted", key.ts)
 
     def _views(
         self,
@@ -519,9 +596,7 @@ class Worker:
             for movement in extraction.movements
         ]
 
-    def _post_failed(
-        self, key: PostKey, now: Decimal, error: Exception, extractor: str, record: Mapping[str, Any]
-    ) -> None:
+    def _post_failed(self, key: PostKey, now: Decimal, error: Exception, sent: _Sent) -> None:
         failures = self._failures.get(key) or _Failures(first=now, count=0, next_try=now)
         failures.count += 1
         asked = _retry_after(error)
@@ -534,12 +609,20 @@ class Worker:
         log.warning("post %s: reply failed (%s), attempt %d", key.ts, type(error).__name__, failures.count)
         if now - failures.first >= RETRY_FOR_SECONDS:
             self._failures.pop(key)
-            self._finish(key, DryRunOutcome.GAVE_UP, extractor, record)
+            self._finish(key, DryRunOutcome.GAVE_UP, sent.extractor, sent.decided, sent.revision, sent.read)
 
-    def _broken(self, key: PostKey, error: Exception, extractor: str | None = None) -> None:
+    def _broken(
+        self,
+        post: WaitingPost,
+        now: Decimal,
+        error: Exception,
+        extractor: str | None = None,
+        *,
+        read: tuple[str, ...] | None = None,
+    ) -> None:
         """The pure pipeline raised on this post: it gets no reply, so it cannot stop every later post."""
-        _log_failure("post", key.ts, error)
-        self._finish(key, DryRunOutcome.FAILED, extractor, {"error": _code(error)})
+        _log_failure("post", post.key.ts, error)
+        self._conclude(post, now, DryRunOutcome.FAILED, extractor, {"error": _code(error)}, read=read)
 
     def _finish(
         self,
@@ -547,12 +630,16 @@ class Worker:
         outcome: DryRunOutcome,
         extractor: str | None = None,
         result: Mapping[str, Any] | None = None,
+        revision: int = 1,
+        read: tuple[str, ...] | None = None,
     ) -> None:
         self._llm_read.pop(key, None)
         self._llm_waiting.pop(key, None)
         self._failures.pop(key, None)
         self.store.close_siblings(self.owner, key)
-        self.store.finish_dry_run(self.owner, key, outcome, extractor=extractor, result=result)
+        self.store.finish_dry_run(
+            self.owner, key, outcome, extractor=extractor, result=result, revision=revision, read=read
+        )
 
     def _messages(self, key: PostKey) -> tuple[Sequence[MessageInput], str, bool] | None:
         """The post's messages as the extractor takes them, the author of the first one, and whether any of
@@ -660,6 +747,20 @@ def _record(
             for view in views
         ],
     }
+
+
+def _same_reading(standing: Mapping[str, Any], decided: Mapping[str, Any]) -> bool:
+    """Whether a revision decided the same movements, matches and reasons as the reply that stands. Lateness is
+    left out: it depends on when each was read, not on what the thread says."""
+
+    def reading(result: Mapping[str, Any]) -> Any:
+        movements = json.loads(json.dumps(result.get("movements")))
+        for movement in movements or ():
+            movement["reasons"] = [r for r in movement["reasons"] if r["code"] != ReasonCode.LATE_INGEST.value]
+            movement["gate"] = [g for g in movement["gate"] if g[0] != ReasonCode.LATE_INGEST.value]
+        return movements
+
+    return bool(standing) and reading(standing) == reading(decided)
 
 
 def _retry_after(error: Exception) -> int:
