@@ -106,6 +106,7 @@ payloads whose channel or message does not fit the stored id.
 - [ ] Undo by button, authorized and idempotent, built from the observed history
 - [ ] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
 - [ ] Instance lock: one connector per database
+- [ ] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word matches, fuzzy matches and picked candidates as aliases, for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo offers to forget the alias
 
 **DoD:** integration tests against every pinned InvenTree version, with one
 job on PostgreSQL, prove each line below.
@@ -130,13 +131,15 @@ job on PostgreSQL, prove each line below.
   A return with no review reason still waits for "Apply". Stripping or
   varying every model output never turns a blocked movement into an
   automatic one.
+- A take-out whose part was a whole-word match waits for "Apply" the first
+  time and applies without a click the second time. A confirmed dry run, a
+  rejected plan and an expired plan teach no alias. A learned alias is
+  asked again when a new record fits its text.
 
 ## M4: alias learning
 
-- [ ] A confirmed plan stores its whole-word matches and picked candidates as aliases, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md))
-- [ ] Only a confirmation by an authorized human creates an alias
-- [ ] Alias admin: list, remove and export
-- [ ] Aliases feed the matcher and are covered by the corpus
+- [ ] Alias admin: list, remove and export (storage and learning are built in M3, [0012](docs/decisions/0012-first-confirmation-becomes-alias.md))
+- [ ] Learned aliases are covered by the corpus
 - [ ] Aliases with words like "my" are stored per user
 - [ ] An alias is checked against InvenTree when it is used
 
