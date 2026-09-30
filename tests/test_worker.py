@@ -26,6 +26,7 @@ from stockthread.store import db as store_db
 from stockthread.worker import (
     DRAIN_BATCH,
     GRACE_SECONDS,
+    LATE_AFTER_SECONDS,
     MAX_BACKOFF_SECONDS,
     MAX_POSTS_PER_STEP,
     RETRY_FOR_SECONDS,
@@ -240,21 +241,137 @@ def test_a_sibling_after_the_reply_starts_its_own_post(
     assert [reply["thread_ts"] for reply in slack.posted] == ["1790000000.000100", "1790000004.000100"]
 
 
-def test_a_thread_reply_after_the_dry_run_gets_no_second_reply(
-    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+def revisions(path: Path) -> list[tuple[int, str, bool]]:
+    with sqlite3.connect(path) as raw:
+        return [
+            (row[0], row[1], row[2] is not None)
+            for row in raw.execute("SELECT revision, outcome, reply_ts FROM dry_run_revisions ORDER BY id")
+        ]
+
+
+def test_a_thread_reply_the_rules_cannot_read_takes_the_standing_reply_back_once(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    enqueue(store, message("1790000000.000100", "took 2 Disc 40 from main stock to truck 1"))
+    root = "1790000000.000100"
+    enqueue(store, message(root, "took 2 Disc 40 from main stock to truck 1"))
     worker.step()
     clock.at("1790000016.000000")
     worker.step()
-    enqueue(
-        store, message("1790000020.000100", "took 1 ONT 100 from main stock to truck 1", thread_ts="1790000000.000100")
-    )
+    enqueue(store, message("1790000020.000100", "actually make that 3", thread_ts=root))
     worker.step()
+    clock.at("1790000030.000100")
+    worker.step()
+    assert len(slack.posted) == 1  # the window of the new message has not passed
+    caplog.set_level(logging.INFO, logger="stockthread.worker")
     clock.at("1790000050.000000")
     worker.step()
-    assert len(slack.posted) == 1  # a revision is M2
-    assert statuses(path) == [("done", None), ("done", None)]
+    # Two messages: the rules decline the post, so the dry run above no longer stands, and the thread is told.
+    assert [reply["thread_ts"] for reply in slack.posted] == [root, root]
+    assert "no longer stands" in slack.posted[1]["text"]
+    assert "can no longer read this thread" in json.dumps(slack.posted[1]["blocks"])
+    assert revisions(path) == [(2, "retracted", True)]
+    assert "revision 2 notice posted" in caplog.text
+    assert "make that" not in caplog.text
+    history = store.dry_run_history(PostKey(WORKSPACE, CHANNEL, root))
+    assert [(record.revision, record.outcome) for record in history] == [
+        (1, DryRunOutcome.REPLIED),
+        (2, DryRunOutcome.RETRACTED),
+    ]
+    assert history[1].result is not None
+    assert (history[1].result["retracted"], history[1].result["instead_of"]) == ("silent", "silent")
+    assert history[1].result["messages"] == [root, "1790000020.000100"]
+    enqueue(store, message("1790000060.000100", "thanks", user=LUIS, thread_ts=root))
+    worker.step()
+    clock.at("1790000090.000000")
+    worker.step()
+    assert len(slack.posted) == 2  # nothing stands any more: nothing to take back
+    assert revisions(path) == [(2, "retracted", True), (3, "silent", False)]
+    assert audit(path) == ["dry_run_replied"]
+    assert statuses(path) == [("done", None)] * 3
+
+
+def test_a_post_without_a_standing_reply_is_read_again_without_a_notice(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, "lunch anyone"))
+    due(worker, clock)
+    enqueue(store, message("1790000040.000100", "took 2 Disc 40 from main stock to truck 1", thread_ts=ROOT))
+    due(worker, clock, 1790000060)
+    assert slack.posted == []  # the rules decline a thread; nothing was said before, so nothing is said now
+    assert revisions(path) == [(2, "silent", False)]
+
+
+def test_a_thread_root_found_after_its_reply_was_answered_alone_makes_a_revision(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    root = "1790000000.000100"
+    enqueue(store, message("1790000003.000100", "took 2 Disc 40 from main stock to truck 1", thread_ts=root))
+    worker.step()
+    clock.at(f"{1790000000 + ROOT_WAIT_SECONDS + 1}.000000")
+    worker.step()
+    assert len(slack.posted) == 1  # answered alone, after waiting for the root
+    enqueue(store, message(root, "heading out"))  # catch-up or a very late retry brings the root
+    worker.step()
+    clock.at(f"{1790000000 + ROOT_WAIT_SECONDS + 30}.000000")
+    worker.step()
+    assert len(slack.posted) == 2
+    assert "no longer stands" in slack.posted[1]["text"]
+    assert revisions(path) == [(2, "retracted", True)]
+
+
+def test_an_edit_after_the_dry_run_takes_the_reply_back_at_the_next_message(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    enqueue(store, edit_of(ROOT, "1790000040.000100", TAKE, "took 3 Disc 40 from main stock to truck 1"))
+    worker.step()
+    assert len(slack.posted) == 1  # an edit alone does not revise the post yet
+    enqueue(store, message("1790000041.000100", "fixed the count", thread_ts=ROOT))
+    due(worker, clock, 1790000070)
+    assert len(slack.posted) == 2
+    assert "edited or deleted" in json.dumps(slack.posted[1]["blocks"])
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert record is not None
+    assert (record.revision, record.outcome) == (2, DryRunOutcome.RETRACTED)
+    assert record.result == {"withheld": "changed", "retracted": "changed", "instead_of": "withheld"}
+
+
+def test_a_message_that_joins_an_expired_post_starts_no_revision(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    later = 1790000000 + 24 * 3600 + 60
+    enqueue(store, message(f"{later}.000100", "did this ever happen?", thread_ts=ROOT))
+    worker.step()
+    clock.at(f"{later + 30}.000000")
+    worker.step()
+    # Measured from the post's first message, not the new reply. The reply above has expired with its plan: the
+    # message is kept in the post, and starts no revision.
+    assert len(slack.posted) == 1
+    assert revisions(path) == []
+    assert store.post_messages(PostKey(WORKSPACE, CHANNEL, ROOT)) == [ROOT, f"{later}.000100"]
+    assert store.posts_waiting_for_dry_run(revisable_since=Decimal(later - 24 * 3600)) == []
+    (waiting,) = store.posts_waiting_for_dry_run()  # unbounded, it would be due
+    assert waiting.revision == 2
+
+
+def test_a_revision_whose_notice_cannot_be_posted_is_given_up_on(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    enqueue(store, message("1790000040.000100", "one more", thread_ts=ROOT))
+    slack.failures = 10_000
+    due(worker, clock, 1790000060)
+    assert revisions(path) == []  # retried with backoff
+    clock.at(f"{1790000060 + RETRY_FOR_SECONDS}.000000")
+    worker.step()
+    assert revisions(path) == [(2, "gave_up", False)]
+    history = store.dry_run_history(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert history[1].result is not None
+    assert history[1].result["retracted"] == "silent"
 
 
 def test_edits_deletions_and_clicks_are_finished_without_a_reply(
@@ -407,6 +524,88 @@ def test_a_dry_run_outcome_is_recorded_once(store: Store, path: Path) -> None:
         store.finish_dry_run(OWNER, key, DryRunOutcome.SILENT)
     with pytest.raises(sqlite3.IntegrityError), sqlite3.connect(path) as raw:
         raw.execute("UPDATE posts SET reply_ts = '1790000002.000100'")
+
+
+def test_revisions_are_recorded_in_order_and_each_reads_further(store: Store, path: Path) -> None:
+    key = PostKey(WORKSPACE, CHANNEL, "1790000000.000100")
+    store.place_message(OWNER, key, user_id=SAM, thread_ts=None, window_seconds=5)
+    with pytest.raises(StateConflict):  # no first dry run yet
+        store.finish_dry_run(OWNER, key, DryRunOutcome.SILENT, revision=2)
+    with pytest.raises(ValueError, match="only a revision"):
+        store.finish_dry_run(OWNER, key, DryRunOutcome.UNCHANGED)
+    store.finish_dry_run(OWNER, key, DryRunOutcome.REPLIED, "1790000001.000100", read=[key.ts])
+    assert [post.revision for post in store.posts_waiting_for_dry_run()] == []
+    reply = PostKey(WORKSPACE, CHANNEL, "1790000009.000100")
+    store.place_message(OWNER, reply, user_id=LUIS, thread_ts=key.ts, window_seconds=5)
+    (waiting,) = store.posts_waiting_for_dry_run()
+    assert (waiting.key, waiting.newest_ts, waiting.revision) == (key, reply.ts, 2)
+    with pytest.raises(StateConflict):  # reads nothing new
+        store.finish_dry_run(OWNER, key, DryRunOutcome.SILENT, revision=2, read=[key.ts])
+    with pytest.raises(StateConflict):  # skips a revision
+        store.finish_dry_run(OWNER, key, DryRunOutcome.SILENT, revision=3)
+    with pytest.raises(ValueError, match="its own post"):
+        store.finish_dry_run(OWNER, key, DryRunOutcome.SILENT, revision=2, read=[key.ts, "1790000099.000100"])
+    with pytest.raises(LockLost):
+        store.finish_dry_run("instance-b", key, DryRunOutcome.SILENT, revision=2)
+    store.finish_dry_run(OWNER, key, DryRunOutcome.RETRACTED, "1790000010.000100", revision=2, result={"a": 1})
+    assert store.posts_waiting_for_dry_run() == []
+    with pytest.raises(StateConflict):  # once
+        store.finish_dry_run(OWNER, key, DryRunOutcome.SILENT, revision=2)
+    history = store.dry_run_history(key)
+    assert [(r.revision, r.outcome, r.reply_ts) for r in history] == [
+        (1, DryRunOutcome.REPLIED, "1790000001.000100"),
+        (2, DryRunOutcome.RETRACTED, "1790000010.000100"),
+    ]
+    assert store.dry_run(key) == history[-1]
+    with sqlite3.connect(path) as raw:
+        for change in (
+            "UPDATE dry_run_revisions SET outcome = 'replied'",
+            "UPDATE dry_run_revisions SET read_through = 1",
+            "UPDATE dry_run_revisions SET reply_ts = NULL",
+            "UPDATE dry_run_revisions SET result = '{}'",
+            "UPDATE dry_run_revisions SET rowid = 9",
+            "UPDATE dry_runs SET read_through = 2",
+            "DELETE FROM dry_run_revisions",
+            # Out of order, reading nothing new, or a message of another post:
+            "INSERT INTO dry_run_revisions (post_id, revision, read_through, outcome, created_at)"
+            " VALUES (1, 4, 3, 'silent', 'now')",
+            "INSERT INTO dry_run_revisions (post_id, revision, read_through, outcome, created_at)"
+            " VALUES (1, 3, 2, 'silent', 'now')",
+            "INSERT INTO dry_run_revisions (post_id, revision, read_through, outcome, created_at)"
+            " VALUES (1, 3, 99, 'silent', 'now')",
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                raw.execute(change)
+        raw.execute("UPDATE dry_run_revisions SET result = NULL")  # retention may expire the quoted words
+    assert store.dry_run_history(key)[1].result is None
+
+
+def test_posts_answered_before_revisions_existed_wait_only_for_new_messages(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = store_db._migrations()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real[:6])
+    old = Store.open(path)
+    old.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
+    key = PostKey(WORKSPACE, CHANNEL, "1790000000.000100")
+    old.place_message(OWNER, key, user_id=SAM, thread_ts=None, window_seconds=5)
+    old.place_message(
+        OWNER, PostKey(WORKSPACE, CHANNEL, "1790000003.000100"), user_id=SAM, thread_ts=None, window_seconds=5
+    )
+    assert old.post_messages(key) == [key.ts, "1790000003.000100"]
+    with sqlite3.connect(path) as raw:  # this code's finish_dry_run writes the new column
+        raw.execute("UPDATE posts SET dry_run_at = 'then'")
+        raw.execute("INSERT INTO dry_runs (post_id, outcome, created_at) VALUES (1, 'silent', 'then')")
+    old.close()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real)
+    upgraded = Store.open(path)
+    upgraded.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
+    assert upgraded.posts_waiting_for_dry_run() == []  # an upgrade never answers a post again
+    upgraded.place_message(
+        OWNER, PostKey(WORKSPACE, CHANNEL, "1790000020.000100"), user_id=LUIS, thread_ts=key.ts, window_seconds=5
+    )
+    assert [(post.key, post.revision) for post in upgraded.posts_waiting_for_dry_run()] == [(key, 2)]
+    upgraded.close()
 
 
 def test_posts_from_before_the_worker_count_as_handled(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1535,3 +1734,130 @@ def test_a_finished_post_keeps_nothing_of_what_the_model_read(store: Store, slac
     assert worker._llm_read == {}
     assert worker._failures == {}
     assert worker._llm_waiting == {}
+
+
+# Revisions read by the model: the same reading posts nothing, a different one posts a revised dry run.
+
+THREAD = "1790000040.000100"
+
+
+def test_a_revision_that_reads_as_the_standing_reply_posts_nothing(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    llm = FakeLLM(read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, TAKE))  # the rules read it: the model is not asked
+    due(worker, clock)
+    enqueue(store, message(THREAD, "on the way", thread_ts=ROOT))
+    due(worker, clock, 1790000060)
+    worker.step()
+    assert llm.calls == [[TAKE, "on the way"]]
+    assert len(slack.posted) == 1
+    assert revisions(path) == [(2, "unchanged", False)]
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert (record.revision, record.outcome, record.extractor) == (2, DryRunOutcome.UNCHANGED, MODEL)
+
+
+def test_a_revision_that_reads_differently_posts_a_revised_dry_run(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    llm = FakeLLM(read(3))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    enqueue(store, message(THREAD, "make that 3", thread_ts=ROOT))
+    due(worker, clock, 1790000060)
+    worker.step()
+    assert [reply["thread_ts"] for reply in slack.posted] == [ROOT, ROOT]
+    assert slack.posted[1]["text"] == "Revised dry run: 1 movement, nothing changed."
+    assert "Revised dry run" in json.dumps(slack.posted[1]["blocks"])
+    assert revisions(path) == [(2, "replied", True)]
+    history = store.dry_run_history(LLM_KEY)
+    assert history[1].reply_ts == "1790009999.000002"
+    assert history[1].result is not None
+    assert history[1].result["movements"][0]["items"][0]["quantity"] == "3"
+    assert history[1].result["messages"] == [ROOT, THREAD]
+    clock.at("1790000200.000000")
+    worker.step()
+    assert len(slack.posted) == 2  # read through the new message: not due again
+
+
+def test_a_message_that_joins_while_a_revision_is_read_makes_the_next_revision(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    llm = FakeLLM(read(3), read(4))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    enqueue(store, message(THREAD, "make that 3", thread_ts=ROOT))
+    due(worker, clock, 1790000060)  # the model reads the thread; the reply waits for the next step
+    enqueue(store, message("1790000061.000100", "no, 4", thread_ts=ROOT))
+    worker.step()  # the kept reading no longer covers the post: not posted
+    clock.at("1790000090.000000")
+    worker.step()
+    worker.step()
+    assert llm.calls == [[TAKE, "make that 3"], [TAKE, "make that 3", "no, 4"]]
+    assert len(slack.posted) == 2
+    assert revisions(path) == [(2, "replied", True)]
+    history = store.dry_run_history(LLM_KEY)
+    assert history[1].result is not None
+    assert history[1].result["movements"][0]["items"][0]["quantity"] == "4"
+
+
+def test_a_movement_read_after_its_reply_was_taken_back_is_a_plain_dry_run(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    llm = FakeLLM(NoReading("the model declined"), read(3))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    enqueue(store, message(THREAD, "hmm", thread_ts=ROOT))
+    due(worker, clock, 1790000060)
+    enqueue(store, message("1790000070.000100", "make that 3", thread_ts=ROOT))
+    due(worker, clock, 1790000100)
+    worker.step()
+    assert [reply["text"] for reply in slack.posted] == [
+        "Dry run: 1 movement, nothing changed.",
+        "The dry run above no longer stands. Nothing was changed in inventory.",
+        "Dry run: 1 movement, nothing changed.",  # nothing stands above it to revise
+    ]
+    assert revisions(path) == [(2, "retracted", True), (3, "replied", True)]
+    # The model gave no reading: the notice does not blame the thread.
+    assert "language model gave no answer" in json.dumps(slack.posted[1]["blocks"])
+    history = store.dry_run_history(LLM_KEY)
+    assert history[1].result is not None
+    assert history[1].result["retracted"] == "unread"
+
+
+def test_lateness_alone_does_not_make_a_revised_reply(store: Store, slack: FakeSlack, clock: Clock, path: Path) -> None:
+    llm = FakeLLM(read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock, 1790000000 + LATE_AFTER_SECONDS + 60)  # answered late: the reply carries late_ingest
+    first = store.dry_run(LLM_KEY)
+    assert first is not None
+    assert first.result is not None
+    assert first.result["late"] is True
+    thread = f"{1790000000 + LATE_AFTER_SECONDS + 100}.000100"
+    enqueue(store, message(thread, "on the way", thread_ts=ROOT))
+    due(worker, clock, 1790000000 + LATE_AFTER_SECONDS + 130)  # read on time: no late_ingest
+    worker.step()
+    assert len(slack.posted) == 1
+    assert revisions(path) == [(2, "unchanged", False)]
+
+
+def test_a_standing_reply_whose_record_expired_is_revised_rather_than_called_unchanged(
+    store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    llm = FakeLLM(read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    with sqlite3.connect(path) as raw:
+        raw.execute("UPDATE dry_runs SET result = NULL")  # retention expired the quoted words
+    enqueue(store, message(THREAD, "on the way", thread_ts=ROOT))
+    due(worker, clock, 1790000060)
+    worker.step()
+    assert [reply["text"] for reply in slack.posted][1] == "Revised dry run: 1 movement, nothing changed."
+    assert revisions(path) == [(2, "replied", True)]

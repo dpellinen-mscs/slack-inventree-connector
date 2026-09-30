@@ -233,10 +233,11 @@ class CatchUp:
         ingest_event(payload, self.settings, _Accepted(accepted, dump(payload)))
 
     def _change(self, key: PostKey, message: Mapping[str, Any]) -> dict[str, Any] | None:
-        """The message is known. If its post still waits for its dry run and the history shows another edit
-        than the stored event does (or a tombstone: a deleted thread root), that edit as an event: the
-        worker then withholds the post, as it does for an edit Slack delivers."""
-        post = self.store.waiting_post_of(key)
+        """The message is known. If the history shows another edit than the stored event does (or a tombstone:
+        a deleted thread root), that edit as an event: the worker notes it as it does an edit Slack delivers,
+        and withholds the post if it waits for its dry run, or its next revision (a post that had its dry run
+        is read again when a message joins it)."""
+        post = self.store.post_of(key)
         if post is None:
             return None
         now = _edit_stamp(message)

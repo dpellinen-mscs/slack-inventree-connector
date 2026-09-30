@@ -170,12 +170,18 @@ def _section(text: str) -> dict[str, Any]:
 
 
 def dry_run_reply(
-    views: Sequence[MovementView], parts: Mapping[int, str], locations: Mapping[int, str]
+    views: Sequence[MovementView],
+    parts: Mapping[int, str],
+    locations: Mapping[int, str],
+    *,
+    revised: bool = False,
 ) -> dict[str, Any]:
-    """The body of the dry-run reply: `text` for notifications, and `blocks`. Nothing was written."""
+    """The body of the dry-run reply: `text` for notifications, and `blocks`. Nothing was written. `revised`:
+    the post was read again because the thread changed, and this reply takes the place of the one above."""
     if not views:
         raise ValueError("a dry-run reply shows at least one movement")
-    blocks: list[dict[str, Any]] = [_section("*Dry run.* Nothing was changed in inventory.")]
+    heading = "*Revised dry run* (the thread changed)." if revised else "*Dry run.*"
+    blocks: list[dict[str, Any]] = [_section(f"{heading} Nothing was changed in inventory.")]
     for number, view in enumerate(views[:MAX_MOVEMENTS], start=1):
         movement = view.movement
         heading = TYPE_LABELS[movement.movement_type]
@@ -201,4 +207,25 @@ def dry_run_reply(
         hidden = len(views) - MAX_MOVEMENTS
         blocks.append(_section(f"…and {hidden} more movements, not shown here."))
     count = f"{len(views)} movements" if len(views) > 1 else "1 movement"
-    return {"text": f"Dry run: {count}, nothing changed.", "blocks": blocks}
+    return {"text": f"{'Revised dry run' if revised else 'Dry run'}: {count}, nothing changed.", "blocks": blocks}
+
+
+RETRACTION_REASONS = {
+    "changed": "A message of this post was edited or deleted.",
+    "unreadable": "A message of this post can no longer be read.",
+    "silent": "With the new message, I can no longer read this thread as a movement.",
+    "failed": "Reading this thread again failed.",
+    "unread": "I could not read this thread again: the language model gave no answer.",
+}
+
+
+def retraction_notice(why: str) -> dict[str, Any]:
+    """The notice that the dry-run reply above no longer stands, because the thread changed after it."""
+    return {
+        "text": "The dry run above no longer stands. Nothing was changed in inventory.",
+        "blocks": [
+            _section(
+                f"*The dry run above no longer stands.* {RETRACTION_REASONS[why]} Nothing was changed in inventory."
+            )
+        ],
+    }
