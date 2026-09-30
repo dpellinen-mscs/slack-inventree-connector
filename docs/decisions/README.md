@@ -17,6 +17,7 @@ editing history.
 | [0009](0009-audit-store.md) | The audit store: stdlib sqlite3, SQL migrations, guards in the database | Accepted |
 | [0010](0010-no-attribution.md) | No attribution of prior work or users | Accepted |
 | [0011](0011-llm-after-the-rules.md) | The model reads only what the rules decline, and only when configured | Accepted |
+| [0012](0012-first-confirmation-becomes-alias.md) | A whole-word match is confirmed once, and that confirmation becomes an alias | Accepted |
 
 ## Template
 

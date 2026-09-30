@@ -939,6 +939,11 @@ Deterministic. The rules run in this order:
    keywords and aliases; path and description for locations). "Disc 40"
    finds "Norvane Disc 40 Access Point". A word such as "3ft" or "van3"
    may be split into letters and digits.
+   A match by this rule or by rule 5, for a part or a location, never
+   applies without a click. Once a person confirms it and the plan was
+   applied and verified, the text becomes an alias
+   ([0012](decisions/0012-first-confirmation-becomes-alias.md)). A
+   confirmed dry run teaches nothing.
 5. **fuzzy**: as rule 4, but a word of 4 letters or more may be misspelled
    (`difflib` similarity 0.8, so "ondrl" finds "Ondrel"). Words with digits
    never get this allowance, so "truck 7" never becomes "Truck 1".
@@ -947,14 +952,21 @@ Deterministic. The rules run in this order:
   is `ambiguous` with every hit as a candidate. Matching does not fall
   through to a later rule to find a single winner. The candidate list is
   capped where it is shown, not in the result.
+- One exception, planned with alias learning (ADR 0012, M3): an alias
+  learned from a confirmation stores the records that fitted its text at
+  rules 4 and 5 then. When it hits, those rules run again, and a record
+  that fits now and is not in the stored set makes the result `ambiguous`
+  (the alias's record and the new ones). An alias typed by an admin is
+  not rechecked.
 - A single hit at rule 4 or 5 is `matched`, because the corpus clerk would
   pick that one record. It still cannot authorize a write: it raises the
   `fuzzy_match` review reason. Only rules 1 to 3 authorize, and the code
   enforces that with an allowlist (`Match.can_authorize_a_write`).
 - Corpus 0.2.0, with the expected text as input (`tests/core/test_matching_corpus.py`):
   part match 100% (109 results) and location match 100% (92 results).
-  Of the 99 single part matches, 81 came from rule 4 or 5 ("Disc 40",
-  "ONTs"), and so did 20 of the 88 single location matches. Under the
+  Of the 99 single part matches, 80 came from rule 4 and 1 from rule 5
+  ("Disc 40", "ONTs"), and 20 of the 88 single location matches came from
+  rule 4. Under the
   current policy all of those need a confirmation.
 - Plural endings are folded only on words without digits at rules 2 and
   3 ("40S" may be another model), and "-es" only after a hissing sound
