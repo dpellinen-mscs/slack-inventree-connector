@@ -753,7 +753,8 @@ and needs no extra service.
 | `audit_log` | Append-only log of every state change, ids only |
 
 `audit_log` rows are never updated or deleted by the application. Database
-triggers reject both. Triggers also keep every key column fixed, keep
+triggers reject both. Triggers also keep every key column fixed (the row
+id under any of its names: `id`, `rowid`, `oid`; migration 0005), keep
 the recorded intent of an attempt (marker, snapshot, request body) fixed,
 and keep rows that carry a key from being deleted. The first migration
 holds the tables of section 7; the others arrive with their features

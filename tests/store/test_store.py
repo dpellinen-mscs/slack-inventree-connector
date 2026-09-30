@@ -656,3 +656,40 @@ def test_statements_keep_trigger_bodies_whole() -> None:
     ]
     with pytest.raises(RuntimeError, match="incomplete"):
         list(store_db._statements("CREATE TABLE t (a)"))
+
+
+@pytest.mark.parametrize("table", ["posts", "plans", "requests", "request_attempts", "slack_events"])
+@pytest.mark.parametrize("column", ["id", "rowid", "oid", "_rowid_"])
+def test_a_row_id_never_changes_under_any_of_its_names(store: Store, path: Path, table: str, column: str) -> None:
+    plan(store)
+    approve(store, key())
+    begin(store, key())
+    assert store.enqueue_event("Ev1", "event", "{}")
+    # Without foreign keys, as a tool that opens the file directly would: the triggers alone must hold.
+    connection = sqlite3.connect(path, isolation_level=None)
+    before = connection.execute(f"SELECT id FROM {table}").fetchall()  # noqa: S608
+    assert before == [(1,)]
+    with pytest.raises(sqlite3.IntegrityError, match="never changes"):
+        connection.execute(f"UPDATE {table} SET {column} = 99")  # noqa: S608
+    assert connection.execute(f"SELECT id FROM {table}").fetchall() == before  # noqa: S608
+    connection.close()
+
+
+def test_a_file_from_before_the_row_id_triggers_gets_them_and_keeps_working(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = store_db._migrations()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real[:4])
+    old = Store.open(path)
+    old.create_post(POST)
+    raw(path).execute("UPDATE posts SET rowid = 7")  # the hole, as it was
+    old.close()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real)
+    upgraded = Store.open(path)
+    assert upgraded.schema_version == len(real)
+    with pytest.raises(sqlite3.IntegrityError, match="never changes"):
+        raw(path).execute("UPDATE posts SET rowid = 8")
+    upgraded.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
+    assert upgraded.create_plan(POST, HASH, (Operation.TRANSFER,)) == 1  # ordinary updates still pass
+    upgraded.transition(key(), expected=S.PLANNED, target=S.APPROVED, actor=A.HUMAN)
+    upgraded.close()
