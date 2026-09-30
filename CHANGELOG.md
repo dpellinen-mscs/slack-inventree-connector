@@ -22,6 +22,9 @@ Nothing is released yet. The connector cannot write stock in this state.
   approver check for Apply, each drop with a reason.
 - A rule-based extractor that needs no LLM. It reads the common one-message shapes and declines
   everything else, and it has zero hard failures on the eval corpus.
+- A validator that derives review reasons by rule: flags that follow from the fields, grounding of
+  items and quantities in the text, the quantity limit, contradictions, and questions, plans,
+  negations, hedges and instructions in the text.
 - The durable Slack event queue in the store (migration 0002): store before acknowledging,
   pick up unfinished events at startup, and stop retrying an event that keeps failing.
 - Integration tests against real InvenTree 1.4.3 and 1.5.6 in Docker, including characterization tests

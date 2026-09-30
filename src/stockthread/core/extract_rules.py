@@ -22,29 +22,24 @@ from decimal import Decimal
 from enum import Enum
 
 from stockthread.core.model import CandidateMovement, Extraction, Flag, LineItem, MessageInput, MovementType, PostFlag
+from stockthread.core.signals import (
+    CONTAINERS,
+    LATER,
+    LATER_WORDS,
+    NEGATION,
+    NUMBER_WORDS,
+    PLAN_OR_CONDITION,
+    QUESTION_OR_REQUEST,
+    SENSITIVE,
+    SUSPICIOUS,
+    THIRD_PERSON,
+    VEHICLE_WORDS,
+)
 
 EXTRACTOR = "rules-0.1"
 
-_SUSPICIOUS = re.compile(
-    r"\b(ignore (all |any )?(the )?(previous|prior|above|earlier) (instructions|rules)|system\s*:|without review"
-    r"|writes? (are|is) (now )?(on|enabled)|mark (this|it) as (confirmed|approved)|you are now|disregard)",
-    re.IGNORECASE,
-)
-_SENSITIVE = re.compile(
-    r"\b(gate code|door code|lock ?box|alarm code|pass(word|code)|pin code|customer (cell|phone|number)"
-    r"|phone|cell)\b|\b\d{3}[-.]\d{4}\b",
-    re.IGNORECASE,
-)
-_NOT_A_MOVEMENT = re.compile(
-    r"\?|\b(can|could|would) (some|any)one\b|\b(can|could) you\b|\bneeds?\b|\bplease\b|\bshould\b|\bset \w+ aside\b"
-    r"|\b(going to|gonna|i'll)\b|^if\b|, if\b"
-    r"|\b(i|we|he|she|they|you|someone|who) will\b|\bwill (be|take|grab|bring|need|get|pick|drop|return|load|use)\b"
-    r"|\b(not|never|nothing|no longer|didn't|did not|wasn't|haven't|scratch that|actually no|put (them|it) back)\b",
-    re.IGNORECASE,
-)
-_LATER = r"tomorrow|tmrw?|2mo?r+ow|tonight|tonite|later today|next week"
-"""A time ahead. Never read as "not a movement": "grabbed 3 ONTs for the job tomorrow" and "picked up 3 ONTs for
-tomorrow" are takes that happened, and no list of past-tense verbs is complete, so the post is declined."""
+_RETRACTION = re.compile(r"(?<![\w-])(nvm|never ?mind|cancel(led)?|wrong|oops|undo|scratch that)(?![\w-])", re.I)
+"""Negation words that may take back part of a post rather than all of it: declined, never "no movement"."""
 _SLACK_MARKUP = re.compile(r"<[@#!][^>]*>|:[a-z0-9_+-]+:")
 _TICKET = re.compile(r"^(ticket|job|wo|work order)\s*#?\d+\s*[:,-]\s*", re.IGNORECASE)
 _TIME = re.compile(r"\bat \d{1,2}(:\d{2})?\s*(am|pm)\b", re.IGNORECASE)
@@ -86,21 +81,14 @@ _OTHER_VERBS = (
 _PREPOSITIONS = re.compile(r"(?:^|\s)(from|off|out of|to|into|onto|on|in|at|for|→|->)(?=\s|$)", re.IGNORECASE)
 _SOURCE_WORDS = {"from", "off", "out of"}
 
-_NUMBERS = {
-    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
-    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
-    "seventy": 70, "eighty": 80, "ninety": 90,
-}  # fmt: skip
 _EACH = {"each", "ea", "pc", "pcs", "piece", "pieces", "unit", "units", "x"}
-_CONTAINERS = {"box", "bag", "pack", "case", "roll", "spool", "bundle", "carton", "pallet"}
 _LENGTHS = {"ft": "ft", "feet": "ft", "foot": "ft", "m": "m", "meter": "m", "meters": "m", "metre": "m", "metres": "m"}
 _NUMBER = r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
 """A number as written: "1,500" is fifteen hundred (a comma between digit groups is not a list comma)."""
 _LIST_COMMA = r"(?<!\d),|,(?!\d)"
 """A comma between digits never separates items: "1,500" is one number, and "1,5" is declined."""
 _MULTIPLIER = re.compile(
-    rf"(?i)\s*((dozen|doz|dz|half|score|gross|hundreds?|thousands?|millions?|grand|k|{'|'.join(_NUMBERS)})\b|\d*\s*[/\u2044])"
+    rf"(?i)\s*((dozen|doz|dz|half|score|gross|hundreds?|thousands?|millions?|grand|k|{'|'.join(NUMBER_WORDS)})\b|\d*\s*[/\u2044])"
 )
 """A number word or a fraction after a quantity: "two dozen", "3 doz", "a half dozen", "twenty five", "a hundred",
 "10 ½". Never guessed. A digit may follow ("1 16 port switch" reads as 1 of "16 port switch"); a digit before a
@@ -114,13 +102,12 @@ _NOT_STOCK = re.compile(
 """Words that name time, people or events, or a report of what is left: "3 hours at the Smith job",
 "2 ONTs left on truck 1" are not movements."""
 _NOT_A_PLACE = re.compile(
-    rf"\b({_LATER}|today|yesterday|morning|afternoon|lol|jk|haha|kidding|maybe"
+    rf"\b({LATER_WORDS}|today|yesterday|morning|afternoon|lol|jk|haha|kidding|maybe"
     r"|\d{1,2}(:\d{2})?\s*(am|pm))\b"
     r"|^(find|get|see|check|fix|help|do|make|go)\b",
     re.IGNORECASE,
 )
 """Words that make a place text more than a place: "my truck lol jk", "to find the switch", "to 3pm"."""
-_VEHICLE_WORDS = re.compile(r"\b(truck|van|trailer|vehicle)s?\b|\bvan\d", re.IGNORECASE)
 _WAREHOUSE_WORDS = re.compile(r"\b(receiving|main stock|warehouse|shop|rma|stock ?room|storage)\b", re.IGNORECASE)
 
 
@@ -145,9 +132,9 @@ class _Quantity:
 def post_flags(text: str) -> frozenset[PostFlag]:
     """Review reasons about a post as a whole, from its text."""
     flags = set()
-    if _SUSPICIOUS.search(text):
+    if SUSPICIOUS.search(text):
         flags.add(PostFlag.SUSPICIOUS_INSTRUCTIONS)
-    if _SENSITIVE.search(text):
+    if SENSITIVE.search(text):
         flags.add(PostFlag.CONTAINS_SENSITIVE)
     return frozenset(flags)
 
@@ -160,13 +147,17 @@ def extract(messages: Sequence[MessageInput]) -> Extraction:
         return Extraction(EXTRACTOR, ())
     if len(live) > 1 or live[0].file_ids:
         return Extraction(EXTRACTOR, (), flags, declined=True)
+    if THIRD_PERSON.search(live[0].text):
+        return Extraction(EXTRACTOR, (), flags, declined=True)  # "<@U1> took ...": markup is removed below
     text = _clean(live[0].text)
     if len(live[0].text.strip().splitlines()) > 1:
         return Extraction(EXTRACTOR, (), flags, declined=True)  # lists, and a line after the movement
-    if _NOT_A_MOVEMENT.search(text):
+    if _RETRACTION.search(text):
+        return Extraction(EXTRACTOR, (), flags, declined=True)  # "…to truck 1, nvm": a person must read it
+    if any(pattern.search(text) for pattern in (QUESTION_OR_REQUEST, PLAN_OR_CONDITION, NEGATION)):
         return Extraction(EXTRACTOR, (), flags)
-    if re.search(rf"(?i)\b({_LATER})\b", text):
-        return Extraction(EXTRACTOR, (), flags, declined=True)
+    if LATER.search(text):
+        return Extraction(EXTRACTOR, (), flags, declined=True)  # "grabbed 3 ONTs for the job tomorrow"
     try:
         movement = _movement(text)
     except _Decline:
@@ -179,7 +170,7 @@ def _clean(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     text = _SLACK_MARKUP.sub(" ", text)
     sentences = re.split(r"(?<=[.!])\s+", text.strip())
-    text = " ".join(sentence for sentence in sentences if not _SUSPICIOUS.search(sentence))
+    text = " ".join(sentence for sentence in sentences if not SUSPICIOUS.search(sentence))
     text = _TICKET.sub("", text.strip())
     text = _TIME.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip().rstrip(".!")
@@ -248,8 +239,8 @@ def _verb(text: str) -> tuple[_Verb | None, str]:
         if lowered.startswith(words + " "):
             return verb, text[len(words) + 1 :]
     first = lowered.split(" ", 1)[0]
-    counted = re.match(rf"(?:{'|'.join(_CONTAINERS)}) of \d", lowered)  # "box of 100 rj45s"
-    if not (re.match(r"\d", first) or first in _NUMBERS or counted):
+    counted = re.match(rf"(?:{'|'.join(CONTAINERS)}) of \d", lowered)  # "box of 100 rj45s"
+    if not (re.match(r"\d", first) or first in NUMBER_WORDS or counted):
         raise _Decline  # "Priya took ...", "router installed", "fyi ...", "the job went fine on truck 1"
     if re.search(rf"(?i)\b({_OTHER_VERBS})\b", text):
         raise _Decline  # "2 ONTs installed at smith job": the verb after the item names the movement
@@ -311,7 +302,7 @@ def _place(text: str) -> str | None:
 
 
 def _kind(place: str) -> _Kind:
-    if _VEHICLE_WORDS.search(place):
+    if VEHICLE_WORDS.search(place):
         return _Kind.VEHICLE
     if _WAREHOUSE_WORDS.search(place):
         return _Kind.WAREHOUSE
@@ -381,11 +372,11 @@ def _quantity(text: str) -> tuple[_Quantity, str]:
     for pattern, quantity in patterns:
         if found := re.match(pattern, lowered):
             return quantity, text[found.end() :]
-    if found := re.match(rf"half an? ({'|'.join(_CONTAINERS)})\b", lowered):
+    if found := re.match(rf"half an? ({'|'.join(CONTAINERS)})\b", lowered):
         return _Quantity(Decimal("0.5"), found.group(1)), text[found.end() :]
-    if found := re.match(rf"an? {_NUMBER}[- ](?:piece|pc|pack|count|ct) ({'|'.join(_CONTAINERS)})\b", lowered):
+    if found := re.match(rf"an? {_NUMBER}[- ](?:piece|pc|pack|count|ct) ({'|'.join(CONTAINERS)})\b", lowered):
         return _Quantity(Decimal(1), found.group(2), _decimal(found.group(1))), text[found.end() :]
-    if found := re.match(rf"(?:an? )?({'|'.join(_CONTAINERS)}) of {_NUMBER}\b", lowered):
+    if found := re.match(rf"(?:an? )?({'|'.join(CONTAINERS)}) of {_NUMBER}\b", lowered):
         return _Quantity(Decimal(1), found.group(1), _decimal(found.group(2))), text[found.end() :]
     if found := re.match(rf"(?:about|around|approx\.?|~)\s*{_NUMBER}\b", lowered):
         return _unit(_Quantity(_decimal(found.group(1)), vague=True), text[found.end() :])
@@ -398,8 +389,8 @@ def _quantity(text: str) -> tuple[_Quantity, str]:
         rest = re.sub(r"(?i)^\s*of the \d+\b", "", text[found.end() :])  # "2 of the 5"
         return _unit(quantity, rest)
     first = lowered.split(" ", 1)[0]
-    if first in _NUMBERS:
-        return _unit(_Quantity(Decimal(_NUMBERS[first])), text[len(first) :])
+    if first in NUMBER_WORDS:
+        return _unit(_Quantity(Decimal(NUMBER_WORDS[first])), text[len(first) :])
     if first in ("a", "an", "the"):
         rest = text[len(first) :]
         if first == "the" and _plural(rest):
@@ -418,7 +409,7 @@ def _unit(quantity: _Quantity, rest: str) -> tuple[_Quantity, str]:
     after = rest[found.end() :]
     if word in _EACH or singular in _EACH:
         return quantity, after
-    if singular in _CONTAINERS:
+    if singular in CONTAINERS:
         return _Quantity(quantity.value, singular, quantity.pack_size, quantity.vague), after
     if word in _LENGTHS:
         return _Quantity(quantity.value, _LENGTHS[word], quantity.pack_size, quantity.vague), after
@@ -457,6 +448,6 @@ def _flags(
         flags.add(Flag.IMPLIED_DESTINATION)
     if any(item.item_text is None for item in items):
         flags.add(Flag.ITEMS_MISSING)
-    if any(item.unit in _CONTAINERS or item.pack_size is not None for item in items):
+    if any(item.unit in CONTAINERS or item.pack_size is not None for item in items):
         flags.add(Flag.PACK_UNIT_AMBIGUOUS)
     return flags
