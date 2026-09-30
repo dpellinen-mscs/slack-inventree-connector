@@ -490,6 +490,7 @@ class Worker:
             extractor=sent.extractor,
             result=sent.decided,
         )
+        log.info("post %s: dry run posted", key.ts)
 
     def _views(
         self,
