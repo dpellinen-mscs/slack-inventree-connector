@@ -430,7 +430,7 @@ def test_a_thread_root_deleted_during_downtime_withholds_its_waiting_post(
     assert record.outcome is DryRunOutcome.WITHHELD
 
 
-def test_an_edit_of_a_post_that_has_its_dry_run_is_noted_for_its_next_revision(
+def test_an_edit_found_in_the_history_of_a_post_that_has_its_dry_run_takes_its_reply_back(
     sweeper: CatchUp, worker: Worker, store: Store, history: FakeHistory, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:
     ts = "1790000100.000100"
@@ -443,10 +443,13 @@ def test_an_edit_of_a_post_that_has_its_dry_run_is_noted_for_its_next_revision(
     clock.at("1790001000.000000")
     assert sweeper.sweep() == 1  # the edit, as Slack would have sent it
     worker.step()
-    assert len(slack.posted) == 1  # an edit alone starts no revision yet
-    assert store.post_has_revision(PostKey(WORKSPACE, CHANNEL, ts))  # the next revision is withheld as changed
+    assert len(slack.posted) == 2  # the edit alone starts a revision, and the reply above no longer stands
+    assert "edited or deleted" in json.dumps(slack.posted[1]["blocks"])
+    assert store.post_has_revision(PostKey(WORKSPACE, CHANNEL, ts))
     clock.at("1790002000.000000")
     assert sweeper.sweep() == 0  # stored once
+    worker.step()
+    assert len(slack.posted) == 2
 
 
 # Failures

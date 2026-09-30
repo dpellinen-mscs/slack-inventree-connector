@@ -31,6 +31,7 @@ from stockthread.worker import (
     MAX_POSTS_PER_STEP,
     RETRY_FOR_SECONDS,
     ROOT_WAIT_SECONDS,
+    PostStillRunning,
     Worker,
 )
 
@@ -319,22 +320,94 @@ def test_a_thread_root_found_after_its_reply_was_answered_alone_makes_a_revision
     assert revisions(path) == [(2, "retracted", True)]
 
 
-def test_an_edit_after_the_dry_run_takes_the_reply_back_at_the_next_message(
-    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+@pytest.mark.parametrize("kind", ["edit", "deletion"])
+def test_an_edit_or_deletion_alone_after_the_dry_run_takes_the_reply_back(
+    kind: str, worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:
     enqueue(store, message(ROOT, TAKE))
     due(worker, clock)
-    enqueue(store, edit_of(ROOT, "1790000040.000100", TAKE, "took 3 Disc 40 from main stock to truck 1"))
-    worker.step()
-    assert len(slack.posted) == 1  # an edit alone does not revise the post yet
-    enqueue(store, message("1790000041.000100", "fixed the count", thread_ts=ROOT))
-    due(worker, clock, 1790000070)
+    after = "took 3 Disc 40 from main stock to truck 1"
+    change = (
+        edit_of(ROOT, "1790000040.000100", TAKE, after) if kind == "edit" else deletion_of(ROOT, "1790000040.000100")
+    )
+    enqueue(store, change)
+    worker.step()  # at once: the post's window has long passed, and an edit is not a sibling that may follow
     assert len(slack.posted) == 2
+    assert slack.posted[1]["thread_ts"] == ROOT
     assert "edited or deleted" in json.dumps(slack.posted[1]["blocks"])
     record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
     assert record is not None
     assert (record.revision, record.outcome) == (2, DryRunOutcome.RETRACTED)
     assert record.result == {"withheld": "changed", "retracted": "changed", "instead_of": "withheld"}
+    assert statuses(path) == [("done", None), ("done", "revision_noted")]
+
+    # Nothing stands any more. A second edit is not noted again, and a reply after it is read as changed.
+    enqueue(store, edit_of(ROOT, "1790000041.000100", after, "took 4 Disc 40 from main stock to truck 1"))
+    worker.step()
+    enqueue(store, message("1790000042.000100", "fixed the count", thread_ts=ROOT))
+    due(worker, clock, 1790000070)
+    assert len(slack.posted) == 2
+    assert revisions(path) == [(2, "retracted", True), (3, "withheld", False)]
+
+
+def test_an_edit_of_a_post_without_a_standing_reply_is_recorded_and_says_nothing(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, "lunch anyone"))
+    due(worker, clock)
+    enqueue(store, edit_of(ROOT, "1790000040.000100", "lunch anyone", TAKE))
+    worker.step()
+    assert slack.posted == []  # never read from the edited text yet: the post is withheld as changed
+    assert revisions(path) == [(2, "withheld", False)]
+    worker.step()
+    assert revisions(path) == [(2, "withheld", False)]  # once
+
+
+def test_an_edit_of_an_expired_post_starts_no_revision(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    later = 1790000000 + 24 * 3600 + 60
+    clock.at(f"{later}.000000")
+    enqueue(store, edit_of(ROOT, f"{later}.000100", TAKE, "took 3 Disc 40 from main stock to truck 1"))
+    worker.step()
+    assert len(slack.posted) == 1  # the reply above has expired with its plan: nothing to take back
+    assert revisions(path) == []
+
+
+class SlowSlack(FakeSlack):
+    """The first call is still running when the worker checks on it; it has sent by the next check."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.slow = 1
+
+    def chat_postMessage(self, **kwargs: Any) -> dict[str, Any]:
+        if self.slow:
+            self.slow -= 1
+            raise PostStillRunning
+        return super().chat_postMessage(**kwargs)
+
+
+def test_an_edit_that_arrives_while_the_reply_is_on_its_way_makes_the_next_revision(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    slack = SlowSlack()
+    worker = Worker(settings(), store, OWNER, slack, lambda: CATALOG, clock)
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    assert slack.posted == []  # decided, and its call has not returned
+    enqueue(store, edit_of(ROOT, "1790000031.000100", TAKE, "took 3 Disc 40 from main stock to truck 1"))
+    clock.at("1790000040.000000")
+    worker.step()  # the edit is noted; the call returns, and the reply it sent is recorded as decided
+    assert len(slack.posted) == 1
+    history = store.dry_run_history(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert [(record.revision, record.outcome) for record in history] == [(1, DryRunOutcome.REPLIED)]
+    worker.step()  # the reply it sent was decided before the edit: it no longer stands
+    assert len(slack.posted) == 2
+    assert "edited or deleted" in json.dumps(slack.posted[1]["blocks"])
+    assert revisions(path) == [(2, "retracted", True)]
 
 
 def test_a_message_that_joins_an_expired_post_starts_no_revision(
@@ -388,8 +461,8 @@ def test_edits_deletions_and_clicks_are_finished_without_a_reply(
     enqueue(store, {"type": "block_actions"}, kind="interactive")
     worker.step()
     assert statuses(path) == [
-        ("dropped", "revisions_not_handled_yet"),
-        ("dropped", "revisions_not_handled_yet"),
+        ("done", "revision_noted"),
+        ("done", "revision_noted"),
         ("dropped", "clicks_not_handled_yet"),
     ]
     assert slack.posted == []
@@ -567,17 +640,83 @@ def test_revisions_are_recorded_in_order_and_each_reads_further(store: Store, pa
             "UPDATE dry_runs SET read_through = 2",
             "DELETE FROM dry_run_revisions",
             # Out of order, reading nothing new, or a message of another post:
-            "INSERT INTO dry_run_revisions (post_id, revision, read_through, outcome, created_at)"
-            " VALUES (1, 4, 3, 'silent', 'now')",
-            "INSERT INTO dry_run_revisions (post_id, revision, read_through, outcome, created_at)"
-            " VALUES (1, 3, 2, 'silent', 'now')",
-            "INSERT INTO dry_run_revisions (post_id, revision, read_through, outcome, created_at)"
-            " VALUES (1, 3, 99, 'silent', 'now')",
+            "INSERT INTO dry_run_revisions (post_id, revision, read_through, changes_through, outcome, created_at)"
+            " VALUES (1, 4, 3, 0, 'silent', 'now')",
+            "INSERT INTO dry_run_revisions (post_id, revision, read_through, changes_through, outcome, created_at)"
+            " VALUES (1, 3, 2, 0, 'silent', 'now')",
+            "INSERT INTO dry_run_revisions (post_id, revision, read_through, changes_through, outcome, created_at)"
+            " VALUES (1, 3, 99, 0, 'silent', 'now')",
         ):
             with pytest.raises(sqlite3.IntegrityError):
                 raw.execute(change)
         raw.execute("UPDATE dry_run_revisions SET result = NULL")  # retention may expire the quoted words
     assert store.dry_run_history(key)[1].result is None
+
+
+def test_a_change_noted_after_a_dry_run_makes_a_revision_that_reads_no_further(store: Store, path: Path) -> None:
+    key = PostKey(WORKSPACE, CHANNEL, "1790000000.000100")
+    store.place_message(OWNER, key, user_id=SAM, thread_ts=None, window_seconds=5)
+    assert store.post_changes_through(key) == 0
+    store.finish_dry_run(OWNER, key, DryRunOutcome.REPLIED, "1790000001.000100", read=[key.ts])
+    store.note_revision(OWNER, PostKey(WORKSPACE, CHANNEL, "1790000099.000100"))  # a message of no post here
+    assert store.posts_waiting_for_dry_run() == []
+    store.note_revision(OWNER, key)
+    assert store.post_changes_through(key) == 2
+    (waiting,) = store.posts_waiting_for_dry_run()
+    assert (waiting.key, waiting.revision) == (key, 2)
+    with pytest.raises(StateConflict):  # knows of no newer change, and reads nothing new
+        store.finish_dry_run(OWNER, key, DryRunOutcome.SILENT, revision=2, read=[key.ts], changes=0)
+    with pytest.raises(ValueError, match="noted for its post"):
+        store.finish_dry_run(OWNER, key, DryRunOutcome.SILENT, revision=2, read=[key.ts], changes=1)
+    store.finish_dry_run(OWNER, key, DryRunOutcome.WITHHELD, revision=2, read=[key.ts], changes=2)
+    assert store.posts_waiting_for_dry_run() == []
+    with sqlite3.connect(path) as raw:
+        assert raw.execute("SELECT read_through, changes_through FROM dry_run_revisions").fetchall() == [(1, 2)]
+        for change in (
+            "UPDATE dry_run_revisions SET changes_through = 0",
+            "UPDATE dry_runs SET changes_through = 2",
+            # Knowing of no newer change and reading nothing new, knowing of fewer, or of no noted change:
+            "INSERT INTO dry_run_revisions (post_id, revision, read_through, changes_through, outcome, created_at)"
+            " VALUES (1, 3, 1, 2, 'silent', 'now')",
+            "INSERT INTO dry_run_revisions (post_id, revision, read_through, changes_through, outcome, created_at)"
+            " VALUES (1, 3, 1, 0, 'silent', 'now')",
+            "INSERT INTO dry_run_revisions (post_id, revision, read_through, changes_through, outcome, created_at)"
+            " VALUES (1, 3, 1, 9, 'silent', 'now')",
+            "INSERT INTO dry_run_revisions (post_id, revision, read_through, outcome, created_at)"
+            " VALUES (1, 3, 1, 'silent', 'now')",
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                raw.execute(change)
+
+
+def test_posts_answered_before_changes_were_tracked_wait_only_for_new_changes(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = store_db._migrations()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real[:7])
+    old = Store.open(path)
+    old.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
+    key = PostKey(WORKSPACE, CHANNEL, "1790000000.000100")
+    old.place_message(OWNER, key, user_id=SAM, thread_ts=None, window_seconds=5)
+    old.note_revision(OWNER, key)  # edited after its dry run, before the upgrade
+    with sqlite3.connect(path) as raw:  # this code's finish_dry_run writes the new column
+        raw.execute("UPDATE posts SET dry_run_at = 'then'")
+        raw.execute(
+            "INSERT INTO dry_runs (post_id, outcome, read_through, created_at) VALUES (1, 'replied', 1, 'then')"
+        )
+    old.close()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real)
+    upgraded = Store.open(path)
+    upgraded.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
+    assert upgraded.posts_waiting_for_dry_run() == []  # an upgrade never answers an old edit
+    with sqlite3.connect(path) as raw:
+        assert raw.execute("SELECT changes_through FROM dry_runs").fetchall() == [(1,)]
+    upgraded.note_revision(OWNER, PostKey(WORKSPACE, CHANNEL, "1790000003.000100"))
+    upgraded.place_message(
+        OWNER, PostKey(WORKSPACE, CHANNEL, "1790000003.000100"), user_id=SAM, thread_ts=None, window_seconds=5
+    )
+    assert [(post.key, post.revision) for post in upgraded.posts_waiting_for_dry_run()] == [(key, 2)]
+    upgraded.close()
 
 
 def test_posts_answered_before_revisions_existed_wait_only_for_new_messages(
@@ -779,7 +918,7 @@ def test_an_edit_or_deletion_that_arrives_before_its_message_still_withholds_the
     )
     enqueue(store, first)
     worker.step()
-    assert statuses(path) == [("dropped", "revisions_not_handled_yet")]  # noted: no post holds the message yet
+    assert statuses(path) == [("done", "revision_noted")]  # noted: no post holds the message yet
 
     enqueue(store, message(ROOT, TAKE))  # Slack delivered the original late
     worker.step()
@@ -1014,9 +1153,7 @@ def test_an_edit_the_strict_checks_cannot_read_gets_from_the_listener_to_the_wor
     worker.step()
     assert slack.posted == []
     assert audit(path) == ["dry_run_withheld"]
-    assert ("dropped", "revisions_not_handled_yet") in statuses(path) or ("done", "withheld_changed_post") in statuses(
-        path
-    )
+    assert ("done", "revision_noted") in statuses(path) or ("done", "withheld_changed_post") in statuses(path)
 
 
 def test_the_listener_does_not_keep_a_link_preview_or_an_edit_from_elsewhere(store: Store, path: Path) -> None:

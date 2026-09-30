@@ -411,8 +411,8 @@ class Store:
                 self._audit(Actor.PLANNER, "siblings_closed", post_id=post_id)
 
     def posts_waiting_for_dry_run(self, revisable_since: Decimal | None = None) -> list[WaitingPost]:
-        """Posts without a dry-run outcome yet, then posts that a message joined after their last dry run (a
-        revision), each oldest first.
+        """Posts without a dry-run outcome yet, then posts that a message joined, or that had a message edited
+        or deleted, after their last dry run (a revision), each oldest first.
 
         `revisable_since`: only posts keyed on a message from this Slack time on are revised. An older post's
         reply has expired with its plan: a message that joins it is kept, and starts no revision. It also keeps
@@ -428,12 +428,16 @@ class Store:
             " SELECT id FROM posts WHERE dry_run_at IS NOT NULL AND CAST(ts AS REAL) >= CAST(? AS REAL)"
             "),"
             " last AS ("
-            " SELECT d.post_id, coalesce(max(r.read_through), d.read_through) AS through, count(r.id) + 2 AS next"
+            " SELECT d.post_id, coalesce(max(r.read_through), d.read_through) AS through,"
+            " coalesce(max(r.changes_through), d.changes_through) AS changes, count(r.id) + 2 AS next"
             " FROM recent JOIN dry_runs d ON d.post_id = recent.id"
             " LEFT JOIN dry_run_revisions r ON r.post_id = d.post_id GROUP BY d.post_id"
             ") SELECT p.workspace_id, p.channel_id, p.ts, m.ts, last.next FROM last"
             " JOIN posts p ON p.id = last.post_id JOIN post_messages m ON m.post_id = p.id"
             " WHERE EXISTS (SELECT 1 FROM post_messages n WHERE n.post_id = p.id AND n.id > last.through)"
+            " OR EXISTS (SELECT 1 FROM revised_messages r WHERE r.id > last.changes"
+            " AND r.workspace_id = p.workspace_id AND r.channel_id = p.channel_id AND (r.ts = p.ts"
+            " OR EXISTS (SELECT 1 FROM post_messages n WHERE n.post_id = p.id AND n.ts = r.ts)))"
             " ORDER BY p.id",
             (since,),
         ).fetchall()
@@ -494,20 +498,32 @@ class Store:
     def post_has_revision(self, key: PostKey) -> bool:
         """Whether any message of the post, or the message it is keyed on, was edited or deleted, in whatever
         order the events arrived."""
+        return self.post_changes_through(key) > 0
+
+    def post_changes_through(self, key: PostKey) -> int:
+        """The newest noted edit or deletion (`revised_messages.id`) of a message of the post, or of the message
+        it is keyed on; 0 when there is none."""
         post_id = self._post_id(key)
         if post_id is None:
             raise KeyError("no such post")
-        row = self._db.execute(
-            "SELECT 1 FROM revised_messages r WHERE EXISTS ("
+        return self._changes_through(post_id)
+
+    def _changes_through(self, post_id: int) -> int:
+        return max(self._changes(post_id), default=0)
+
+    def _changes(self, post_id: int) -> set[int]:
+        """The ids of every noted edit or deletion of a message of the post, or of the message it is keyed on."""
+        rows = self._db.execute(
+            "SELECT r.id FROM revised_messages r WHERE EXISTS ("
             " SELECT 1 FROM post_messages m WHERE m.post_id = ?1"
             " AND m.workspace_id = r.workspace_id AND m.channel_id = r.channel_id AND m.ts = r.ts"
             ") OR EXISTS ("  # the thread root the post is keyed on, even when it never arrived
             " SELECT 1 FROM posts p WHERE p.id = ?1"
             " AND p.workspace_id = r.workspace_id AND p.channel_id = r.channel_id AND p.ts = r.ts"
-            ") LIMIT 1",
+            ")",
             (post_id,),
-        ).fetchone()
-        return row is not None
+        ).fetchall()
+        return {int(row[0]) for row in rows}
 
     def finish_dry_run(
         self,
@@ -520,6 +536,7 @@ class Store:
         result: Mapping[str, Any] | None = None,
         revision: int = 1,
         read: Sequence[str] | None = None,
+        changes: int | None = None,
     ) -> None:
         """Record the outcome of the post's dry run `revision`, and the timestamp of what was posted when Slack
         gave one. Each revision once, in order.
@@ -527,7 +544,9 @@ class Store:
         `extractor` and `result` are what was decided and why (the candidates, matches and reasons): they are
         stored in the same transaction, so a finished post always has its record. `read` is the timestamps of
         the messages that were read; None means every message the post holds now (a post withheld unread). A
-        message that joins the post later makes it wait for the next revision.
+        message that joins the post later makes it wait for the next revision. `changes` is the newest noted
+        edit or deletion the decision knew of (`post_changes_through` when it was decided); None means the
+        newest there is now. A change noted later makes the post wait for the next revision too.
         """
         posted = (DryRunOutcome.REPLIED, DryRunOutcome.RETRACTED)
         if reply_ts is not None and (outcome not in posted or not _SLACK_TS.fullmatch(reply_ts)):
@@ -541,20 +560,31 @@ class Store:
             if post_id is None:
                 raise KeyError("no such post")
             through = self._read_through(post_id, read)
+            if changes is None:
+                changes = self._changes_through(post_id)
+            elif changes != 0 and changes not in self._changes(post_id):
+                raise ValueError("a dry run knows only of changes noted for its post")
             now = self._now()
             if revision > 1:
                 last = self._db.execute(
-                    "SELECT coalesce(max(r.read_through), d.read_through), count(r.id) + 1 FROM dry_runs d"
+                    "SELECT coalesce(max(r.read_through), d.read_through),"
+                    " coalesce(max(r.changes_through), d.changes_through), count(r.id) + 1 FROM dry_runs d"
                     " LEFT JOIN dry_run_revisions r ON r.post_id = d.post_id WHERE d.post_id = ?",
                     (post_id,),
                 ).fetchone()
-                if last is None or last[0] is None or revision != last[1] + 1 or through <= last[0]:
+                if (
+                    last is None
+                    or last[0] is None
+                    or revision != last[2] + 1
+                    or through < last[0]
+                    or changes < last[1]
+                    or (through, changes) == (last[0], last[1])
+                ):
                     raise StateConflict(f"the post has no revision {revision} waiting")
                 self._db.execute(
-                    "INSERT INTO dry_run_revisions"
-                    " (post_id, revision, read_through, outcome, extractor, result, reply_ts, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (post_id, revision, through, outcome.value, extractor or None, stored, reply_ts, now),
+                    "INSERT INTO dry_run_revisions (post_id, revision, read_through, changes_through, outcome,"
+                    " extractor, result, reply_ts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (post_id, revision, through, changes, outcome.value, extractor or None, stored, reply_ts, now),
                 )
                 self._audit(Actor.PLANNER, f"revision_{outcome.value}", post_id=post_id)
                 return
@@ -565,9 +595,9 @@ class Store:
             if cursor.rowcount != 1:
                 raise StateConflict("the post already has its dry-run outcome")
             self._db.execute(
-                "INSERT INTO dry_runs (post_id, outcome, extractor, result, read_through, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (post_id, outcome.value, extractor or None, stored, through, now),
+                "INSERT INTO dry_runs (post_id, outcome, extractor, result, read_through, changes_through, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (post_id, outcome.value, extractor or None, stored, through, changes, now),
             )
             self._audit(Actor.PLANNER, f"dry_run_{outcome.value}", post_id=post_id)
 
