@@ -117,23 +117,35 @@ def check_endpoint(base_url: str, model: str, api_key: SecretStr | None) -> http
 
 
 def _content(raw: bytes) -> str:
-    """The text of the first choice. Another shape is a ProviderError. A refusal or a cut-off answer is a
-    NoReading: the provider is well, and asking again about the same post would give the same."""
+    """The text of the first choice.
+
+    A NoReading when the answer is about this one post and would be the same again: the model refused it, or
+    its answer was cut off by a limit, filtered, or too long. Any other shape is a ProviderError, an outage
+    that is tried again: a server under load can answer 200 with nothing in it.
+    """
     content: Any = None
+    refusal: Any = None
     finish: Any = "unread"
     try:
         answer = json.loads(raw)
         choice = answer["choices"][0]
         content = choice["message"]["content"]
+        refusal = choice["message"].get("refusal")
         finish = choice.get("finish_reason")
     except (ValueError, LookupError, TypeError, AttributeError, RecursionError):
         pass
     if finish == "unread":
         raise ProviderError("the provider's answer is not a chat completion")
-    if finish not in (None, "stop"):
+    if finish in ("length", "content_filter"):
         raise NoReading("the model did not finish its answer")  # cut off by a limit, or filtered
-    if not isinstance(content, str) or not content or len(content) > MAX_OUTPUT_CHARS:
-        raise NoReading("the model gave no answer, or one that is too long")  # also a refusal
+    if content is None and isinstance(refusal, str) and refusal:
+        raise NoReading("the model refused the post")
+    if finish not in (None, "stop"):
+        raise ProviderError("the model did not finish its answer")
+    if not isinstance(content, str) or not content:
+        raise ProviderError("the model gave no answer")
+    if len(content) > MAX_OUTPUT_CHARS:
+        raise NoReading("the model's answer is too long")
     return content
 
 
