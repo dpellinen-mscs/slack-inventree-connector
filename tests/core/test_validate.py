@@ -315,6 +315,9 @@ def test_one_mention_grounds_one_line() -> None:
         ("ONTs", "2", "took 2.000 ONTs from shop to truck 1"),
         ("ONTs", "2", "took 2 million ONTs from shop to truck 1"),
         ("ONTs", "2", "took 2 grand worth of ONTs from shop to truck 1"),
+        ("ONTs", "1", "took 2 of the ONTs from shop to truck 1"),
+        ("ONTs", "1", "took two of the ONTs from shop to truck 1"),
+        ("ONTs", "1", "took 2 of those ONTs from shop to truck 1"),
     ],
 )
 def test_adversarial_quantities_are_not_grounded(item: str, quantity: str, text: str) -> None:

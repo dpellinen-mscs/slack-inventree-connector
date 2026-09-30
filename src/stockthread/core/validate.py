@@ -243,7 +243,8 @@ def _compound(words: list[str], index: int) -> bool:
 
 
 def _one_container(words: list[str]) -> bool:
-    """An article right before the item ("the radio"), or before its container ("a 12-piece box of", "box of 100")."""
+    """An article right before the item ("the radio"), or before its container ("a 12-piece box of", "box of 100").
+    Not after a number: "2 of the ONTs" states 2."""
     words = [word.strip("(),.!") for word in words]
     container = False
     while words:
@@ -253,6 +254,8 @@ def _one_container(words: list[str]) -> bool:
         elif not (last == "of" or re.fullmatch(r"\d+-\w+", last) or (last.isdigit() and words[-2:-1] == ["of"])):
             break
         words.pop()
+    if any(_is_number(word) for word in words[:-1]):
+        return False
     return (bool(words) and words[-1] in _ONE) or (container and not words)
 
 
