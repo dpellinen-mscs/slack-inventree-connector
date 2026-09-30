@@ -30,6 +30,7 @@ from stockthread.core.signals import (
     CORRECTION,
     HEDGE,
     LATER,
+    LENGTH_UNITS,
     MENTION,
     NEGATION,
     NUMBER_WORDS,
@@ -54,6 +55,8 @@ _FILLER = frozenset(
     | {"piece", "pieces", "unit", "units", "ft", "feet", "foot", "m", "meter", "meters", "metre", "metres"}
 )
 """Words that may sit between a quantity and its item: "5 boxes of", "300 ft of", "2 of the 5"."""
+_EACH = frozenset({"each", "ea", "pc", "piece", "unit", "x"})
+"""Unit words that mean a count, in the singular: the same as no unit."""
 _ONE = frozenset({"a", "an", "the", "one", "single", "this", "that"})
 _WORD_QUANTITIES = {"dozen": Decimal(12), "pair": Decimal(2), "couple": Decimal(2), "half": Decimal("0.5")}
 _QUANTITY_WINDOW = 4
@@ -183,18 +186,28 @@ def _has_words(phrase: str, text: str) -> bool:
     return bool(_occurrences(phrase, text))
 
 
-def _stated(before: str) -> set[Decimal]:
-    """The quantities the words right before an item can state."""
+def _quantity_words(before: str) -> list[str]:
+    """The words right before an item that can belong to its quantity."""
     before = _SEPARATOR.split(before)[-1]
     words = [word.strip("(),.!") for word in before.split()[-_QUANTITY_WINDOW:]]
     while words and not all(_quantity_word(word) for word in words):
         words.pop(0)  # "took 2 ONTs 3": only the words right before the item, not the last item's quantity
+    return words
+
+
+def _stated(before: str) -> set[Decimal]:
+    """The quantities the words right before an item can state."""
+    words = _quantity_words(before)
     found = set()
     for index, word in enumerate(words):
         if _AMBIGUOUS_NUMBER.match(word):
             continue
         if _compound(words, index):
             continue  # "2 dozen", "twenty five": neither word alone states the quantity
+        if _out_of(words, index):
+            continue  # "2 of the 5": the 5 is what there was, not what moved
+        if word == "half" and any(other in _SCALES or other == "pair" for other in words[index + 1 : index + 3]):
+            continue  # "half a dozen" is 6, never 0.5
         if number := _NUMBER_TOKEN.match(word):
             with contextlib.suppress(InvalidOperation):
                 found.add(Decimal(number.group(1).replace(",", "")))
@@ -206,6 +219,36 @@ def _stated(before: str) -> set[Decimal]:
     if _one_container(words):
         found.add(Decimal(1))
     return found
+
+
+def _out_of(words: list[str], index: int) -> bool:
+    """A number that is the total in "2 of the 5", "two of 5": the quantity is the number before "of"."""
+    if not _is_number(words[index]):
+        return False
+    before = index - 1
+    while before >= 0 and words[before] in _ONE:
+        before -= 1
+    return before >= 1 and words[before] == "of" and _is_number(words[before - 1])
+
+
+def _stated_units(before: str) -> set[str]:
+    """The units the words right before an item state, in the form a line item carries: "ft", "m", "box"."""
+    found = set()
+    for word in _quantity_words(before):
+        unit = re.sub(r"^\d+-", "", word)  # "12-ft"
+        if unit in LENGTH_UNITS:
+            found.add(LENGTH_UNITS[unit])
+        elif CONTAINER_WORDS.fullmatch(unit):
+            found.add(_unit(unit) or unit)
+    return found
+
+
+def _same_unit(unit: str | None, stated: set[str]) -> bool:
+    """The candidate's unit is the one the text states: none for none, and neither swapped nor left out."""
+    unit = _unit(unit)
+    if unit is None or unit in _EACH:
+        return not stated
+    return LENGTH_UNITS.get(unit, unit) in stated
 
 
 def _is_number(word: str) -> bool:
@@ -274,6 +317,8 @@ def _grounding(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         grounded = [m for m in found if item.quantity is None or item.quantity in _stated(text[: m.start()])]
         if grounded:
             used.add(grounded[0].start())  # one mention grounds one line: "2 ONTs" is not two lines of 2
+        if found and not any(_same_unit(item.unit, _stated_units(text[: m.start()])) for m in grounded[:1] or found):
+            reasons.add(_rule(ReasonCode.QUANTITY_NOT_IN_TEXT, f"line {n}: the unit is not the one in the text"))
         if item.quantity is not None and (
             first in _SCALES
             or first in NUMBER_WORDS

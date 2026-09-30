@@ -128,6 +128,16 @@ class WaitingPost:
 
 
 @dataclass(frozen=True)
+class DryRunRecord:
+    """What a post's dry run decided. `result` quotes words of the post: never log it."""
+
+    outcome: DryRunOutcome
+    extractor: str | None
+    result: Mapping[str, Any] | None
+    """None when the dry run stored none, or once retention expired it."""
+
+
+@dataclass(frozen=True)
 class QueuedEvent:
     id: int
     key: str
@@ -425,22 +435,82 @@ class Store:
         ).fetchall()
         return sorted(((row[0], row[1]) for row in rows), key=lambda row: seconds(row[0]))
 
-    def finish_dry_run(self, owner: str, key: PostKey, outcome: DryRunOutcome, reply_ts: str | None = None) -> None:
-        """Record the post's dry-run outcome, and the reply's timestamp when Slack gave one. Once only."""
+    def note_revision(self, owner: str, message: PostKey, slack_event_id: int | None = None) -> None:
+        """Remember that a message was edited or deleted, whether or not the message itself has arrived. Idempotent."""
+        with self._transaction():
+            self._check_lock(owner)
+            key = (message.workspace_id, message.channel_id, message.ts)
+            if self._db.execute(
+                "SELECT 1 FROM revised_messages WHERE workspace_id = ? AND channel_id = ? AND ts = ?", key
+            ).fetchone():
+                return
+            self._db.execute(
+                "INSERT INTO revised_messages (workspace_id, channel_id, ts, slack_event_id, noted_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (*key, slack_event_id, self._now()),
+            )
+            self._audit("ingest", "revision_noted", slack_event_id=slack_event_id)
+
+    def post_has_revision(self, key: PostKey) -> bool:
+        """Whether any message of the post was edited or deleted, in whatever order the events arrived."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        row = self._db.execute(
+            "SELECT 1 FROM post_messages m JOIN revised_messages r"
+            " ON r.workspace_id = m.workspace_id AND r.channel_id = m.channel_id AND r.ts = m.ts"
+            " WHERE m.post_id = ? LIMIT 1",
+            (post_id,),
+        ).fetchone()
+        return row is not None
+
+    def finish_dry_run(
+        self,
+        owner: str,
+        key: PostKey,
+        outcome: DryRunOutcome,
+        reply_ts: str | None = None,
+        *,
+        extractor: str | None = None,
+        result: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Record the post's dry-run outcome, and the reply's timestamp when Slack gave one. Once only.
+
+        `extractor` and `result` are what was decided and why (the candidates, matches and reasons): they are
+        stored in the same transaction, so a finished post always has its record.
+        """
         if reply_ts is not None and (outcome is not DryRunOutcome.REPLIED or not _SLACK_TS.fullmatch(reply_ts)):
             raise ValueError("only a reply has a timestamp, in Slack's form")
+        stored = None if result is None else json.dumps(result, sort_keys=True, separators=(",", ":"))
         with self._transaction():
             self._check_lock(owner)
             post_id = self._post_id(key)
             if post_id is None:
                 raise KeyError("no such post")
+            now = self._now()
             cursor = self._db.execute(
                 "UPDATE posts SET dry_run_at = ?, reply_ts = ? WHERE id = ? AND dry_run_at IS NULL",
-                (self._now(), reply_ts, post_id),
+                (now, reply_ts, post_id),
             )
             if cursor.rowcount != 1:
                 raise StateConflict("the post already has its dry-run outcome")
+            self._db.execute(
+                "INSERT INTO dry_runs (post_id, outcome, extractor, result, created_at) VALUES (?, ?, ?, ?, ?)",
+                (post_id, outcome.value, extractor or None, stored, now),
+            )
             self._audit(Actor.PLANNER, f"dry_run_{outcome.value}", post_id=post_id)
+
+    def dry_run(self, key: PostKey) -> DryRunRecord | None:
+        """The record of a post's dry run, or None when it has not had one (or had it before migration 0004)."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        row = self._db.execute(
+            "SELECT outcome, extractor, result FROM dry_runs WHERE post_id = ?", (post_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return DryRunRecord(DryRunOutcome(row[0]), row[1], None if row[2] is None else json.loads(row[2]))
 
     def create_plan(self, post: PostKey, input_hash: str, operations: Sequence[Operation]) -> int:
         """Store a new plan revision with one planned request per operation, and return its revision.

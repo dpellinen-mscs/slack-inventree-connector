@@ -73,4 +73,15 @@ CONTAINERS = frozenset({"box", "bag", "pack", "case", "roll", "spool", "bundle",
 CONTAINER_WORDS = re.compile(
     r"\b(box(es)?|bags?|packs?|cases?|rolls?|spools?|bundles?|cartons?|pallets?)\b", re.IGNORECASE
 )
+LENGTH_UNITS = {
+    "ft": "ft",
+    "feet": "ft",
+    "foot": "ft",
+    "m": "m",
+    "meter": "m",
+    "meters": "m",
+    "metre": "m",
+    "metres": "m",
+}
+"""Length unit words and their short form."""
 VEHICLE_WORDS = re.compile(r"\b(truck|van|trailer|vehicle)s?\b|\bvan\d", re.IGNORECASE)

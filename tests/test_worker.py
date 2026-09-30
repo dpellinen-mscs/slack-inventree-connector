@@ -510,3 +510,157 @@ def test_an_edit_before_the_dry_run_withholds_the_post(
     assert statuses(path) == [("done", None), ("done", "withheld_changed_post")]
     assert audit(path) == ["dry_run_withheld"]
     assert slack.posted == []
+
+
+TAKE = "took 2 Disc 40 from main stock to truck 1"
+ROOT = "1790000000.000100"
+
+
+def edit_of(ts: str, at: str, before: str, after: str) -> dict[str, Any]:
+    edit = message(at, "", subtype="message_changed")
+    base = {"type": "message", "user": SAM, "ts": ts}
+    edit["event"]["message"] = {**base, "text": after, "edited": {"user": SAM, "ts": at}}
+    edit["event"]["previous_message"] = {**base, "text": before}
+    return edit
+
+
+def deletion_of(ts: str, at: str) -> dict[str, Any]:
+    deletion = message(at, "", subtype="message_deleted")
+    deletion["event"]["deleted_ts"] = ts
+    return deletion
+
+
+@pytest.mark.parametrize("kind", ["edit", "deletion"])
+def test_an_edit_or_deletion_that_arrives_before_its_message_still_withholds_the_post(
+    kind: str, worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    after = "took 3 Disc 40 from main stock to truck 1"
+    first = (
+        edit_of(ROOT, "1790000002.000100", TAKE, after) if kind == "edit" else deletion_of(ROOT, "1790000002.000100")
+    )
+    enqueue(store, first)
+    worker.step()
+    assert statuses(path) == [("dropped", "revisions_not_handled_yet")]  # noted: no post holds the message yet
+
+    enqueue(store, message(ROOT, TAKE))  # Slack delivered the original late
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert slack.posted == []  # never a dry run for 2 when the post now says 3, or is gone
+    assert audit(path) == ["dry_run_withheld"]
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert record is not None
+    assert (record.outcome, record.result) == (DryRunOutcome.WITHHELD, {"withheld": "changed"})
+
+
+def test_an_early_edit_of_a_sibling_withholds_the_whole_post(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, edit_of("1790000001.000100", "1790000002.000100", "and 1 ONT 100", "and 4 ONT 100"))
+    enqueue(store, message(ROOT, TAKE))
+    enqueue(store, message("1790000001.000100", "and 1 ONT 100"))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert slack.posted == []
+    assert audit(path) == ["dry_run_withheld"]
+
+
+def test_a_revision_is_noted_once_and_only_by_the_lock_holder(store: Store, path: Path) -> None:
+    key = PostKey(WORKSPACE, CHANNEL, ROOT)
+    store.note_revision(OWNER, key)
+    store.note_revision(OWNER, key)
+    with sqlite3.connect(path) as raw:
+        assert raw.execute("SELECT count(*) FROM revised_messages").fetchone() == (1,)
+        with pytest.raises(sqlite3.IntegrityError, match="never"):
+            raw.execute("DELETE FROM revised_messages")
+    with pytest.raises(LockLost):
+        store.note_revision("someone-else", key)
+
+
+def test_a_reply_keeps_what_was_decided_and_why(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, "took 2 Disc 40 and 1 widget from main stock to truck 1"))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert len(slack.posted) == 1
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert record is not None
+    assert record.outcome is DryRunOutcome.REPLIED
+    assert record.extractor == extract_rules.EXTRACTOR
+    assert record.result is not None
+    (movement,) = record.result["movements"]
+    assert movement["type"] == "take_to_vehicle"
+    assert movement["source"] == {"status": "matched", "rule": "normalized", "record": 10, "candidates": []}
+    assert movement["destination"]["record"] == 11
+    disc, widget = movement["items"]
+    assert (disc["item_text"], disc["quantity"], disc["unit"]) == ("Disc 40", "2", None)
+    assert (disc["part"]["status"], disc["part"]["record"]) == ("matched", 1)
+    assert disc["part"]["rule"] in ("exact", "normalized")
+    assert widget["part"] == {"status": "unmatched", "rule": None, "record": None, "candidates": []}
+    assert ["part_unmatched", "line 2"] in movement["gate"]
+    assert record.result["late"] is False
+
+
+def test_every_outcome_keeps_a_record_and_a_record_never_changes(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, "lunch anyone"))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert record is not None
+    assert record.outcome is DryRunOutcome.SILENT
+    assert record.extractor == extract_rules.EXTRACTOR
+    assert record.result is not None
+    assert record.result["movements"] == []
+    with sqlite3.connect(path) as raw:
+        for change in (
+            "UPDATE dry_runs SET result = '{}'",
+            "UPDATE dry_runs SET outcome = 'replied'",
+            "DELETE FROM dry_runs",
+            "INSERT OR REPLACE INTO dry_runs (post_id, outcome, created_at) VALUES (1, 'replied', 'now')",
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                raw.execute(change)
+        raw.execute("UPDATE dry_runs SET result = NULL")  # retention may expire the quoted words
+    expired = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert expired is not None
+    assert expired.result is None
+
+
+def test_a_reply_that_is_given_up_on_keeps_its_record(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    slack.failures = 10_000
+    clock.at("1790000030.000000")
+    worker.step()
+    clock.at(f"{1790000030 + RETRY_FOR_SECONDS}.000000")
+    worker.step()
+    assert audit(path) == ["dry_run_gave_up"]
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert record is not None
+    assert record.outcome is DryRunOutcome.GAVE_UP
+    assert record.result is not None
+    assert record.result["movements"][0]["items"][0]["quantity"] == "2"
+
+
+def test_a_post_the_pipeline_breaks_on_records_the_error_class(
+    worker: Worker, store: Store, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(_: object) -> None:
+        raise RuntimeError("synthetic: quoted text must not be stored")
+
+    monkeypatch.setattr(extract_rules, "extract", broken)
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert record is not None
+    assert (record.outcome, record.result) == (DryRunOutcome.FAILED, {"error": "error_runtime_error"})
