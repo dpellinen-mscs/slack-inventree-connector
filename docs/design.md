@@ -322,11 +322,26 @@ needs.
     older than `plan_expiry_hours` is not revised at all, whatever the age
     of the new message: its reply has expired with its plan, so there is
     nothing to take back. The message is kept in the post. This also
-    bounds what each step reads. An edit or a deletion alone after the
-    dry run is noted but does not start a revision yet; the next message
-    does, and it is then withheld as `changed`. Catch-up notes an edit it
-    finds in the history for any post, not only one waiting for its first
-    dry run.
+    bounds what each step reads.
+  - **An edit or a deletion alone** after the dry run starts a revision
+    too. Every dry run also records the newest noted edit or deletion of
+    its post it was decided with (`changes_through`, a
+    `revised_messages.id`, 0 for none; migration 0008), taken before the
+    post is read. A change noted later makes the post due at once: an edit
+    is no sibling, so there is no window to wait for. A post that holds an
+    edited or deleted message is never read from its original text, and
+    the edited text is not read yet, so the revision is withheld as
+    `changed`: a standing reply is taken back with a notice that a
+    message was edited or deleted, and without one nothing is posted.
+    Each message is noted once, so a second edit of it starts nothing
+    more. An edit that arrives while a reply's Slack call is still running
+    does not change what that reply recorded; it starts the next revision,
+    which takes the reply back. Catch-up notes an edit it finds in the
+    history for any post, not only one waiting for its first dry run.
+    Posts answered before migration 0008 take every change noted until
+    then, so an upgrade never answers an old edit. Known limit: a message
+    is noted once, so one edited before the upgrade starts no revision
+    when it is edited again after it.
     Known limits: posts waiting for their first dry run are answered
     before revisions, so a backlog delays revisions. A first dry run that
     ended `gave_up` may still have reached Slack (the call can fail after
