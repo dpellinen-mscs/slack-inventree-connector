@@ -41,6 +41,10 @@ Nothing is released yet. The connector cannot write stock in this state.
   same database. HTTP serving is not built yet. A rate-limited reply is tried again after the time
   Slack names, without blocking, and the catalog read has a time limit, so the instance lock never
   goes stale under a working instance.
+- A Slack app manifest for Socket Mode (`manifests/slack-socket.json`) with the minimum scopes, and a
+  quickstart in the README.
+- Slack connections verify against the system's certificate authorities plus certifi's, so a
+  python.org build of Python on macOS works without its "Install Certificates" step.
 - The worker (migration 0004): stored events become grouped posts, and once a post's sibling window
   has passed it gets one dry-run reply in its thread. Posts that are not read as a movement get no
   reply. Edits, deletions and clicks are recorded and not acted on yet; a post that was edited or

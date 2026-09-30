@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
 import threading
 import time
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+import certifi
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
@@ -172,6 +174,18 @@ def check_inventree(settings: Settings) -> str:
     return asyncio.run(read())
 
 
+def slack_tls() -> ssl.SSLContext:
+    """The system's certificate authorities plus certifi's, for the Web API and Socket Mode alike.
+
+    Python from python.org on macOS knows no authority until its "Install Certificates" step is run, and
+    every Slack call then fails with CERTIFICATE_VERIFY_FAILED. Verification itself stays as strict as the
+    default. SSL_CERT_FILE and SSL_CERT_DIR still add authorities, for a TLS-inspecting proxy.
+    """
+    context = ssl.create_default_context()
+    context.load_verify_locations(certifi.where())
+    return context
+
+
 def socket_mode(app: Any, app_token: str) -> Connection:
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -213,7 +227,7 @@ def run(
             log.warning("writes.enabled has no effect in this version: it has no apply step yet")
         log.info("This version only posts dry runs: no stock is ever written.")
         bot_token = settings.secrets.slack_bot_token.get_secret_value()
-        client = slack_client or WebClient(token=bot_token)
+        client = slack_client or WebClient(token=bot_token, ssl=slack_tls())
         # No handler that sleeps for Slack's Retry-After inside a call: it could outlast the instance lock. A
         # rate-limited reply fails instead, and the worker tries it again once the time Slack named has passed.
         client.retry_handlers = [

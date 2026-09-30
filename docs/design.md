@@ -309,7 +309,10 @@ needs.
   anyone who can see the message can add one.
 - **Scopes** are the minimum for v1.0: read messages in the channels the
   app is invited to, and write messages. File access is added only when
-  photo extraction is built. The exact list will be in the manifest.
+  photo extraction is built. The exact list is in the manifest
+  (`manifests/slack-socket.json`: `channels:history`, `groups:history`,
+  `chat:write`, and the events `message.channels` and `message.groups`),
+  and `tests/test_manifest.py` fails when it grows.
 
 ## 5. InvenTree side
 

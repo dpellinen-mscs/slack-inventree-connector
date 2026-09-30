@@ -6,6 +6,7 @@ import asyncio
 import json
 import signal
 import sqlite3
+import ssl
 import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -484,3 +485,10 @@ def test_a_quick_post_passes_through_with_its_error() -> None:
     client.error = revoked()
     with pytest.raises(SlackApiError):
         poster.chat_postMessage(channel=CHANNEL, thread_ts="1790000000.000100", text="one")
+
+
+def test_slack_tls_verifies_against_known_authorities_on_any_python_build() -> None:
+    context = run_module.slack_tls()
+    assert context.verify_mode is ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    assert context.cert_store_stats()["x509_ca"] > 50  # certifi's, even where the system store is empty
