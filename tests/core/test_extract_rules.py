@@ -156,6 +156,11 @@ def test_clear_non_movements_are_not_declined(text: str) -> None:
         "took 2 ONTs to truck 1 *truck 2",
         "took 2 ONTs to truck 1 ~truck 3~",
         "took 2 ONTs to truck 1 - 1 was DOA",
+        # A clock time inside the place (review of #31, round 3).
+        "took 2 ONTs to truck 1 by 3pm",
+        "took 2 ONTs to smith job 10:30am",
+        "2 ONTs on truck 1 5pm",
+        "took 2 ONTs to truck 1 at 11 AM tmrw",
     ],
 )
 def test_what_it_cannot_read_is_declined_not_guessed(text: str) -> None:
