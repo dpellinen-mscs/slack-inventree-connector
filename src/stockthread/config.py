@@ -27,6 +27,8 @@ MovementType = Literal["take_to_vehicle", "take_to_site", "return", "transfer", 
 
 SlackChannelId = Annotated[str, Field(pattern=r"^[CG][A-Z0-9]{2,}$")]
 SlackUserId = Annotated[str, Field(pattern=r"^[UW][A-Z0-9]{2,}$")]
+LocationPath = Annotated[str, Field(min_length=1, max_length=250, pattern=r"^\S(.*\S)?$")]
+"""A stock location as InvenTree shows it: its names from the root, joined with "/"."""
 
 # Environment variable -> (field in Secrets, required prefix of the value).
 SECRET_ENV: dict[str, tuple[str, str]] = {
@@ -148,6 +150,8 @@ class Settings(_Section):
     undo: UndoSettings = UndoSettings()
     storage: StorageSettings = StorageSettings()
     llm: LLMSettings | None = None
+    vehicles: dict[SlackUserId, LocationPath] = Field(default_factory=dict)
+    """Slack user id -> the path of the stock location that is this person's vehicle ("my truck")."""
     secrets: Secrets
 
     @model_validator(mode="after")

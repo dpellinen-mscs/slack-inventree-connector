@@ -1,13 +1,15 @@
 """The catalog snapshot the matcher works on, read from InvenTree (design section 10).
 
 The snapshot is all or nothing: a record with a missing or mistyped field fails the whole load, because a
-partial catalog would make a part or a location look unknown. Aliases and vehicle assignments are not read
-from InvenTree; they come with alias learning (M4) and vehicle mapping.
+partial catalog would make a part or a location look unknown. Aliases are not read from InvenTree; they
+come with alias learning (M4). Vehicle assignments come from the `[vehicles]` settings and are resolved
+against every snapshot (`assign_vehicles`).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
@@ -19,6 +21,22 @@ async def load_catalog(reader: InvenTreeReader) -> Catalog:
     parts = tuple(_part(row) for row in await reader.parts())
     locations = tuple(_location(row) for row in await reader.locations())
     return Catalog(parts=parts, locations=locations)
+
+
+def assign_vehicles(catalog: Catalog, vehicles: Mapping[str, str]) -> tuple[Catalog, tuple[str, ...]]:
+    """The catalog with each person's vehicle (`[vehicles]`: Slack user id -> location path), and the users
+    whose vehicle was not found.
+
+    A path names a location only when it is that location's whole path, letter for letter, and the location
+    can hold stock. Anything else (renamed, moved, structural, the same path twice) leaves the person without
+    a vehicle, so "my truck" is unmatched and waits for a person: a near miss is never guessed.
+    """
+    by_path: dict[str, list[int]] = {}
+    for location in catalog.locations:
+        if not location.structural:
+            by_path.setdefault(location.path, []).append(location.pk)
+    found = {user: by_path[path][0] for user, path in vehicles.items() if len(by_path.get(path, ())) == 1}
+    return replace(catalog, vehicles=found), tuple(sorted(set(vehicles) - set(found)))
 
 
 def _part(row: Mapping[str, Any]) -> PartRecord:

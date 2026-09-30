@@ -45,6 +45,13 @@ max_age_hours = 168
 [storage]
 database = "stockthread.db"
 
+# Whose vehicle "my truck" is: Slack user id = the stock location's path in
+# InvenTree, exactly as shown there. Create one location per vehicle first.
+# A path that is not found is named in the log, and that person's "my truck"
+# then waits for a person instead of being guessed.
+[vehicles]
+# U0SAM0001 = "Vehicles/Truck 1"
+
 # Optional: a model that reads the posts the built-in rules cannot read.
 # Without this section no post ever leaves this machine, and those posts get
 # no reply. With it, the text of such a post is sent to the endpoint below

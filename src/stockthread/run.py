@@ -23,7 +23,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
-from stockthread.catalog import load_catalog
+from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import Settings
 from stockthread.core.matching import Catalog
 from stockthread.inventree import InvenTreeError, InvenTreeReader, check_version
@@ -153,7 +153,28 @@ def inventree_catalog(settings: Settings) -> Callable[[], Catalog]:
         async with InvenTreeReader(settings.inventree, settings.secrets.inventree_token) as reader:
             return await load_catalog(reader)
 
-    return lambda: read_within(read, limit)
+    return with_vehicles(lambda: read_within(read, limit), settings)
+
+
+def with_vehicles(load: Callable[[], Catalog], settings: Settings) -> Callable[[], Catalog]:
+    """Every snapshot gets the vehicles from the `[vehicles]` settings. A person whose vehicle is not a stock
+    location in the snapshot is named in the log, once until the list changes."""
+    reported: list[tuple[str, ...] | None] = [None]
+
+    def read() -> Catalog:
+        catalog, missing = assign_vehicles(load(), settings.vehicles)
+        if missing != reported[0]:
+            reported[0] = missing
+            if missing:
+                log.warning(
+                    'vehicles: no stock location at the path set for %s; their "my truck" will not be matched',
+                    ", ".join(missing),
+                )
+            elif settings.vehicles:
+                log.info("vehicles: every one of the %d paths is a stock location", len(settings.vehicles))
+        return catalog
+
+    return read
 
 
 def read_within(read: Callable[[], Coroutine[Any, Any, Catalog]], limit: float) -> Catalog:

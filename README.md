@@ -72,7 +72,9 @@ What to expect in this version:
   leaves this machine unless the endpoint is local, and strings that look like credentials are
   masked first. No model has been scored on the eval corpus yet: treat it as experimental.
 - A vehicle is a stock location: create one per vehicle in InvenTree ("Truck 1") and name it in the
-  post. "My truck" is not mapped to a location yet.
+  post. For "my truck" to work, say whose vehicle it is in the `[vehicles]` section of
+  `stockthread.toml`: `U0SAM0001 = "Vehicles/Truck 1"` (the person's Slack member id, and the
+  location's path exactly as InvenTree shows it). The log names every path it cannot find.
 - The database is one file, `stockthread.db`, next to the settings. It holds the raw Slack events.
 
 ## Project documents

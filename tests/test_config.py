@@ -374,3 +374,31 @@ def test_the_llm_section_of_the_example_file_is_valid_once_uncommented(tmp_path:
     assert settings.llm is not None
     assert settings.llm.timeout_seconds == LLMSettings.model_fields["timeout_seconds"].default
     assert "at localhost" in settings.llm_line()
+
+
+def test_vehicles_map_a_slack_user_to_a_location_path(tmp_path: Path) -> None:
+    assert parse_settings(base(), ENV).vehicles == {}
+    text = MINIMAL + '\n[vehicles]\nU0SAM0001 = "Vehicles/Truck 1"\nW0LUIS005 = "Vehicles/Van 3"\n'
+    settings = load_settings(write(tmp_path, text), ENV)
+    assert settings.vehicles == {"U0SAM0001": "Vehicles/Truck 1", "W0LUIS005": "Vehicles/Van 3"}
+    assert settings.effective()["vehicles"] == settings.vehicles
+
+
+@pytest.mark.parametrize(
+    ("vehicles", "where"),
+    [
+        ({"sam": "Vehicles/SPOT"}, "vehicles.sam"),  # a name is not a Slack user id
+        ({"U0SAM0001": ""}, "vehicles.U0SAM0001"),
+        ({"U0SAM0001": " Vehicles/SPOT"}, "vehicles.U0SAM0001"),
+        ({"U0SAM0001": "Vehicles/SPOT\n"}, "vehicles.U0SAM0001"),
+        ({"U0SAM0001": "Vehicles/SPOT\nERROR forged"}, "vehicles.U0SAM0001"),
+        ({"U0SAM0001": "SPOT" * 100}, "vehicles.U0SAM0001"),
+        ({"U0SAM0001": 11}, "vehicles.U0SAM0001"),  # a path, not InvenTree's number
+        ({"U0SAM0001": ["Vehicles/SPOT"]}, "vehicles.U0SAM0001"),
+    ],
+)
+def test_a_wrong_vehicle_is_refused_and_named_without_its_value(vehicles: dict[str, Any], where: str) -> None:
+    message = rejected({**base(), "vehicles": vehicles})
+    assert where in message
+    assert "SPOT" not in message
+    assert "forged" not in message
