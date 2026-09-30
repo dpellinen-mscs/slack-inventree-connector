@@ -15,6 +15,10 @@ post after its dry run (a thread root found here after its reply was answered al
 reply until plan revisions exist (M2), as a late thread reply does not. The mark is this host's time: a clock
 more than a few minutes ahead of Slack's can hide a reply from the next sweep.
 
+A channel's events are stored together, once its history and its threads are read (up to MAX_PAGES pages are
+held in memory meanwhile). The worker answers a post from the history as soon as the queue is empty, so an
+event stored while its siblings or replies were still being read would be answered without them.
+
 Nothing here needs the instance lock: a sweep only stores what it read from Slack, as the listener does. It
 runs on its own thread (`run.py`), so a slow Slack call holds back nothing else. Message text is never logged.
 """
@@ -34,8 +38,8 @@ from slack_sdk.errors import SlackApiError
 from stockthread.config import SlackSettings
 from stockthread.core.grouping import seconds
 from stockthread.core.model import PostKey
-from stockthread.slack.ingest import SLACK_TS, Edited, NewMessage, Revised, ingest_event
-from stockthread.slack.listener import Enqueue, dump
+from stockthread.slack.ingest import SLACK_TS, ingest_event
+from stockthread.slack.listener import dump
 from stockthread.store import Store
 
 log = logging.getLogger(__name__)
@@ -63,6 +67,19 @@ class HistoryClient(Protocol):
     def conversations_replies(
         self, *, channel: str, ts: str, oldest: str, latest: str, limit: int, cursor: str | None
     ) -> Any: ...
+
+
+class _Accepted:
+    """`ingest.SeenEvents` for one message of a sweep: if the ingest checks accept it, it joins the events
+    that are stored together once the channel is read. The store then leaves out the events it already has."""
+
+    def __init__(self, events: list[tuple[str, str]], body: str) -> None:
+        self._events = events
+        self._body = body
+
+    def first_time(self, event_id: str) -> bool:
+        self._events.append((event_id, self._body))
+        return True
 
 
 class _Stopped(Exception):
@@ -160,53 +177,73 @@ class CatchUp:
         # The listing reaches behind the channel's first sweep, for the thread roots there: a reply made
         # since is read, under a root that is not. Only what is newer than `floor` is ever stored.
         bounds = {"channel": channel, "oldest": _ts(window_start), "latest": upto}
-        stored = 0
+        # Nothing is stored before the whole channel is read: see `Store.store_sweep`.
+        found: dict[str, Mapping[str, Any]] = {}
         threads: list[str] = []
         for message in _pages(
             lambda cursor: self.client.conversations_history(**bounds, limit=PAGE_SIZE, cursor=cursor)
         ):
-            stored += self._offer(channel, message, floor, latest)
+            if floor < seconds(message["ts"]) <= latest:
+                found[message["ts"]] = message
             if _moved_since(message, swept_to - OVERLAP_SECONDS):
                 threads.append(message["ts"])
         within = {"channel": channel, "oldest": _ts(floor), "latest": upto}
-        for root in threads:
+        unread: list[str] = []
+        for index, root in enumerate(threads):
             if self.stopping():
-                raise _Stopped  # the channel is not marked: the threads left are read by the next sweep
-            replies = _pages(
-                lambda cursor, root=root: self.client.conversations_replies(  # type: ignore[misc]
-                    **within, ts=root, limit=PAGE_SIZE, cursor=cursor
-                )
-            )
-            for reply in replies:  # the root comes with them; it is offered twice and stored once
-                stored += self._offer(channel, reply, floor, latest)
-        self.store.mark_caught_up(workspace, channel, upto)
-        return stored
+                raise _Stopped  # nothing is stored and the channel is not marked: the next sweep reads it
+            try:
+                replies = {
+                    reply["ts"]: reply
+                    for reply in _pages(
+                        lambda cursor, root=root: self.client.conversations_replies(  # type: ignore[misc]
+                            **within, ts=root, limit=PAGE_SIZE, cursor=cursor
+                        )
+                    )
+                    if floor < seconds(reply["ts"]) <= latest
+                }
+            except (SlackApiError, _Incomplete) as error:
+                code = error.response.get("error", "an error") if isinstance(error, SlackApiError) else str(error)
+                log.warning("catch-up: channel %s: a thread could not be read (%s)", channel, code)
+                # Slack asks for a pause: the threads not read yet wait for the next sweep too.
+                unread += threads[index:] if code == "ratelimited" else [root]
+                if code == "ratelimited":
+                    break
+                continue
+            for ts, reply in replies.items():  # the root comes with them, a second time
+                found.setdefault(ts, reply)
+        # A thread that could not be read is left out whole, so its root is not answered without its replies.
+        # The rest of the channel is stored, and the mark stays where it is: the next sweep reads the thread.
+        left_out = set(unread)
+        accepted: list[tuple[str, str]] = []
+        for ts in sorted(found, key=seconds):  # oldest first, as Slack would have delivered them
+            if ts not in left_out and found[ts].get("thread_ts") not in left_out:
+                self._offer(channel, found[ts], accepted)
+        return self.store.store_sweep(workspace, channel, None if unread else upto, accepted)
 
-    def _offer(self, channel: str, message: Mapping[str, Any], floor: Decimal, latest: Decimal) -> int:
-        """Store the message as an event unless the connector has it, or the ingest checks drop it."""
-        if not floor < seconds(message["ts"]) <= latest:
-            return 0
+    def _offer(self, channel: str, message: Mapping[str, Any], accepted: list[tuple[str, str]]) -> None:
+        """Accept the message as an event unless the connector has it, or the ingest checks drop it."""
         key = PostKey(self.settings.workspace_id, channel, message["ts"])
         if self.store.message_placed(key):
-            return self._offer_change(key, message)
-        payload = history_event(self.settings, channel, message)
-        decision = ingest_event(payload, self.settings, Enqueue(self.store, dump(payload)))
-        return 1 if isinstance(decision, NewMessage) else 0
+            payload = self._change(key, message)
+            if payload is None:
+                return
+        else:
+            payload = history_event(self.settings, channel, message)
+        ingest_event(payload, self.settings, _Accepted(accepted, dump(payload)))
 
-    def _offer_change(self, key: PostKey, message: Mapping[str, Any]) -> int:
+    def _change(self, key: PostKey, message: Mapping[str, Any]) -> dict[str, Any] | None:
         """The message is known. If its post still waits for its dry run and the history shows another edit
-        than the stored event does (or a tombstone: a deleted thread root), store that edit as an event: the
+        than the stored event does (or a tombstone: a deleted thread root), that edit as an event: the
         worker then withholds the post, as it does for an edit Slack delivers."""
         post = self.store.waiting_post_of(key)
         if post is None:
-            return 0
+            return None
         now = _edit_stamp(message)
         tombstone = message.get("subtype") == "tombstone"
         if not tombstone and (now is None or now == self._stored_stamp(post, key.ts)):
-            return 0
-        payload = changed_event(self.settings, key.channel_id, message, "tombstone" if tombstone else str(now))
-        decision = ingest_event(payload, self.settings, Enqueue(self.store, dump(payload)))
-        return 1 if isinstance(decision, Edited | Revised) else 0
+            return None
+        return changed_event(self.settings, key.channel_id, message, "tombstone" if tombstone else str(now))
 
     def _stored_stamp(self, post: PostKey, ts: str) -> str | None:
         """The edit stamp of the message in the event it was stored from."""

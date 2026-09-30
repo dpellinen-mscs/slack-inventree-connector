@@ -483,12 +483,57 @@ def test_a_thread_that_cannot_be_read_keeps_the_channel_unswept(
     history.threads[root] = [top, said(reply, "and 1 ONT 100 from main stock to truck 1", thread_ts=root, user=LUIS)]
     history.errors[root] = error
     clock.at("1790001000.000000")
-    assert sweeper.sweep() == 0  # the root is stored; its count is lost with the failed sweep, which is fine
+    assert sweeper.sweep() == 0
+    assert events(path) == []  # not the root alone: it would be answered without its reply
     assert sweeper.store.catch_up_mark(WORKSPACE, CHANNEL) == (START, START)
     history.errors.clear()
     clock.at("1790050000.000000")  # long after: the thread is still read, because the mark did not move
-    assert sweeper.sweep() == 1
+    assert sweeper.sweep() == 2
     assert len(events(path)) == 2
+
+
+def test_a_thread_slack_refuses_is_left_out_whole_and_the_rest_of_the_channel_is_stored(
+    sweeper: CatchUp, history: FakeHistory, clock: Clock, path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    bad, good, alone = "1790000100.000100", "1790000200.000100", "1790000300.000100"
+    newest = "1790000400.000100"
+    shown = said("1790000150.000100", thread_ts=bad, subtype="thread_broadcast")  # a reply the channel lists too
+    history.channels[CHANNEL] = [
+        said(bad, thread_ts=bad, reply_count=2, latest_reply=newest),
+        shown,
+        said(good, thread_ts=good, reply_count=1, latest_reply=newest, user=LUIS),
+        said(alone, user="U0USER0003"),
+    ]
+    history.threads[good] = [said(newest, thread_ts=good, user=LUIS)]
+    history.errors[bad] = slack_error("thread_not_found")
+    clock.at("1790001000.000000")
+    with caplog.at_level(logging.WARNING):
+        sweeper.sweep()
+    assert "a thread could not be read (thread_not_found)" in caplog.text
+    assert [key.rsplit(":", 1)[1] for key, _, _ in events(path)] == [good, alone, newest]
+    assert sweeper.store.catch_up_mark(WORKSPACE, CHANNEL) == (START, START)  # so the thread is read again
+    history.errors.clear()
+    history.threads[bad] = [shown]
+    clock.at("1790002000.000000")
+    sweeper.sweep()
+    assert sorted(key.rsplit(":", 1)[1] for key, _, _ in events(path))[:2] == [bad, shown["ts"]]
+    assert sweeper.store.catch_up_mark(WORKSPACE, CHANNEL) == (START, "1790001880.000000")
+
+
+def test_a_rate_limit_ends_the_reading_of_threads_for_this_sweep(
+    sweeper: CatchUp, history: FakeHistory, clock: Clock, path: Path
+) -> None:
+    roots = ["1790000100.000100", "1790000200.000100"]
+    history.channels[CHANNEL] = [
+        *(said(r, thread_ts=r, reply_count=1, latest_reply="1790000300.000100") for r in roots),
+        said("1790000250.000100", user=LUIS),
+    ]
+    history.errors[roots[1]] = slack_error("ratelimited")  # newest first: this thread is read first
+    clock.at("1790001000.000000")
+    assert sweeper.sweep() == 1
+    assert [name for name, _ in history.calls] == ["history", "replies"]
+    assert [key for key, _, _ in events(path)] == [f"history:{CHANNEL}:1790000250.000100"]
+    assert sweeper.store.catch_up_mark(WORKSPACE, CHANNEL) == (START, START)
 
 
 @pytest.mark.parametrize(
@@ -662,6 +707,88 @@ def test_a_stop_ends_a_sweep_between_channels_and_between_threads(
     sweeper.sweep()
     assert [name for name, _ in history.calls] == ["history", "replies"]  # not the second thread, nor OTHER
     assert store.catch_up_mark(WORKSPACE, CHANNEL) == (START, START)
+    assert events(path) == []  # half a channel is not stored
+
+
+# A sweep and the worker at the same time
+
+
+def stepping(history: FakeHistory, worker: Worker) -> None:
+    """The worker runs on another thread: here it takes a step before every call a sweep makes to Slack."""
+    real_history, real_replies = history.conversations_history, history.conversations_replies
+
+    def listed(**kwargs: Any) -> dict[str, Any]:
+        worker.step()
+        return real_history(**kwargs)
+
+    def replies(**kwargs: Any) -> dict[str, Any]:
+        worker.step()
+        return real_replies(**kwargs)
+
+    history.conversations_history = listed  # type: ignore[method-assign]
+    history.conversations_replies = replies  # type: ignore[method-assign]
+
+
+def test_a_root_is_not_answered_while_its_replies_are_still_being_read(
+    sweeper: CatchUp, worker: Worker, store: Store, history: FakeHistory, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    root, reply = "1790000100.000100", "1790000200.000100"
+    top = said(root, "grabbed these for truck 1", thread_ts=root, reply_count=1, latest_reply=reply)
+    history.channels[CHANNEL] = [top]
+    history.threads[root] = [top, said(reply, "2 Disc 40 from main stock", thread_ts=root)]
+    clock.at("1790001000.000000")
+    stepping(history, worker)
+    assert sweeper.sweep() == 2
+    assert [name for name, _ in history.calls] == ["history", "replies"]
+    assert slack.posted == []
+    assert [status for _, status, _ in events(path)] == ["pending", "pending"]
+    worker.step()
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, root))
+    assert record is not None
+    assert (record.result or {}).get("messages") == [root, reply]
+
+
+def test_siblings_on_two_pages_of_the_history_make_one_post(
+    sweeper: CatchUp, worker: Worker, store: Store, history: FakeHistory, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    first, second = "1790000100.000100", "1790000103.000100"
+    history.channels[CHANNEL] = [said(first, "2 Disc 40 from main stock"), said(second, "to truck 1")]
+    history.page_size = 1
+    clock.at("1790001000.000000")
+    stepping(history, worker)
+    assert sweeper.sweep() == 2
+    assert [call[1]["cursor"] for call in history.calls] == [None, "1"]
+    assert slack.posted == []
+    worker.step()
+    assert store.post_messages(PostKey(WORKSPACE, CHANNEL, first)) == [first, second]
+    with pytest.raises(KeyError):
+        store.post_messages(PostKey(WORKSPACE, CHANNEL, second))  # not a post of its own
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, first))
+    assert record is not None
+    assert (record.result or {}).get("messages") == [first, second]
+
+
+def test_a_sweep_stores_its_events_oldest_first(
+    sweeper: CatchUp, history: FakeHistory, clock: Clock, path: Path
+) -> None:
+    stamps = [f"17900001{n:02d}.000100" for n in range(3)]
+    history.channels[CHANNEL] = [said(ts, user=f"U0USER{n:04d}") for n, ts in enumerate(stamps)]
+    clock.at("1790001000.000000")
+    assert sweeper.sweep() == 3
+    assert [key for key, _, _ in events(path)] == [f"history:{CHANNEL}:{ts}" for ts in stamps]
+
+
+def test_a_sweep_is_stored_whole_or_not_at_all(store: Store, path: Path) -> None:
+    store.mark_caught_up(WORKSPACE, CHANNEL, START)
+    assert store.enqueue_event("history:a", "event", "{}")
+    assert store.store_sweep(WORKSPACE, CHANNEL, "1790000500.000000", [("history:a", "{}"), ("history:b", "{}")]) == 1
+    assert store.catch_up_mark(WORKSPACE, CHANNEL) == (START, "1790000500.000000")
+    with pytest.raises(ValueError, match="not a Slack timestamp"):
+        store.store_sweep(WORKSPACE, CHANNEL, "soon", [("history:c", "{}")])
+    with pytest.raises(sqlite3.Error):
+        store.store_sweep(WORKSPACE, CHANNEL, "1790000900.000000", [("history:d", "{}"), (None, "{}")])  # type: ignore[list-item]
+    assert [key for key, _, _ in events(path)] == ["history:a", "history:b"]
+    assert store.catch_up_mark(WORKSPACE, CHANNEL) == (START, "1790000500.000000")
 
 
 def test_a_mark_is_two_slack_timestamps_in_order(store: Store, path: Path) -> None:

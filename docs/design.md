@@ -240,6 +240,15 @@ needs.
     newest 2 minutes alone, since those events may still be on their way.
     If both the event and the history copy are stored, the message is
     placed once, from whichever is handled first.
+  - **A channel at once.** What a sweep finds in a channel is stored in
+    one transaction, together with the mark, after the history and the
+    threads are read. The worker answers no post while events are
+    pending, so a post from the history is never answered before its
+    siblings and replies the sweep found are stored. A sweep that
+    fails or is stopped halfway stores nothing for that channel. A
+    thread Slack refuses to list is left out whole (root and replies);
+    the rest of the channel is stored and the mark stays, so the next
+    sweep reads that thread again.
   - **Edits and deletions.** A message found already edited is read as it
     is now. If a message is in a post that still waits for its dry run and
     the history shows another edit than the stored event (or a tombstone),
@@ -250,7 +259,10 @@ needs.
     history. Plan revisions (M2) re-read a post before a write.
   - **Known limits.** A message that joins a post after its dry run gets
     no second reply until plan revisions exist (M2). That includes a
-    thread root found by catch-up after its reply was answered alone. The
+    thread root found by catch-up after its reply was answered alone, and
+    a sibling or reply posted within seconds of the point a sweep ends at,
+    when its event is lost too: the next sweep finds it after the first
+    was answered. The
     first start after upgrading from a version without catch-up is a
     channel's first sweep, so that one downtime is not read. The mark is
     the host's time: a clock more than a few minutes ahead of Slack's can
