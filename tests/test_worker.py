@@ -1091,6 +1091,22 @@ def test_an_outage_costs_one_call_per_interval_however_many_posts_wait(
     clock.at("1790000032.000000")
     worker.step()
     assert len(llm.calls) == 2
+    # The backoff grows with the outage, not with one post's tries: the first post is withheld (edited), and
+    # the next one still waits 4 s, then 8 s.
+    store.note_revision(OWNER, PostKey(WORKSPACE, CHANNEL, "1790000000.000100"), None)
+    clock.at("1790000035.000000")
+    worker.step()
+    assert len(llm.calls) == 2
+    clock.at("1790000036.000000")
+    worker.step()
+    assert len(llm.calls) == 3
+    clock.at("1790000043.000000")
+    worker.step()
+    assert len(llm.calls) == 3
+    clock.at("1790000044.000000")
+    worker.step()
+    assert len(llm.calls) == 4
+    assert PostKey(WORKSPACE, CHANNEL, "1790000000.000100") not in worker._failures  # finished: nothing is kept
 
 
 def test_the_queue_is_drained_between_two_model_calls(store: Store, slack: FakeSlack, clock: Clock, path: Path) -> None:

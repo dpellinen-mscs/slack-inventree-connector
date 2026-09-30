@@ -157,6 +157,8 @@ class Worker:
     """What the model read, kept until the post is finished: a reply that is tried again is not read again."""
     _llm_quiet_until: Decimal = Decimal(0)
     """The provider gave no answer: it is not asked again, for any post, before this time."""
+    _llm_failed: int = 0
+    """Calls in a row without an answer, whatever the post: the backoff grows with it."""
     _llm_asked: bool = False
     """The provider was asked in this step."""
     _failures: dict[PostKey, _Failures] = field(default_factory=dict)
@@ -348,9 +350,11 @@ class Worker:
             self.beat(now=True)  # the call has the whole stale window (run.lock_stale_after)
             try:
                 read = self.llm.extract(messages)
+                self._llm_failed = 0
             except ProviderError as error:
                 failures.count += 1
-                self._llm_quiet_until = now + min(2 ** min(failures.count, 16), MAX_BACKOFF_SECONDS)
+                self._llm_failed += 1
+                self._llm_quiet_until = now + min(2 ** min(self._llm_failed, 16), MAX_BACKOFF_SECONDS)
                 # The sentence quotes nothing (llm.extract.ProviderError).
                 log.warning("post %s: no answer from the LLM provider (%s), attempt %d", key.ts, error, failures.count)
             self.beat()
@@ -465,6 +469,7 @@ class Worker:
         result: Mapping[str, Any] | None = None,
     ) -> None:
         self._llm_read.pop(key, None)
+        self._failures.pop(key, None)
         self.store.close_siblings(self.owner, key)
         self.store.finish_dry_run(self.owner, key, outcome, extractor=extractor, result=result)
 
