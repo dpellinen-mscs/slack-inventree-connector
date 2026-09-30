@@ -30,7 +30,10 @@ CREATE TABLE dry_runs (
     created_at TEXT NOT NULL
 ) STRICT;
 
-CREATE TRIGGER dry_runs_keep_record BEFORE UPDATE OF post_id, outcome, extractor, created_at ON dry_runs
+-- Not "UPDATE OF post_id": an update of the rowid alias would not fire it.
+CREATE TRIGGER dry_runs_keep_record BEFORE UPDATE ON dry_runs
+WHEN NEW.post_id IS NOT OLD.post_id OR NEW.outcome IS NOT OLD.outcome OR NEW.extractor IS NOT OLD.extractor
+    OR NEW.created_at IS NOT OLD.created_at
 BEGIN SELECT RAISE(ABORT, 'a dry-run record never changes'); END;
 CREATE TRIGGER dry_runs_result_only_expires BEFORE UPDATE OF result ON dry_runs
 WHEN NEW.result IS NOT NULL

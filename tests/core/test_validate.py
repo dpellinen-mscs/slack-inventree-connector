@@ -363,6 +363,27 @@ def unit_take(quantity: str, unit: str | None, item: str = "cable") -> Candidate
         ("took half a dozen Disc 40 from main stock to truck 1", "12"),
         ("took half dozen Disc 40 from main stock to truck 1", "0.5"),
         ("took half a pair of Disc 40 from main stock to truck 1", "0.5"),
+        ("took 2 out of 5 Disc 40 from main stock to truck 1", "5"),
+        ("took 2 of my 5 Disc 40 from main stock to truck 1", "5"),
+        ("took 2 of those 5 Disc 40 from main stock to truck 1", "5"),
+        ("took 2 of the last 5 Disc 40 from main stock to truck 1", "5"),
+        ("took 2 of the remaining 5 Disc 40 from main stock to truck 1", "5"),
+        ("took 2 from the 5 Disc 40 from main stock to truck 1", "5"),
+        ("took half of the 10 Disc 40 from main stock to truck 1", "10"),
+        ("took half of the 10 Disc 40 from main stock to truck 1", "0.5"),
+        ("took half of a dozen Disc 40 from main stock to truck 1", "12"),
+        ("took half of a dozen Disc 40 from main stock to truck 1", "0.5"),
+        ("took one and a half Disc 40 from main stock to truck 1", "0.5"),
+        ("took 2 and a half Disc 40 from main stock to truck 1", "0.5"),
+        ("took a dozen and a half Disc 40 from main stock to truck 1", "0.5"),
+        ("took 2 and a half dozen Disc 40 from main stock to truck 1", "6"),
+        ("took both of the Disc 40 from main stock to truck 1", "1"),
+        ("took half the Disc 40 from main stock to truck 1", "1"),
+        ("took half the Disc 40 from main stock to truck 1", "0.5"),
+        ("took all the Disc 40 from main stock to truck 1", "1"),
+        ("took .5 Disc 40 from main stock to truck 1", "5"),
+        ("took 2nd of the 5 Disc 40 from main stock to truck 1", "5"),
+        ("took a 12-ft Disc 40 from main stock to truck 1", "12"),
     ],
 )
 def test_a_part_of_a_quantity_expression_is_not_the_quantity(text: str, quantity: str) -> None:
@@ -375,6 +396,10 @@ def test_a_part_of_a_quantity_expression_is_not_the_quantity(text: str, quantity
         ("took 2 of the 5 Disc 40 from main stock to truck 1", "2"),
         ("took two of the Disc 40 from main stock to truck 1", "2"),
         ("took half a dozen Disc 40 from main stock to truck 1", "6"),
+        ("took 2 out of 5 Disc 40 from main stock to truck 1", "2"),
+        ("took 2 of my 5 Disc 40 from main stock to truck 1", "2"),
+        ("took 2 from the 5 Disc 40 from main stock to truck 1", "2"),
+        ("took a 12-ft Disc 40 from main stock to truck 1", "1"),
     ],
 )
 def test_a_whole_quantity_expression_states_its_quantity(text: str, quantity: str) -> None:
@@ -392,6 +417,8 @@ def test_a_whole_quantity_expression_states_its_quantity(text: str, quantity: st
         ("took 2 boxes of cable from main stock to truck 1", "case"),
         ("took 2 boxes of cable from main stock to truck 1", None),
         ("took 2 m wire and 2 ft cable from main stock to truck 1", "m"),  # the other line's unit
+        ("took 2 ft of 2 m cable from main stock to truck 1", "ft"),  # two units state neither
+        ("took 2 12-ft cable from main stock to truck 1", "ft"),  # a size, not the unit of the quantity
     ],
 )
 def test_a_unit_that_is_not_the_one_in_the_text_needs_review(text: str, unit: str | None) -> None:

@@ -57,6 +57,10 @@ _FILLER = frozenset(
 """Words that may sit between a quantity and its item: "5 boxes of", "300 ft of", "2 of the 5"."""
 _EACH = frozenset({"each", "ea", "pc", "piece", "unit", "x"})
 """Unit words that mean a count, in the singular: the same as no unit."""
+_WHOLE = frozenset({"both", "all"})
+"""Words that count without a number. They state nothing: "all the ONTs" is not one ONT."""
+_HALVES = (["half"], ["half", "a"], ["half", "an"], ["half", "dozen"], ["half", "a", "dozen"], ["a", "half", "dozen"])
+"""The only shapes in which "half" is read: a half (0.5), or half a dozen (6)."""
 _ONE = frozenset({"a", "an", "the", "one", "single", "this", "that"})
 _WORD_QUANTITIES = {"dozen": Decimal(12), "pair": Decimal(2), "couple": Decimal(2), "half": Decimal("0.5")}
 _QUANTITY_WINDOW = 4
@@ -189,26 +193,41 @@ def _has_words(phrase: str, text: str) -> bool:
 def _quantity_words(before: str) -> list[str]:
     """The words right before an item that can belong to its quantity."""
     before = _SEPARATOR.split(before)[-1]
-    words = [word.strip("(),.!") for word in before.split()[-_QUANTITY_WINDOW:]]
+    words = [_bare(word) for word in before.split()[-_QUANTITY_WINDOW:]]
     while words and not all(_quantity_word(word) for word in words):
         words.pop(0)  # "took 2 ONTs 3": only the words right before the item, not the last item's quantity
     return words
 
 
+def _bare(word: str) -> str:
+    """A word without the punctuation around it. A leading dot stays: ".5" is not 5."""
+    return word.lstrip("(").rstrip("(),.!")
+
+
 def _stated(before: str) -> set[Decimal]:
-    """The quantities the words right before an item can state."""
+    """The quantities the words right before an item can state. An expression is read as a whole, and one
+    this does not know how to read ("one and a half", "half of the 10", "both") states nothing."""
+    if re.search(r"(?<!\w)and (a )?half(?!\w)", " ".join(before.split()[-4:])):
+        return set()  # "2 and a half dozen": the separator would leave "a half dozen"
+    tokens = [_bare(word) for word in _SEPARATOR.split(before)[-1].split()]
+    for index in range(len(tokens) - 2, max(len(tokens) - 7, 0), -1):
+        part = index - 2 if tokens[index - 1] == "out" and index >= 2 else index - 1  # "2 out of 5"
+        if tokens[index] in ("of", "from") and _counts(tokens[part]) and any(map(_is_number, tokens[index + 1 :])):
+            # "2 of the 5", "2 of my 5", "2 from the 5": what moved is the part, and the total is not stated.
+            prefix = tokens[: part + 1]
+            return set() if "half" in _quantity_words(" ".join(prefix)) else _stated(" ".join(prefix))
     words = _quantity_words(before)
+    if "half" in words and words not in _HALVES:
+        return set()
     found = set()
     for index, word in enumerate(words):
         if _AMBIGUOUS_NUMBER.match(word):
             continue
         if _compound(words, index):
             continue  # "2 dozen", "twenty five": neither word alone states the quantity
-        if _out_of(words, index):
-            continue  # "2 of the 5": the 5 is what there was, not what moved
-        if word == "half" and any(other in _SCALES or other == "pair" for other in words[index + 1 : index + 3]):
+        if word == "half" and "dozen" in words:
             continue  # "half a dozen" is 6, never 0.5
-        if number := _NUMBER_TOKEN.match(word):
+        if (number := _NUMBER_TOKEN.match(word)) and not (number.group(2) or "").startswith("-"):  # "12-ft": a size
             with contextlib.suppress(InvalidOperation):
                 found.add(Decimal(number.group(1).replace(",", "")))
         if word in NUMBER_WORDS:
@@ -221,25 +240,25 @@ def _stated(before: str) -> set[Decimal]:
     return found
 
 
-def _out_of(words: list[str], index: int) -> bool:
-    """A number that is the total in "2 of the 5", "two of 5": the quantity is the number before "of"."""
-    if not _is_number(words[index]):
-        return False
-    before = index - 1
-    while before >= 0 and words[before] in _ONE:
-        before -= 1
-    return before >= 1 and words[before] == "of" and _is_number(words[before - 1])
+def _counts(word: str) -> bool:
+    """A word that says how many, in any form: "2", "2nd", "two", "half", "both", "couple"."""
+    return (
+        any(character.isdigit() for character in word)
+        or word in NUMBER_WORDS
+        or word in _WORD_QUANTITIES
+        or word in _SCALES
+        or word in _WHOLE
+    )
 
 
 def _stated_units(before: str) -> set[str]:
     """The units the words right before an item state, in the form a line item carries: "ft", "m", "box"."""
     found = set()
     for word in _quantity_words(before):
-        unit = re.sub(r"^\d+-", "", word)  # "12-ft"
-        if unit in LENGTH_UNITS:
-            found.add(LENGTH_UNITS[unit])
-        elif CONTAINER_WORDS.fullmatch(unit):
-            found.add(_unit(unit) or unit)
+        if word in LENGTH_UNITS:
+            found.add(LENGTH_UNITS[word])
+        elif CONTAINER_WORDS.fullmatch(word):
+            found.add(_unit(word) or word)
     return found
 
 
@@ -248,7 +267,7 @@ def _same_unit(unit: str | None, stated: set[str]) -> bool:
     unit = _unit(unit)
     if unit is None or unit in _EACH:
         return not stated
-    return LENGTH_UNITS.get(unit, unit) in stated
+    return stated == {LENGTH_UNITS.get(unit, unit)}  # "5 ft of 2 m": two units state neither
 
 
 def _is_number(word: str) -> bool:
@@ -261,6 +280,7 @@ def _quantity_word(word: str) -> bool:
         or word in _SCALES
         or word in _WORD_QUANTITIES
         or word in _ONE
+        or word in _WHOLE
         or word in _FILLER
         or bool(CONTAINER_WORDS.fullmatch(word))
         or bool(_AMBIGUOUS_NUMBER.match(word))
@@ -297,8 +317,8 @@ def _one_container(words: list[str]) -> bool:
         elif not (last == "of" or re.fullmatch(r"\d+-\w+", last) or (last.isdigit() and words[-2:-1] == ["of"])):
             break
         words.pop()
-    if any(_is_number(word) for word in words[:-1]):
-        return False
+    if any(_counts(word) for word in words[:-1]):
+        return False  # also "both of the", "half the", "all the": not one
     return (bool(words) and words[-1] in _ONE) or (container and not words)
 
 

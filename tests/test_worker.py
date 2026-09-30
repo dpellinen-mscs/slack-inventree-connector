@@ -622,6 +622,7 @@ def test_a_reply_keeps_what_was_decided_and_why(
     assert widget["part"] == {"status": "unmatched", "rule": None, "record": None, "candidates": []}
     assert ["part_unmatched", "line 2"] in movement["gate"]
     assert record.result["late"] is False
+    assert (record.result["poster"], record.result["messages"], record.result["max_quantity"]) == (SAM, [ROOT], 100)
 
 
 def test_every_outcome_keeps_a_record_and_a_record_never_changes(
@@ -641,6 +642,7 @@ def test_every_outcome_keeps_a_record_and_a_record_never_changes(
         for change in (
             "UPDATE dry_runs SET result = '{}'",
             "UPDATE dry_runs SET outcome = 'replied'",
+            "UPDATE dry_runs SET rowid = 2",  # the rowid is the post
             "DELETE FROM dry_runs",
             "INSERT OR REPLACE INTO dry_runs (post_id, outcome, created_at) VALUES (1, 'replied', 'now')",
         ):
@@ -741,3 +743,63 @@ def test_an_instance_that_lost_the_lock_while_it_was_blocked_does_not_post(
         worker.step()
     assert slack.posted == []  # the new holder posts the one reply
     assert replies(path) == [(ROOT, None, False)]
+
+
+def tombstone(ts: str, at: str) -> dict[str, Any]:
+    """What Slack sends when a thread root that has replies is deleted."""
+    event = edit_of(ts, at, TAKE, "This message was deleted.")
+    event["event"]["message"]["subtype"] = "tombstone"
+    return event
+
+
+def unstamped(ts: str, at: str) -> dict[str, Any]:
+    event = edit_of(ts, at, TAKE, "took 5 Disc 40 from main stock to truck 1")
+    del event["event"]["message"]["edited"]
+    return event
+
+
+def without_user(ts: str, at: str) -> dict[str, Any]:
+    event = edit_of(ts, at, TAKE, "took 5 Disc 40 from main stock to truck 1")
+    del event["event"]["message"]["user"]
+    return event
+
+
+@pytest.mark.parametrize("revision", [tombstone, unstamped, without_user])
+@pytest.mark.parametrize("edit_first", [False, True])
+def test_an_edit_the_ingest_checks_drop_still_withholds_the_post(
+    revision: Any, edit_first: bool, worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    events = [message(ROOT, TAKE), revision(ROOT, "1790000002.000100")]
+    for event in reversed(events) if edit_first else events:
+        enqueue(store, event)
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert slack.posted == []
+    assert audit(path) == ["dry_run_withheld"]
+
+
+def test_a_link_preview_or_a_new_thread_reply_is_not_an_edit(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    preview = edit_of(ROOT, "1790000002.000100", TAKE, TAKE)
+    del preview["event"]["message"]["edited"]
+    preview["event"]["message"]["attachments"] = [{"title": "synthetic preview"}]
+    enqueue(store, preview)
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert len(slack.posted) == 1
+
+
+def test_a_reply_under_a_root_that_was_deleted_and_never_arrived_gets_no_dry_run(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, deletion_of(ROOT, "1790000002.000100"))
+    enqueue(store, message("1790000003.000100", "took 1 ONT 100 from main stock to truck 1", thread_ts=ROOT))
+    worker.step()
+    clock.at(f"{1790000000 + ROOT_WAIT_SECONDS + 60}.000000")
+    worker.step()
+    assert slack.posted == []
+    assert audit(path) == ["dry_run_withheld"]

@@ -33,7 +33,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
 
-from stockthread.config import Settings
+from stockthread.config import Settings, SlackSettings
 from stockthread.core import extract_rules
 from stockthread.core.grouping import seconds
 from stockthread.core.matching import Catalog, match_location, match_part
@@ -162,23 +162,22 @@ class Worker:
             payload = json.loads(body)
         except ValueError:
             return EventStatus.FAILED, "body_not_json"
+        # Noted first, and by message key: the message itself may arrive after its edit. Read leniently, from
+        # the raw event: the ingest checks drop some edits (a deleted root becomes a tombstone).
+        changed = _revised(payload, self.settings.slack)
+        if changed is not None:
+            self.store.note_revision(self.owner, changed, event_id)
+            post = self.store.waiting_post_of(changed)
+            if post is not None:
+                # Changed before its dry run: reading the original text would be wrong. Revisions are M2.
+                self._finish(post, DryRunOutcome.WITHHELD, result={"withheld": "changed"})
+                return EventStatus.DONE, "withheld_changed_post"
         decision = ingest_event(payload, self.settings.slack, _AlreadyStored())
         if isinstance(decision, Drop):
             return EventStatus.DROPPED, decision.reason.value
         workspace = self.settings.slack.workspace_id
         if isinstance(decision, Edited | Deleted):
-            if isinstance(decision, Edited):
-                changed = PostKey(workspace, decision.message.channel, decision.message.ts)
-            else:
-                changed = PostKey(workspace, decision.channel, decision.ts)
-            # Noted first, and by message key: the message itself may arrive after its edit.
-            self.store.note_revision(self.owner, changed, event_id)
-            post = self.store.waiting_post_of(changed)
-            if post is None:
-                return EventStatus.DROPPED, "revisions_not_handled_yet"
-            # Changed before its dry run: reading the original text would be wrong. Revisions are M2.
-            self._finish(post, DryRunOutcome.WITHHELD, result={"withheld": "changed"})
-            return EventStatus.DONE, "withheld_changed_post"
+            return EventStatus.DROPPED, "revisions_not_handled_yet"
         if not isinstance(decision, NewMessage):
             return EventStatus.DROPPED, "not_a_message"
         message = decision.message
@@ -235,16 +234,27 @@ class Worker:
         except Exception as error:
             self._broken(key, error)
             return
+
+        def record(views: Sequence[MovementView], late: bool) -> dict[str, Any]:
+            return _record(
+                extraction,
+                views,
+                late=late,
+                poster=poster,
+                messages=messages,
+                max_quantity=self.settings.policy.max_quantity,
+            )
+
         if extraction.declined or not extraction.movements:
             log.info("post %s: no reply (%s)", key.ts, "declined" if extraction.declined else "not a movement")
-            self._finish(key, DryRunOutcome.SILENT, extraction.extractor, _record(extraction, (), late=False))
+            self._finish(key, DryRunOutcome.SILENT, extraction.extractor, record((), False))
             return
         catalog = self.catalog()
         self.beat()  # a catalog read can take a while
         late = age > LATE_AFTER_SECONDS
         try:
             views = self._views(extraction, messages, poster, catalog, late)
-            record = _record(extraction, views, late=late)
+            decided = record(views, late)
             body = dry_run_reply(
                 views,
                 {part.pk: part.name for part in catalog.parts},
@@ -269,7 +279,7 @@ class Worker:
                 unfurl_media=False,
             )
         except Exception as error:  # any Slack or network error: retry with backoff, then give up
-            self._post_failed(key, now, error, extraction.extractor, record)
+            self._post_failed(key, now, error, extraction.extractor, decided)
             return
         self._failures.pop(key, None)
         reply_ts = response.get("ts")
@@ -280,7 +290,7 @@ class Worker:
             DryRunOutcome.REPLIED,
             reply_ts if valid else None,
             extractor=extraction.extractor,
-            result=record,
+            result=decided,
         )
 
     def _views(
@@ -367,6 +377,43 @@ class Worker:
         return Decimal(str(now.timestamp()))
 
 
+def _revised(payload: object, slack: SlackSettings) -> PostKey | None:
+    """The message that an event edits or deletes, or None: also for events the ingest checks drop.
+
+    An edit counts when the text or the files differ from before, when the message became a tombstone (a
+    deleted thread root), or when the event does not say what was there before. A link preview or a new
+    thread reply changes neither.
+    """
+    if not isinstance(payload, dict) or payload.get("team_id") != slack.workspace_id:
+        return None
+    event = payload.get("event")
+    if not isinstance(event, dict):
+        return None
+    channel, subtype = event.get("channel"), event.get("subtype")
+    if event.get("type") != "message" or channel not in slack.channels:
+        return None
+    previous = event.get("previous_message")
+    if subtype == "message_deleted":
+        ts = event.get("deleted_ts") or (previous.get("ts") if isinstance(previous, dict) else None)
+    elif subtype == "message_changed":
+        inner = event.get("message")
+        if not isinstance(inner, dict):
+            return None
+        ts = inner.get("ts")
+        if isinstance(previous, dict) and inner.get("subtype") != "tombstone" and _shown(inner) == _shown(previous):
+            return None
+    else:
+        return None
+    if not isinstance(ts, str) or not _SLACK_TS.fullmatch(ts):
+        return None
+    return PostKey(slack.workspace_id, channel, ts)
+
+
+def _shown(message: dict[str, Any]) -> tuple[object, list[object]]:
+    files = message.get("files")
+    return message.get("text"), [file.get("id") for file in files if isinstance(file, dict)] if files else []
+
+
 def _part(text: str | None, catalog: Catalog, poster: str) -> Match:
     return match_part(text, catalog, poster) if text else Match(MatchStatus.UNMATCHED)
 
@@ -390,13 +437,24 @@ def _number(value: Decimal | None) -> str | None:
     return None if value is None else format(value, "f")
 
 
-def _record(extraction: Extraction, views: Sequence[MovementView], *, late: bool) -> dict[str, Any]:
+def _record(
+    extraction: Extraction,
+    views: Sequence[MovementView],
+    *,
+    late: bool,
+    poster: str,
+    messages: Sequence[MessageInput],
+    max_quantity: int,
+) -> dict[str, Any]:
     """What the dry run decided, for the audit trail: candidates as extracted, matches (InvenTree ids and the
     rule), and every reason that kept a movement from "could apply". It quotes the post: stored, never logged."""
     return {
         "declined": extraction.declined,
         "post_flags": sorted(flag.value for flag in extraction.post_flags),
         "late": late,
+        "poster": poster,  # personal aliases match by poster
+        "messages": [message.ts for message in messages],
+        "max_quantity": max_quantity,
         "movements": [
             {
                 "type": view.movement.movement_type.value,
