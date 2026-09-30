@@ -812,9 +812,11 @@ send to InvenTree.
     declines (ADR 0011). Its candidates pass the same validator and
     matcher. A provider that gives no answer makes the post wait; it is
     asked again with backoff, and after 15 minutes the post is finished
-    without a reply and its record says `llm_unavailable`. A call has a
-    whole-call deadline (`llm.timeout_seconds`), and the instance lock
-    outlives it.
+    without a reply and its record says `llm_unavailable`. While several
+    posts wait, each call goes to the one asked least recently. A call has
+    a whole-call deadline (`llm.timeout_seconds`), and the instance lock
+    outlives it. After a call the queue is drained before the reply is
+    posted, so an edit that arrived during the call withholds the post.
   - The model sees the message texts and how many files each has. It sees
     no user ids (a mention is sent as "@someone"), no timestamps, no
     catalog and no aliases.
@@ -831,10 +833,14 @@ send to InvenTree.
     is repaired or half-read.
   - The model can add a post flag and never remove one: the flags found by
     rule in the text are raised whatever the model answers.
-  - A provider that gives no finished answer (unreachable, an error status,
-    a refusal, an answer cut off by a limit) is an outage, not a reading:
-    `ProviderError`. Errors never quote the request, the response or the
-    key. An API key is sent only over https, or to a server on the same
+  - A provider that gives no answer (unreachable, an error status, a
+    body that is no chat completion) is an outage, not a reading:
+    `ProviderError`. An answer that is no reading of the post (a refusal,
+    an answer cut off by a limit or filtered, or one that is too long) is
+    `NoReading`: the provider is well and would answer the same again, so
+    that post alone is finished without a reply, its record says
+    `llm_no_reading`, and no other post waits. Errors never quote the
+    request, the response or the key. An API key is sent only over https, or to a server on the same
     machine. Proxy settings from the environment are not used, and
     redirects are not followed.
   - No model has been scored yet: that needs recorded provider outputs.

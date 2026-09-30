@@ -189,6 +189,11 @@ class ProviderError(Exception):
     """The provider could not be reached or did not answer as a provider should. An outage, not a reading."""
 
 
+class NoReading(ProviderError):
+    """The provider answered, but not with a reading of this post: the model refused it, or its answer was cut
+    off or too long. About this one post, and the same on every try: no outage, and nothing to wait for."""
+
+
 class Provider(Protocol):
     """One call to a model. Adapters raise ProviderError for every failure to get an answer."""
 
