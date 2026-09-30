@@ -363,6 +363,21 @@ def test_an_edit_of_a_post_without_a_standing_reply_is_recorded_and_says_nothing
     assert revisions(path) == [(2, "withheld", False)]  # once
 
 
+def test_an_edit_of_a_thread_reply_after_its_revision_starts_the_next_one(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    reply = "1790000040.000100"
+    enqueue(store, message(reply, "on my way", thread_ts=ROOT))
+    due(worker, clock, 1790000070)
+    assert revisions(path) == [(2, "retracted", True)]
+    enqueue(store, edit_of(reply, "1790000080.000100", "on my way", "took 5 Disc 40 from main stock to truck 1"))
+    worker.step()
+    assert revisions(path) == [(2, "retracted", True), (3, "withheld", False)]  # nothing stands to take back
+    assert len(slack.posted) == 2
+
+
 def test_an_edit_of_an_expired_post_starts_no_revision(
     worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:

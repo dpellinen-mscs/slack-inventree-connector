@@ -3,7 +3,9 @@
 -- Every dry run keeps `changes_through`: the newest `revised_messages.id` that concerned its post when it
 -- was decided, 0 when none did. A post with a change noted past that waits for a revision, as it does for a
 -- message past `read_through`. Existing records take every change noted so far, so an upgrade never answers
--- an old edit. A revision reads no less than the one before, and reads further or knows of a newer change.
+-- an old edit. A message is noted once, so a message edited before the upgrade starts no revision when it
+-- is edited again after it. A revision reads no less than the one before, and reads further or knows of a
+-- newer change. That a change concerns the post is checked by the store, not here.
 
 ALTER TABLE dry_runs ADD COLUMN changes_through INTEGER;
 ALTER TABLE dry_run_revisions ADD COLUMN changes_through INTEGER;

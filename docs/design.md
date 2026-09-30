@@ -339,7 +339,9 @@ needs.
     which takes the reply back. Catch-up notes an edit it finds in the
     history for any post, not only one waiting for its first dry run.
     Posts answered before migration 0008 take every change noted until
-    then, so an upgrade never answers an old edit.
+    then, so an upgrade never answers an old edit. Known limit: a message
+    is noted once, so one edited before the upgrade starts no revision
+    when it is edited again after it.
     Known limits: posts waiting for their first dry run are answered
     before revisions, so a backlog delays revisions. A first dry run that
     ended `gave_up` may still have reached Slack (the call can fail after

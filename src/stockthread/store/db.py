@@ -435,9 +435,11 @@ class Store:
             ") SELECT p.workspace_id, p.channel_id, p.ts, m.ts, last.next FROM last"
             " JOIN posts p ON p.id = last.post_id JOIN post_messages m ON m.post_id = p.id"
             " WHERE EXISTS (SELECT 1 FROM post_messages n WHERE n.post_id = p.id AND n.id > last.through)"
-            " OR EXISTS (SELECT 1 FROM revised_messages r WHERE r.id > last.changes"
-            " AND r.workspace_id = p.workspace_id AND r.channel_id = p.channel_id AND (r.ts = p.ts"
-            " OR EXISTS (SELECT 1 FROM post_messages n WHERE n.post_id = p.id AND n.ts = r.ts)))"
+            # A change noted since: looked up by message key (its unique index), never by scanning every change.
+            " OR EXISTS (SELECT 1 FROM revised_messages r WHERE r.workspace_id = p.workspace_id"
+            " AND r.channel_id = p.channel_id AND r.ts = p.ts AND r.id > last.changes)"
+            " OR EXISTS (SELECT 1 FROM post_messages n JOIN revised_messages r ON r.workspace_id = n.workspace_id"
+            " AND r.channel_id = n.channel_id AND r.ts = n.ts WHERE n.post_id = p.id AND r.id > last.changes)"
             " ORDER BY p.id",
             (since,),
         ).fetchall()
