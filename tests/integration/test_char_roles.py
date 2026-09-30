@@ -58,7 +58,14 @@ def restricted(api: RawApi) -> Iterator[Any]:
         response = api.http.patch(f"/api/user/{user}/", json={"group_ids": [group]})
         assert response.status_code == 200, response.text[:500]
         token = api.create("/api/user/tokens/", {"user": user, "name": "connector"})["token"]
-        client = httpx.Client(base_url=api.http.base_url, headers={"Authorization": f"Token {token}"}, timeout=30)
+        # No keep-alive: the server may answer 403 before reading a POST body and then drop the connection, and a
+        # reused connection fails the next request with "Server disconnected" (seen in CI on 1.4.3 and 1.5.6).
+        client = httpx.Client(
+            base_url=api.http.base_url,
+            headers={"Authorization": f"Token {token}"},
+            timeout=30,
+            limits=httpx.Limits(max_keepalive_connections=0),
+        )
         clients.append(client)
         return client
 
