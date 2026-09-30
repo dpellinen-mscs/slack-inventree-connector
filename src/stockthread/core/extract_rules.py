@@ -102,7 +102,8 @@ _NOT_STOCK = re.compile(
 """Words that name time, people or events, or a report of what is left: "3 hours at the Smith job",
 "2 ONTs left on truck 1" are not movements."""
 _NOT_A_PLACE = re.compile(
-    rf"\b({LATER_WORDS}|today|yesterday|morning|afternoon|lol|jk|haha|kidding|maybe|\d{1, 2}(:\d{2})?\s*(am|pm))\b"
+    rf"\b({LATER_WORDS}|today|yesterday|morning|afternoon|lol|jk|haha|kidding|maybe"
+    r"|\d{1,2}(:\d{2})?\s*(am|pm))\b"
     r"|^(find|get|see|check|fix|help|do|make|go)\b",
     re.IGNORECASE,
 )
