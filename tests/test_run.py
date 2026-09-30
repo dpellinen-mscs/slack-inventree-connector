@@ -133,7 +133,7 @@ def test_a_queued_post_gets_its_dry_run_then_the_lock_is_released(tmp_path: Path
     assert connection.calls == ["connect", "close"]
     # Nothing may sleep for Slack's Retry-After inside a call, and a call is short: the lock outlives both.
     assert not any(isinstance(handler, RateLimitErrorRetryHandler) for handler in client.retry_handlers)
-    assert 2 * client.timeout < run_module.LOCK_STALE_AFTER.total_seconds()
+    assert run_module.LOCK_STALE_AFTER.total_seconds() > run_module.POST_DEADLINE_SECONDS
     assert lock_is_free(database)
 
 
@@ -414,3 +414,73 @@ def test_a_catalog_read_is_cut_off_before_the_lock_could_go_stale() -> None:
     with pytest.raises(InvenTreeError, match="longer than 0 s"):
         run_module.read_within(slow, 0.05)
     assert run_module.read_within(quick, 5) == CATALOG
+
+
+class SlowClient:
+    """A Slack client whose call hangs until it is released, like a connection to a black-holed address."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.calls: list[dict[str, Any]] = []
+        self.error: Exception | None = None
+
+    def chat_postMessage(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        if not self.release.wait(10):
+            raise AssertionError("never released")
+        if self.error is not None:
+            raise self.error
+        return {"ok": True, "ts": "1790000099.000100"}
+
+
+def wait_until_idle() -> None:
+    for thread in threading.enumerate():
+        if thread.name == "slack-post":
+            thread.join(5)
+
+
+def test_a_hung_post_gives_control_back_and_is_never_sent_twice() -> None:
+    client = SlowClient()
+    poster = run_module.DeadlinePoster(client, deadline=0.05)
+    first = {"channel": CHANNEL, "thread_ts": "1790000000.000100", "text": "one"}
+    other = {"channel": CHANNEL, "thread_ts": "1790000000.000200", "text": "two"}
+    with pytest.raises(run_module.PostStillRunning):
+        poster.chat_postMessage(**first)  # back after the deadline: the worker keeps its heartbeat going
+    with pytest.raises(run_module.PostStillRunning):
+        poster.chat_postMessage(**first)  # still running: not sent again
+    with pytest.raises(run_module.PostStillRunning):
+        poster.chat_postMessage(**other)  # and nothing else is sent meanwhile
+    assert len(client.calls) == 1
+
+    client.release.set()  # the network is back, and the first call goes through
+    wait_until_idle()
+    assert poster.chat_postMessage(**first)["ts"] == "1790000099.000100"  # its result, not a second post
+    assert len(client.calls) == 1
+    assert poster.chat_postMessage(**other)["ok"]
+    assert [call["text"] for call in client.calls] == ["one", "two"]
+
+
+def test_a_hung_post_that_ends_in_an_error_reports_it_once_and_is_then_tried_again() -> None:
+    client = SlowClient()
+    client.error = ConnectionError("synthetic")
+    poster = run_module.DeadlinePoster(client, deadline=0.05)
+    reply = {"channel": CHANNEL, "thread_ts": "1790000000.000100", "text": "one"}
+    with pytest.raises(run_module.PostStillRunning):
+        poster.chat_postMessage(**reply)
+    client.release.set()
+    wait_until_idle()
+    with pytest.raises(ConnectionError):
+        poster.chat_postMessage(**reply)
+    client.error = None
+    assert poster.chat_postMessage(**reply)["ok"]
+    assert len(client.calls) == 2
+
+
+def test_a_quick_post_passes_through_with_its_error() -> None:
+    client = SlowClient()
+    client.release.set()
+    poster = run_module.DeadlinePoster(client, deadline=5)
+    assert poster.chat_postMessage(channel=CHANNEL, thread_ts="1790000000.000100", text="one")["ok"]
+    client.error = revoked()
+    with pytest.raises(SlackApiError):
+        poster.chat_postMessage(channel=CHANNEL, thread_ts="1790000000.000100", text="one")

@@ -40,8 +40,11 @@ CATALOG_MAX_AGE_SECONDS = 60 * 60
 """A refresh that fails keeps the last snapshot for dry runs, up to this age; after that, posts wait."""
 MAX_ERROR_BACKOFF_SECONDS = 60.0
 SLACK_TIMEOUT_SECONDS = 15
-"""For one Slack call. With the one retry of a broken connection, a call blocks for about twice this, which
-must stay well under LOCK_STALE_AFTER: the worker checks the lock right before it posts."""
+"""For one socket operation of a Slack call. It does not bound the call: a connection is tried on every
+address in turn and once more after an error, a body can drip, and a DNS lookup has no timeout at all."""
+POST_DEADLINE_SECONDS = 30.0
+"""For a whole reply (DeadlinePoster). Well under LOCK_STALE_AFTER: the worker beats the lock right before
+it posts."""
 CATALOG_MARGIN_SECONDS = 30
 """A catalog read is cut off this long before the lock could go stale."""
 CATALOG_UNSET = Catalog(parts=(), locations=())
@@ -83,6 +86,56 @@ class CatalogCache:
         if self._catalog is None or now - self._loaded_at >= CATALOG_MAX_AGE_SECONDS:
             raise self._error or InvenTreeError("no catalog has been read yet")
         return self._catalog
+
+
+class PostStillRunning(Exception):
+    """A Slack call did not return within the deadline. It is still running; a later try takes its result."""
+
+
+class _Call:
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.result: Any = None
+        self.error: Exception | None = None
+
+
+class DeadlinePoster:
+    """Posts on a helper thread, and gives the worker control back after `deadline` seconds.
+
+    The worker then keeps the instance lock's heartbeat going, so no other instance takes over while a call
+    hangs, and no reply is posted twice by two instances. A call that ran out of time is left running: the
+    next try for the same thread takes its result (or its error) and does not post again, and until it has
+    ended nothing else is posted.
+    """
+
+    def __init__(self, client: Any, deadline: float = POST_DEADLINE_SECONDS) -> None:
+        self._client = client
+        self._deadline = deadline
+        self._calls: dict[tuple[Any, Any], _Call] = {}
+
+    def chat_postMessage(self, **kwargs: Any) -> Any:  # slack_sdk's name
+        key = (kwargs.get("channel"), kwargs.get("thread_ts"))
+        call = self._calls.get(key)
+        if call is None:
+            if any(not other.done.is_set() for other in self._calls.values()):
+                raise PostStillRunning
+            call = self._calls[key] = _Call()
+            threading.Thread(target=self._post, args=(call, kwargs), name="slack-post", daemon=True).start()
+            call.done.wait(self._deadline)
+        if not call.done.is_set():
+            raise PostStillRunning
+        del self._calls[key]
+        if call.error is not None:
+            raise call.error
+        return call.result
+
+    def _post(self, call: _Call, kwargs: dict[str, Any]) -> None:
+        try:
+            call.result = self._client.chat_postMessage(**kwargs)
+        except Exception as error:
+            call.error = error
+        finally:
+            call.done.set()
 
 
 def inventree_catalog(settings: Settings) -> Callable[[], Catalog]:
@@ -194,7 +247,7 @@ def run(
         except OSError as error:
             log.error("cannot start: %s reaching Slack", type(error).__name__)
             return 2
-        worker.slack, worker.catalog = client, cache
+        worker.slack, worker.catalog = DeadlinePoster(client), cache
         return _loop(worker, stop)
     except LockLost:
         log.error("another instance took over the database lock; stopping")
@@ -211,8 +264,8 @@ def run(
 
 
 def lock_stale_after(settings: Settings) -> timedelta:
-    """Longer than the worker can block between two beats: a Slack call (SLACK_TIMEOUT_SECONDS, tried twice),
-    or a catalog read, which is cut off CATALOG_MARGIN_SECONDS before this."""
+    """Longer than the worker can block between two beats: a reply (POST_DEADLINE_SECONDS), or a catalog read,
+    which is cut off CATALOG_MARGIN_SECONDS before this."""
     return max(LOCK_STALE_AFTER, timedelta(seconds=4 * settings.inventree.timeout_seconds + 60))
 
 

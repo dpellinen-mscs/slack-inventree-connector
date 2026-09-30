@@ -803,3 +803,55 @@ def test_a_reply_under_a_root_that_was_deleted_and_never_arrived_gets_no_dry_run
     worker.step()
     assert slack.posted == []
     assert audit(path) == ["dry_run_withheld"]
+
+
+def test_the_heartbeat_is_fresh_when_a_reply_is_posted_and_a_rate_limit_quiets_every_post(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    def heartbeat() -> str:
+        with sqlite3.connect(path) as raw:
+            return str(raw.execute("SELECT heartbeat_at FROM instance_lock").fetchone()[0])
+
+    seen: list[str] = []
+    calls: list[int] = []
+    post = slack.chat_postMessage
+
+    def limited(**kwargs: Any) -> dict[str, Any]:
+        seen.append(heartbeat())
+        calls.append(1)
+        if len(calls) == 1:
+            raise RateLimited({"Retry-After": "120"})
+        return post(**kwargs)
+
+    slack.chat_postMessage = limited  # type: ignore[method-assign]
+    enqueue(store, message(ROOT, TAKE))
+    enqueue(store, message("1790000000.000200", "took 1 ONT 100 from main stock to truck 1", user=LUIS))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.beat(now=True)  # the throttled beat would not come again for 10 seconds
+    before = heartbeat()
+    worker.step()
+    assert seen[0] > before  # beaten right before the post, so the post has the whole stale window
+    assert len(calls) == 1  # the second post did not even try: Slack asked everyone to wait
+    clock.at("1790000149.000000")
+    worker.step()
+    assert len(calls) == 1
+    clock.at("1790000150.000000")
+    worker.step()
+    assert len(slack.posted) == 2
+
+
+def test_a_long_retry_after_near_the_end_still_gets_its_last_try_on_time(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    def limited(**kwargs: Any) -> dict[str, Any]:
+        raise RateLimited({"Retry-After": "99999"})
+
+    slack.chat_postMessage = limited  # type: ignore[method-assign]
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    clock.at(f"{1790000030 + RETRY_FOR_SECONDS}.000000")  # the wait is capped at the retry period
+    worker.step()
+    assert audit(path) == ["dry_run_gave_up"]
