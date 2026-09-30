@@ -65,7 +65,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 - [x] Validator: deterministic contradiction checks and text-level review reasons (`core/validate.py`)
 - [x] Matcher: exact, normalized, alias, then fuzzy candidates, for parts and locations (`core/matching.py`; the catalog snapshot from InvenTree comes with Resolve)
 - [ ] Dry-run reply in the Slack thread: what would change, and every review reason (renderer `slack/replies.py`; `worker.py` posts it once the sibling window has passed; `stockthread run` serves it; not yet tried in a real workspace)
-- [ ] Slack app manifests and the quickstart
+- [ ] Slack app manifests and the quickstart (Socket Mode manifest `manifests/slack-socket.json` and the README quickstart done; install and `check-config` followed from scratch; not yet followed end to end in a real workspace; the HTTP manifest comes with HTTP serving)
 
 **DoD:** a post in an allowlisted channel gets a dry-run reply in its thread
 within 15 seconds. A post that is not a movement gets no reply. A post made

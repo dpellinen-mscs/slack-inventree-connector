@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
 import threading
 import time
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+import certifi
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
@@ -27,7 +29,7 @@ from stockthread.core.matching import Catalog
 from stockthread.inventree import InvenTreeError, InvenTreeReader, check_version
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
-from stockthread.worker import Worker
+from stockthread.worker import PostStillRunning, Worker
 
 log = logging.getLogger(__name__)
 
@@ -88,8 +90,8 @@ class CatalogCache:
         return self._catalog
 
 
-class PostStillRunning(Exception):
-    """A Slack call did not return within the deadline. It is still running; a later try takes its result."""
+class PosterBusy(Exception):
+    """Another thread's call is still running, and this one was not sent. An ordinary failure: try again."""
 
 
 class _Call:
@@ -118,7 +120,7 @@ class DeadlinePoster:
         call = self._calls.get(key)
         if call is None:
             if any(not other.done.is_set() for other in self._calls.values()):
-                raise PostStillRunning
+                raise PosterBusy
             call = self._calls[key] = _Call()
             threading.Thread(target=self._post, args=(call, kwargs), name="slack-post", daemon=True).start()
             call.done.wait(self._deadline)
@@ -172,6 +174,18 @@ def check_inventree(settings: Settings) -> str:
     return asyncio.run(read())
 
 
+def slack_tls() -> ssl.SSLContext:
+    """The system's certificate authorities plus certifi's, for the Web API and Socket Mode alike.
+
+    Python from python.org on macOS knows no authority until its "Install Certificates" step is run, and
+    every Slack call then fails with CERTIFICATE_VERIFY_FAILED. Verification itself stays as strict as the
+    default. SSL_CERT_FILE and SSL_CERT_DIR still add authorities, for a TLS-inspecting proxy.
+    """
+    context = ssl.create_default_context()
+    context.load_verify_locations(certifi.where())
+    return context
+
+
 def socket_mode(app: Any, app_token: str) -> Connection:
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -213,7 +227,7 @@ def run(
             log.warning("writes.enabled has no effect in this version: it has no apply step yet")
         log.info("This version only posts dry runs: no stock is ever written.")
         bot_token = settings.secrets.slack_bot_token.get_secret_value()
-        client = slack_client or WebClient(token=bot_token)
+        client = slack_client or WebClient(token=bot_token, ssl=slack_tls())
         # No handler that sleeps for Slack's Retry-After inside a call: it could outlast the instance lock. A
         # rate-limited reply fails instead, and the worker tries it again once the time Slack named has passed.
         client.retry_handlers = [

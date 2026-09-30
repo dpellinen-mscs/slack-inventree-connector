@@ -265,8 +265,11 @@ needs.
     Every edit and deletion is noted by message key (`revised_messages`),
     so one that Slack delivers before the message it changes still
     withholds the post when that message arrives. The note is read from
-    the raw event, so it also covers edits the ingest checks drop (a
-    deleted thread root becomes a tombstone) and a root that never arrives.
+    the raw event, so it also covers a root that never arrives and the
+    edits the strict checks cannot read in full (a deleted thread root
+    becomes a tombstone; an edit without a stamp or a user). The listener
+    stores those too, as `Revised`, after the same workspace, app, channel
+    and bot checks.
     A link preview or a new thread reply changes neither text nor files
     and is not an edit.
   - `failed`: the pure pipeline raised on this post. It is logged by error
@@ -275,6 +278,12 @@ needs.
     propagates, and the post waits.
   - `gave_up`: posting kept failing for 15 minutes, with backoff up to a
     minute between tries.
+
+  A reply whose Slack call has not returned within its deadline is not a
+  failure yet: the call may still send. Its post keeps the decision that
+  was handed to Slack and stays open (not decided again, not given up on,
+  not withheld by an edit) until the call has ended, and nothing else is
+  posted meanwhile. The record is then what the reply shows.
 
   The outcome is stored with what was decided and why (`dry_runs`, in the
   same transaction): the extractor's name and version, the candidate
@@ -309,7 +318,10 @@ needs.
   anyone who can see the message can add one.
 - **Scopes** are the minimum for v1.0: read messages in the channels the
   app is invited to, and write messages. File access is added only when
-  photo extraction is built. The exact list will be in the manifest.
+  photo extraction is built. The exact list is in the manifest
+  (`manifests/slack-socket.json`: `channels:history`, `groups:history`,
+  `chat:write`, and the events `message.channels` and `message.groups`),
+  and `tests/test_manifest.py` fails when it grows.
 
 ## 5. InvenTree side
 

@@ -6,6 +6,7 @@ import asyncio
 import json
 import signal
 import sqlite3
+import ssl
 import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -25,9 +26,11 @@ from stockthread.__main__ import install_stop_handlers
 from stockthread.catalog import load_catalog
 from stockthread.config import InvenTreeSettings, Settings, parse_settings
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
+from stockthread.core.model import PostKey
 from stockthread.inventree import InvenTreeError, InvenTreeReader
 from stockthread.run import CatalogCache, run
-from stockthread.store import Store, new_lock_owner
+from stockthread.store import DryRunOutcome, Store, new_lock_owner
+from stockthread.worker import RETRY_FOR_SECONDS, PostStillRunning, Worker
 
 WORKSPACE, APP, CHANNEL = "T0ACME001", "A0ACME001", "C0ACME001"
 CATALOG = Catalog(
@@ -444,12 +447,12 @@ def test_a_hung_post_gives_control_back_and_is_never_sent_twice() -> None:
     poster = run_module.DeadlinePoster(client, deadline=0.05)
     first = {"channel": CHANNEL, "thread_ts": "1790000000.000100", "text": "one"}
     other = {"channel": CHANNEL, "thread_ts": "1790000000.000200", "text": "two"}
-    with pytest.raises(run_module.PostStillRunning):
+    with pytest.raises(PostStillRunning):
         poster.chat_postMessage(**first)  # back after the deadline: the worker keeps its heartbeat going
-    with pytest.raises(run_module.PostStillRunning):
+    with pytest.raises(PostStillRunning):
         poster.chat_postMessage(**first)  # still running: not sent again
-    with pytest.raises(run_module.PostStillRunning):
-        poster.chat_postMessage(**other)  # and nothing else is sent meanwhile
+    with pytest.raises(run_module.PosterBusy):
+        poster.chat_postMessage(**other)  # and nothing else is sent meanwhile: a failure, not a call on its way
     assert len(client.calls) == 1
 
     client.release.set()  # the network is back, and the first call goes through
@@ -465,7 +468,7 @@ def test_a_hung_post_that_ends_in_an_error_reports_it_once_and_is_then_tried_aga
     client.error = ConnectionError("synthetic")
     poster = run_module.DeadlinePoster(client, deadline=0.05)
     reply = {"channel": CHANNEL, "thread_ts": "1790000000.000100", "text": "one"}
-    with pytest.raises(run_module.PostStillRunning):
+    with pytest.raises(PostStillRunning):
         poster.chat_postMessage(**reply)
     client.release.set()
     wait_until_idle()
@@ -484,3 +487,131 @@ def test_a_quick_post_passes_through_with_its_error() -> None:
     client.error = revoked()
     with pytest.raises(SlackApiError):
         poster.chat_postMessage(channel=CHANNEL, thread_ts="1790000000.000100", text="one")
+
+
+def test_slack_tls_verifies_against_known_authorities_on_any_python_build() -> None:
+    context = run_module.slack_tls()
+    assert context.verify_mode is ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    assert context.cert_store_stats()["x509_ca"] > 50  # certifi's, even where the system store is empty
+
+
+def hung_worker(tmp_path: Path, catalog: Any) -> tuple[Worker, Store, SlowClient, Any]:
+    """A worker that posts through a DeadlinePoster whose Slack call hangs, with one post due at 1790000030."""
+    store = Store.open(tmp_path / "stockthread.db")
+    store.acquire_lock("instance-a", stale_after=timedelta(minutes=1))
+    client = SlowClient()
+    now = [datetime.fromtimestamp(1790000030, UTC)]
+    poster = run_module.DeadlinePoster(client, deadline=0.05)
+    worker = Worker(settings(tmp_path / "stockthread.db"), store, "instance-a", poster, catalog, lambda: now[0])
+    event = {"type": "message", "channel": CHANNEL, "user": "U0SAM0001", "ts": "1790000000.000100"}
+    event["text"] = "took 2 Disc 40 from main stock to truck 1"
+    body = {"type": "event_callback", "team_id": WORKSPACE, "api_app_id": APP, "event_id": "Ev1", "event": event}
+    assert store.enqueue_event("Ev1", "event", json.dumps(body))
+
+    def at(second: int) -> None:
+        now[0] = datetime.fromtimestamp(second, UTC)
+
+    return worker, store, client, at
+
+
+def reply_ts(tmp_path: Path) -> list[str | None]:
+    with sqlite3.connect(tmp_path / "stockthread.db") as raw:
+        return [row[0] for row in raw.execute("SELECT reply_ts FROM posts ORDER BY id")]
+
+
+HUNG_POST = PostKey(WORKSPACE, CHANNEL, "1790000000.000100")
+DISC = Catalog(parts=(PartRecord(1, "DISC-40", "Disc 40"),), locations=(LocationRecord(10, "Main stock"),))
+RENUMBERED = Catalog(parts=(PartRecord(99, "DISC-40", "Disc 40"),), locations=(LocationRecord(10, "Main stock"),))
+
+
+def test_a_slow_reply_is_recorded_with_the_decision_that_was_sent(tmp_path: Path) -> None:
+    catalogs = [DISC]
+    worker, store, client, at = hung_worker(tmp_path, lambda: catalogs[0])
+    worker.step()  # the call hangs; the worker has control back
+    assert store.dry_run(HUNG_POST) is None
+    catalogs[0] = RENUMBERED  # the catalog is read again before the next try
+    at(1790000040)
+    worker.step()
+    assert store.dry_run(HUNG_POST) is None  # still on its way: not decided again, not finished
+    client.release.set()
+    wait_until_idle()
+    at(1790000050)
+    worker.step()
+    record = store.dry_run(HUNG_POST)
+    assert record is not None
+    assert record.result is not None
+    assert record.outcome is DryRunOutcome.REPLIED
+    assert reply_ts(tmp_path) == ["1790000099.000100"]
+    assert len(client.calls) == 1
+    assert record.result["movements"][0]["items"][0]["part"]["record"] == 1  # what the reply in Slack shows
+    store.close()
+
+
+def test_a_reply_still_on_its_way_is_never_given_up_on_and_holds_the_others_back(tmp_path: Path) -> None:
+    worker, store, client, at = hung_worker(tmp_path, lambda: DISC)
+    worker.step()
+    event = {"type": "message", "channel": CHANNEL, "user": "U0SAM0001", "ts": "1790000100.000100"}
+    event["text"] = "took 1 Disc 40 from main stock to truck 1"
+    body = {"type": "event_callback", "team_id": WORKSPACE, "api_app_id": APP, "event_id": "Ev2", "event": event}
+    assert store.enqueue_event("Ev2", "event", json.dumps(body))
+    for second in range(1790000040, 1790000040 + 2 * RETRY_FOR_SECONDS, 30):  # twice the time a failure gets
+        at(second)
+        worker.step()
+    assert store.dry_run(HUNG_POST) is None  # the call can still send: "gave up" would deny a reply in Slack
+    assert len(client.calls) == 1  # and the second post waits for it
+    client.release.set()
+    wait_until_idle()
+    at(1790000040 + 2 * RETRY_FOR_SECONDS + 60)
+    worker.step()
+    first, second_post = store.dry_run(HUNG_POST), store.dry_run(PostKey(WORKSPACE, CHANNEL, "1790000100.000100"))
+    assert first is not None
+    assert first.outcome is DryRunOutcome.REPLIED
+    assert reply_ts(tmp_path) == ["1790000099.000100"] * 2
+    assert second_post is not None
+    assert second_post.outcome is DryRunOutcome.REPLIED
+    assert len(client.calls) == 2
+    store.close()
+
+
+def test_an_edit_while_the_reply_is_on_its_way_waits_for_the_call(tmp_path: Path) -> None:
+    worker, store, client, at = hung_worker(tmp_path, lambda: DISC)
+    worker.step()
+    message = {"type": "message", "user": "U0SAM0001", "ts": HUNG_POST.ts}
+    event: dict[str, Any] = {"type": "message", "subtype": "message_changed", "channel": CHANNEL}
+    event["message"] = {**message, "text": "took 5 Disc 40 from main stock to truck 1"}
+    event["previous_message"] = {**message, "text": "took 2 Disc 40 from main stock to truck 1"}
+    body = {"type": "event_callback", "team_id": WORKSPACE, "api_app_id": APP, "event_id": "Ev2", "event": event}
+    assert store.enqueue_event("Ev2", "event", json.dumps(body))
+    at(1790000040)
+    worker.step()
+    assert store.dry_run(HUNG_POST) is None  # not withheld: the reply may yet appear
+    client.error = ConnectionError("synthetic")
+    client.release.set()
+    wait_until_idle()
+    at(1790000050)
+    worker.step()  # the call ended in an error: nothing was posted
+    at(1790000060)
+    worker.step()  # so the next try reads the post again, and finds it changed
+    record = store.dry_run(HUNG_POST)
+    assert record is not None
+    assert record.outcome is DryRunOutcome.WITHHELD
+    assert len(client.calls) == 1
+    store.close()
+
+
+def test_a_reply_on_its_way_is_checked_with_backoff_and_not_while_stopping(tmp_path: Path) -> None:
+    worker, store, client, at = hung_worker(tmp_path, lambda: DISC)
+    assert worker.step() == 2  # the event, and the reply whose call hangs (next check in 2 seconds)
+    at(1790000031)
+    assert worker.step() == 0  # backing off
+    client.release.set()
+    wait_until_idle()
+    at(1790000033)
+    worker.stopping = lambda: True
+    assert worker.step() == 0  # a stop request does not wait for it
+    assert store.dry_run(HUNG_POST) is None
+    worker.stopping = lambda: False
+    assert worker.step() == 1
+    assert reply_ts(tmp_path) == ["1790000099.000100"]
+    store.close()

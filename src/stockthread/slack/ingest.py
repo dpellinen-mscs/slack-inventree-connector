@@ -10,6 +10,7 @@ Every drop has a reason, so the audit trail can say why a post got no reply.
 
 from __future__ import annotations
 
+import re
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -91,6 +92,16 @@ class Deleted:
 
 
 @dataclass(frozen=True)
+class Revised:
+    """An edit or deletion the checks cannot read in full: a tombstone (a deleted thread root), an edit without
+    a stamp, or one without a user. Kept all the same, so the post it changes is never read from its old text."""
+
+    event_id: str
+    channel: str
+    ts: str
+
+
+@dataclass(frozen=True)
 class Click:
     """A button click. Review checks the value against the stored button, channel and message, and the user."""
 
@@ -102,7 +113,7 @@ class Click:
     value: str
 
 
-Decision = Drop | Challenge | NewMessage | Edited | Deleted | Click
+Decision = Drop | Challenge | NewMessage | Edited | Deleted | Revised | Click
 
 
 class SeenEvents(Protocol):
@@ -161,14 +172,17 @@ def unwrap_socket(envelope: Mapping[str, Any]) -> Mapping[str, Any] | None:
 def ingest_event(payload: object, settings: SlackSettings, seen: SeenEvents) -> Decision:
     """Decide what to do with an Events API payload.
 
-    An accepted event is recorded in `seen` at once; a drop is never recorded. So `seen` must be the durable
+    An accepted event is recorded in `seen` at once; a drop is never recorded. An edit or deletion that the
+    checks cannot read in full is accepted as `Revised`. So `seen` must be the durable
     queue (a retry is then run from the queue, not from Slack), or a failed handling loses Slack's retry.
     """
     try:
         decision = _event(_object(payload), settings)
     except _Malformed:
-        return Drop(DropReason.MALFORMED)
-    if isinstance(decision, NewMessage | Edited | Deleted) and not seen.first_time(decision.event_id):
+        decision = Drop(DropReason.MALFORMED)
+    if isinstance(decision, Drop) and decision.reason in _MAY_HIDE_A_REVISION:
+        decision = _revised(payload, settings) or decision
+    if isinstance(decision, NewMessage | Edited | Deleted | Revised) and not seen.first_time(decision.event_id):
         return Drop(DropReason.DUPLICATE_EVENT)
     return decision
 
@@ -224,6 +238,68 @@ def _event(payload: Mapping[str, Any], settings: SlackSettings) -> Decision:
             return Drop(DropReason.UNCHANGED)
         return Edited(event_id, message)
     return NewMessage(event_id, message)
+
+
+_MAY_HIDE_A_REVISION = frozenset({DropReason.MALFORMED, DropReason.SUBTYPE_NOT_ALLOWED, DropReason.UNCHANGED})
+"""Drops that come after the app, channel and bot checks. `revised_message` checks the workspace, the app and
+the channel itself, and the poster's organization too, so a payload from elsewhere stays dropped."""
+_SLACK_TS = re.compile(r"\d{1,10}\.\d{6}")
+
+
+def revised_message(payload: object, settings: SlackSettings) -> tuple[str, str] | None:
+    """The channel and ts of the message that an event edits or deletes, or None. A lenient reading, for
+    events the strict checks drop as well as the ones they accept.
+
+    An edit counts when the text or the files differ from before, when the message became a tombstone (a
+    deleted thread root), or when the event does not say what was there before. A link preview or a new
+    thread reply changes neither.
+    """
+    if not isinstance(payload, Mapping) or payload.get("type") != "event_callback":
+        return None
+    if payload.get("team_id") != settings.workspace_id or payload.get("api_app_id") != settings.app_id:
+        return None
+    event = payload.get("event")
+    if not isinstance(event, Mapping):
+        return None
+    channel, subtype = event.get("channel"), event.get("subtype")
+    if event.get("type") != "message" or not isinstance(channel, str) or channel not in settings.channels:
+        return None
+    previous = event.get("previous_message")
+    before = previous.get("ts") if isinstance(previous, Mapping) else None
+    inner = event.get("message") if subtype == "message_changed" else None
+    for part in (event, inner, previous):
+        # In a shared channel, the poster may belong to another organization.
+        team = part.get("user_team", part.get("team")) if isinstance(part, Mapping) else None
+        if team is not None and team != settings.workspace_id:
+            return None
+    if subtype == "message_deleted":
+        ts = event.get("deleted_ts") or before
+    elif subtype == "message_changed":
+        if not isinstance(inner, Mapping):
+            return None
+        ts = inner.get("ts") if isinstance(inner.get("ts"), str) else before
+        unchanged = isinstance(previous, Mapping) and _shown(inner) == _shown(previous)
+        if unchanged and inner.get("subtype") != "tombstone":
+            return None
+    else:
+        return None
+    if not isinstance(ts, str) or not _SLACK_TS.fullmatch(ts):
+        return None
+    return channel, ts
+
+
+def _revised(payload: object, settings: SlackSettings) -> Revised | None:
+    found = revised_message(payload, settings)
+    event_id = payload.get("event_id") if isinstance(payload, Mapping) else None
+    if found is None or not isinstance(event_id, str) or not event_id:
+        return None
+    return Revised(event_id, *found)
+
+
+def _shown(message: Mapping[str, Any]) -> tuple[object, list[object]]:
+    files = message.get("files")
+    shown = [file.get("id") for file in files if isinstance(file, Mapping)] if isinstance(files, list) else []
+    return message.get("text"), shown
 
 
 def _same_post(message: SlackMessage, previous: Mapping[str, Any]) -> bool:
