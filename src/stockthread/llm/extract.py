@@ -228,13 +228,19 @@ class WithinDeadline:
                 answer.append(self._provider.complete(system, user, schema))
             except ProviderError as error:
                 answer.append(error)
-            except Exception as error:  # the class only: a message could quote the post
+            except BaseException as error:  # the class only: a message could quote the post
                 answer.append(ProviderError(f"{type(error).__name__} in the provider"))
             finally:
                 done.set()
 
+        started = True
+        try:
+            threading.Thread(target=call, name="llm-call", daemon=True).start()
+        except RuntimeError:  # no thread to be had
+            started = False
+        if not started:
+            raise ProviderError("the call to the provider could not be started")
         self._last = done
-        threading.Thread(target=call, name="llm-call", daemon=True).start()
         if not done.wait(self._deadline):
             raise ProviderError(f"the provider took longer than {self._deadline:.0f} s")
         if isinstance(answer[0], ProviderError):

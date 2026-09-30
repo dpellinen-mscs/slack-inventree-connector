@@ -91,13 +91,21 @@ def check_endpoint(base_url: str, model: str, api_key: SecretStr | None) -> http
         url = urlsplit(base_url)
     except ValueError:  # its message can quote the URL
         url = urlsplit("")
-    if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
+    if url.scheme not in ("http", "https") or not url.hostname or "@" in url.netloc:
         raise ValueError("the provider URL must be http(s)://host[:port][/path], without credentials")
+    try:
+        port = url.port
+    except ValueError:
+        port = 0
+    if port == 0:
+        raise ValueError("the provider URL has an invalid port")
+    if url.path.rstrip("/").endswith("/chat/completions"):
+        raise ValueError("the provider URL is the base URL, without /chat/completions")
     if url.query or url.fragment or not base_url.isascii() or not base_url.isprintable() or " " in base_url:
         raise ValueError("the provider URL must be http(s)://host[:port][/path], without a query")
     if url.scheme == "http" and api_key is not None and not _is_local(url.hostname):
         raise ValueError("an API key is only sent over https, or to a server on this machine")
-    if not model or not model.isprintable():
+    if not model.strip() or not model.isprintable():
         raise ValueError("the model name is empty or not printable")
     key = None if api_key is None else api_key.get_secret_value()
     if key is not None and not (key.isascii() and key.isprintable() and " " not in key):
