@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import SecretStr
 
-from stockthread.llm.extract import MAX_OUTPUT_CHARS, ProviderError
+from stockthread.llm.extract import MAX_OUTPUT_CHARS, NoReading, ProviderError
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 MAX_RESPONSE_BYTES = 1_000_000
@@ -117,7 +117,8 @@ def check_endpoint(base_url: str, model: str, api_key: SecretStr | None) -> http
 
 
 def _content(raw: bytes) -> str:
-    """The text of the first choice. A refusal, a cut-off answer or another shape is a ProviderError."""
+    """The text of the first choice. Another shape is a ProviderError. A refusal or a cut-off answer is a
+    NoReading: the provider is well, and asking again about the same post would give the same."""
     content: Any = None
     finish: Any = "unread"
     try:
@@ -130,9 +131,9 @@ def _content(raw: bytes) -> str:
     if finish == "unread":
         raise ProviderError("the provider's answer is not a chat completion")
     if finish not in (None, "stop"):
-        raise ProviderError("the model did not finish its answer")  # cut off by a limit, or filtered
+        raise NoReading("the model did not finish its answer")  # cut off by a limit, or filtered
     if not isinstance(content, str) or not content or len(content) > MAX_OUTPUT_CHARS:
-        raise ProviderError("the model gave no answer, or one that is too long")  # also a refusal
+        raise NoReading("the model gave no answer, or one that is too long")  # also a refusal
     return content
 
 

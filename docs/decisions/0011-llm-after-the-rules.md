@@ -31,10 +31,20 @@ answer.
   per interval for all waiting posts, counted from the end of the call
   that failed). After 15 minutes the post gets one last call of its own;
   if that fails too it is finished without a reply, and its record says
-  `llm_unavailable`. It is never read as "not a movement".
+  `llm_unavailable`. It is never read as "not a movement". While several
+  posts wait, each call goes to the post asked least recently, so one post
+  whose calls keep failing (an HTTP 400 for its text alone) cannot take
+  every call.
+- **A refusal is about one post.** When the provider answers but the model
+  refused the post, or its answer was cut off, filtered or too long, the
+  provider is well and the same call would end the same way. That post is
+  finished without a reply at once, its record says `llm_no_reading`, and
+  there is no backoff: no other post waits for it.
 - **A whole-call deadline.** `llm.timeout_seconds` (default 30, at most
   120) bounds the whole call, and the instance lock outlives it. One call
-  runs at a time, and the queue is drained between two calls.
+  runs at a time, and the queue is drained after every call: before the
+  next one, and before the reply to the post that was read, so an edit
+  that arrived during the call withholds the post.
 - One `[llm]` section: `base_url`, `model`, `timeout_seconds`. The key is
   the environment variable `LLM_API_KEY`, optional for a local server.
 
