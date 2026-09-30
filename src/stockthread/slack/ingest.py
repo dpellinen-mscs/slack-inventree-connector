@@ -243,7 +243,8 @@ def _event(payload: Mapping[str, Any], settings: SlackSettings) -> Decision:
 _MAY_HIDE_A_REVISION = frozenset({DropReason.MALFORMED, DropReason.SUBTYPE_NOT_ALLOWED, DropReason.UNCHANGED})
 """Drops that come after the app, channel and bot checks. `revised_message` checks the workspace, the app and
 the channel itself, and the poster's organization too, so a payload from elsewhere stays dropped."""
-_SLACK_TS = re.compile(r"\d{1,10}\.\d{6}")
+SLACK_TS = re.compile(r"\d{1,10}\.\d{6}")
+"""A message timestamp as Slack sends it."""
 
 
 def revised_message(payload: object, settings: SlackSettings) -> tuple[str, str] | None:
@@ -283,7 +284,7 @@ def revised_message(payload: object, settings: SlackSettings) -> tuple[str, str]
             return None
     else:
         return None
-    if not isinstance(ts, str) or not _SLACK_TS.fullmatch(ts):
+    if not isinstance(ts, str) or not SLACK_TS.fullmatch(ts):
         return None
     return channel, ts
 

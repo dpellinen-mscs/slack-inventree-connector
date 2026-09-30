@@ -488,7 +488,7 @@ def test_an_old_post_is_withheld_and_a_late_one_says_so(
     worker.step()
     assert audit(path) == ["dry_run_withheld", "dry_run_replied"]
     assert [reply["thread_ts"] for reply in slack.posted] == ["1790000000.000100"]
-    assert "arrived while the connector was down" in json.dumps(slack.posted[0]["blocks"])
+    assert "The post was read late" in json.dumps(slack.posted[0]["blocks"])
 
 
 def test_the_clock_must_be_aware(store: Store, slack: FakeSlack) -> None:

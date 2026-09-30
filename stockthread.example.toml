@@ -14,7 +14,7 @@ workspace_id = "T0ACME01"     # events from any other workspace are dropped
 app_id = "A0STOCK1"           # events for any other app are dropped
 channels = []                 # channel ids to act in. Empty: act nowhere
 approvers = []                # user ids that may approve. Empty: nobody can
-catch_up_hours = 72           # read missed posts this far back after downtime
+catch_up_hours = 72           # read posts missed during downtime this far back. 0: off
 group_window_seconds = 5      # join sibling messages from one user
 plan_expiry_hours = 24
 
