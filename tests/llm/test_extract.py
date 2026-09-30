@@ -55,13 +55,13 @@ def output(**changes: Any) -> dict[str, Any]:
 class FakeProvider:
     model = "test-model"
 
-    def __init__(self, answer: str | Exception) -> None:
+    def __init__(self, answer: str | BaseException) -> None:
         self.answer = answer
         self.calls: list[tuple[str, str, Mapping[str, Any]]] = []
 
     def complete(self, system: str, user: str, schema: Mapping[str, Any]) -> str:
         self.calls.append((system, user, schema))
-        if isinstance(self.answer, Exception):
+        if isinstance(self.answer, BaseException):
             raise self.answer
         return self.answer
 
@@ -329,11 +329,11 @@ class _Slow:
 class _Answers:
     model = "test-model"
 
-    def __init__(self, answer: str | Exception) -> None:
+    def __init__(self, answer: str | BaseException) -> None:
         self.answer = answer
 
     def complete(self, system: str, user: str, schema: Any) -> str:
-        if isinstance(self.answer, Exception):
+        if isinstance(self.answer, BaseException):
             raise self.answer
         return self.answer
 
@@ -373,3 +373,18 @@ def test_an_error_in_the_provider_comes_back_as_a_provider_error_that_quotes_not
     assert str(info.value) == "RuntimeError in the provider"
     assert info.value.__cause__ is None
     assert info.value.__context__ is None
+
+
+def test_an_exit_inside_the_provider_or_no_thread_to_run_it_is_an_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ProviderError, match="SystemExit in the provider"):
+        WithinDeadline(_Answers(SystemExit(1)), 5).complete("s", "u", {})
+    provider = WithinDeadline(_Answers("{}"), 5)
+
+    def no_thread(self: threading.Thread) -> None:
+        raise RuntimeError("can't start new thread")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(threading.Thread, "start", no_thread)
+        with pytest.raises(ProviderError, match="could not be started"):
+            provider.complete("s", "u", {})
+    assert provider.complete("s", "u", {}) == "{}"  # and the next call is not held back

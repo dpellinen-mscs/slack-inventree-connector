@@ -28,9 +28,10 @@ answer.
   (prompt version and model) is stored with every dry run.
 - **No answer is an outage, not a reading.** The post waits and the
   provider is asked again with backoff (capped at one minute, and one call
-  per interval for all waiting posts). After 15 minutes the post is
-  finished without a reply, and its record says `llm_unavailable`. It is
-  never read as "not a movement".
+  per interval for all waiting posts, counted from the end of the call
+  that failed). After 15 minutes the post gets one last call of its own;
+  if that fails too it is finished without a reply, and its record says
+  `llm_unavailable`. It is never read as "not a movement".
 - **A whole-call deadline.** `llm.timeout_seconds` (default 30, at most
   120) bounds the whole call, and the instance lock outlives it. One call
   runs at a time, and the queue is drained between two calls.

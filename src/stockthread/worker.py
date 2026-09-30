@@ -153,8 +153,9 @@ class Worker:
     """Checked between posts, so a stop request does not wait for a whole backlog."""
     llm: PostExtractor | None = None
     """Reads the posts the rule-based extractor declines. None: those posts get no reply."""
-    _llm_read: dict[PostKey, Extraction] = field(default_factory=dict)
-    """What the model read, kept until the post is finished: a reply that is tried again is not read again."""
+    _llm_read: dict[PostKey, tuple[tuple[str, ...], Extraction]] = field(default_factory=dict)
+    """What the model read, and of which messages, kept until the post is finished: a reply that is tried
+    again is not read again. A post that has gained a message since is."""
     _llm_quiet_until: Decimal = Decimal(0)
     """The provider gave no answer: it is not asked again, for any post, before this time."""
     _llm_failed: int = 0
@@ -341,11 +342,17 @@ class Worker:
         by_rule = extract_rules.extract(messages)
         if self.llm is None or not by_rule.declined:
             return by_rule, False
-        read = self._llm_read.get(key)
-        if read is not None:
-            return read, False
+        sent = tuple(message.ts for message in messages)
+        earlier = self._llm_read.get(key)
+        if earlier is not None and earlier[0] == sent:
+            return earlier[1], False
+        read = None
         failures = self._failures.get(key) or _Failures(first=now, count=0, next_try=now)
-        if now >= self._llm_quiet_until:
+        last_try = now >= failures.first + RETRY_FOR_SECONDS
+        # A post is only given up on after a call of its own, and that last call is made on time, even while
+        # the provider is otherwise left alone: one call per post, once.
+        asked = last_try or now >= self._llm_quiet_until
+        if asked:
             self._llm_asked = True
             self.beat(now=True)  # the call has the whole stale window (run.lock_stale_after)
             try:
@@ -354,19 +361,20 @@ class Worker:
             except ProviderError as error:
                 failures.count += 1
                 self._llm_failed += 1
+                # From the time the call ended: a call that takes a minute to fail has used its backoff up.
+                now = self._now()
                 self._llm_quiet_until = now + min(2 ** min(self._llm_failed, 16), MAX_BACKOFF_SECONDS)
                 # The sentence quotes nothing (llm.extract.ProviderError).
                 log.warning("post %s: no answer from the LLM provider (%s), attempt %d", key.ts, error, failures.count)
             self.beat()
         if read is not None:
             self._failures.pop(key, None)  # posting the reply has its own retries
-            self._llm_read[key] = read
+            self._llm_read[key] = (sent, read)
             return read, False
-        if now - failures.first >= RETRY_FOR_SECONDS:
+        if last_try:
             self._failures.pop(key, None)
             log.warning("post %s: gave up on the LLM provider", key.ts)
             return by_rule, True
-        # One last try on time, as for a reply.
         failures.next_try = min(max(self._llm_quiet_until, now + 1), failures.first + RETRY_FOR_SECONDS)
         self._failures[key] = failures
         return None, False

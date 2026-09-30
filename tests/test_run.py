@@ -29,6 +29,7 @@ from stockthread.config import InvenTreeSettings, Settings, parse_settings
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.core.model import PostKey
 from stockthread.inventree import InvenTreeError, InvenTreeReader
+from stockthread.llm.extract import WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
 from stockthread.run import CatalogCache, run
 from stockthread.store import DryRunOutcome, Store, new_lock_owner
@@ -660,6 +661,14 @@ def test_a_post_the_rules_decline_is_sent_to_the_configured_model(
         return built
 
     monkeypatch.setattr(run_module, "llm_provider", provider)
+    deadlines: list[float] = []
+
+    class Counted(WithinDeadline):
+        def __init__(self, inner: Any, deadline: float) -> None:
+            deadlines.append(deadline)
+            super().__init__(inner, deadline)
+
+    monkeypatch.setattr(run_module, "WithinDeadline", Counted)
     llm = {"base_url": "https://llm.acme-fiber.example/v1", "model": "small-1"}
     chosen = settings(database, llm=llm, llm_key="key-synthetic")
     client = FakeClient(stop)
@@ -678,6 +687,7 @@ def test_a_post_the_rules_decline_is_sent_to_the_configured_model(
     assert "gave truck 1 two Disc 40" in asked[0]["messages"][1]["content"]
     assert [reply["thread_ts"] for reply in client.posted] == ["1790000000.000100"]
     assert closed == [True]
+    assert deadlines == [30]  # the whole call is bounded by llm.timeout_seconds
     assert "sent to the model small-1 at llm.acme-fiber.example" in caplog.text
     assert "key-synthetic" not in caplog.text
     assert "Disc 40" not in caplog.text
@@ -690,11 +700,19 @@ def test_without_an_llm_section_no_provider_is_built(tmp_path: Path) -> None:
     )
     assert built is not None
     assert built.model == "small-1"
+    assert built._api_key is None
+    built.close()
+    hosted = {"base_url": "https://llm.acme-fiber.example/v1", "model": "small-1", "timeout_seconds": 7}
+    built = run_module.llm_provider(settings(tmp_path / "stockthread.db", llm=hosted, llm_key="key-synthetic"))
+    assert built is not None
+    assert built._api_key is not None
+    assert built._api_key.get_secret_value() == "key-synthetic"
+    assert built._client.timeout == httpx.Timeout(7)
     built.close()
 
 
 def test_the_lock_outlives_a_call_to_the_model(tmp_path: Path) -> None:
     llm = {"base_url": "http://localhost:11434/v1", "model": "small-1", "timeout_seconds": 120}
     stale = run_module.lock_stale_after(settings(tmp_path / "stockthread.db", llm=llm)).total_seconds()
-    assert stale >= 120 + run_module.LLM_MARGIN_SECONDS
+    assert stale == 150  # the call's deadline plus half a minute
     assert run_module.lock_stale_after(settings(tmp_path / "stockthread.db")) == timedelta(seconds=100)  # as before
