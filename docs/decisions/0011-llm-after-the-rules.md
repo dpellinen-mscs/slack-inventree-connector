@@ -42,8 +42,9 @@ answer.
   there is no backoff: no other post waits for it.
 - **A whole-call deadline.** `llm.timeout_seconds` (default 30, at most
   120) bounds the whole call, and the instance lock outlives it. One call
-  runs at a time, and the queue is drained after every call: before the
-  next one, and before the reply to the post that was read, so an edit
+  runs at a time, as the last thing in a worker step (posts the rules read
+  are answered first), and the queue is drained after every call: before
+  the next one, and before the reply to the post that was read, so an edit
   that arrived during the call withholds the post.
 - One `[llm]` section: `base_url`, `model`, `timeout_seconds`. The key is
   the environment variable `LLM_API_KEY`, optional for a local server.
