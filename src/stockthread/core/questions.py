@@ -68,6 +68,7 @@ _BY_REASON: dict[ReasonCode, tuple[Tier, Ask, Side | None]] = {
     ReasonCode.CONTRADICTION: (Tier.READING, Ask.CONFIRM, None),
     ReasonCode.EXTRACTORS_DISAGREE: (Tier.READING, Ask.CONFIRM, None),
     ReasonCode.PHOTO_TEXT_MISMATCH: (Tier.READING, Ask.CONFIRM, None),
+    ReasonCode.PHOTO_NOT_READ: (Tier.READING, Ask.CONFIRM, None),
     ReasonCode.CORRECTED_IN_THREAD: (Tier.READING, Ask.CONFIRM, None),
     ReasonCode.ITEM_NOT_IN_TEXT: (Tier.READING, Ask.CONFIRM, None),
     ReasonCode.QUANTITY_NOT_IN_TEXT: (Tier.READING, Ask.CONFIRM, None),

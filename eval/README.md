@@ -355,9 +355,15 @@ per model.
 The test reads each recording back through the extractor the worker uses
 and prints two reports: the model reading every post, and the pipeline as
 the worker runs it, where the model reads only the posts the rule-based
-extractor declines. The bar has two parts:
+extractor declines, and the flags the validator derives by rule from the
+fields and the text are added. The bar has two parts:
 
-- The pipeline has no hard failure.
+- The pipeline has no hard failure, with one exception: on a post with a
+  photo, a missed `quantity_from_photo`, `serial_unconfirmed` or
+  `photo_text_mismatch` counts as raised. No extractor sees photos, so
+  the worker gives every movement of such a post the review reason
+  `photo_not_read`, which asks a person as those flags would. The
+  printed report still lists them.
 - Every case has a recorded answer. A recording made while the provider
   was rate-limited or down fails the test until the command has been run
   again, because a case without an answer is scored on the rules alone. A

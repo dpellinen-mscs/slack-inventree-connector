@@ -70,7 +70,7 @@ from stockthread.core.model import (
     ReviewReason,
 )
 from stockthread.core.questions import choice_json, choices, pick_question, question_json
-from stockthread.core.validate import validate
+from stockthread.core.validate import photo_not_read, validate
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.catchup import is_catch_up
 from stockthread.slack.ingest import (
@@ -680,6 +680,9 @@ class Worker:
     ) -> list[MovementView]:
         text = "\n".join(message.text for message in messages if not message.deleted)
         lateness = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if late else ()
+        # No extractor sees a photo's pixels (design section 13): the photo may show other items, another
+        # quantity or serials, so a person checks the reading against it.
+        unread = (ReviewReason(ReasonCode.PHOTO_NOT_READ, ReasonSource.RULE),) if photo_not_read(messages) else ()
         return [
             MovementView(
                 movement=movement,
@@ -687,6 +690,7 @@ class Worker:
                 source=_location(movement.source_text, catalog, poster),
                 destination=_location(movement.destination_text, catalog, poster),
                 reasons=lateness
+                + unread
                 + validate(
                     movement,
                     text,

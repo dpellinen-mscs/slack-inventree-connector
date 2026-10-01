@@ -739,7 +739,10 @@ prompt-injection cases, and any deviation on them is a hard failure.
   hold the marker, a link to the Slack message and the Slack user id.
 - Retention covers every table that repeats message text: raw events,
   extractions, candidates, review answers and stored API calls.
-- Photos are not downloaded in v1.0.
+- Photos are not downloaded in v1.0. No extractor sees a photo, so every
+  movement of a post that has one carries the review reason
+  `photo_not_read`: the photo may show other items, another quantity or
+  serials, and a person checks the reading against it.
 - Tokens and secrets are redacted in logs, errors and stored API calls, by
   type (a secret value type that prints as `***`) and by pattern as a
   second layer.
@@ -1053,9 +1056,25 @@ send to InvenTree.
     request, the response or the key. An API key is sent only over https, or to a server on the same
     machine. Proxy settings from the environment are not used, and
     redirects are not followed.
-  - No model has been scored yet: that needs recorded provider outputs.
-    The corpus test for this extractor checks only that the schema can say
-    every expected extraction and that the parser reads it back whole.
+  - Scored from recordings (`eval/recorded/`, `tests/llm/test_recorded_corpus.py`).
+    Prompt `llm-0.2`, `anthropic/claude-haiku-4.5` through an
+    OpenAI-compatible endpoint, corpus 0.2.0, matching not scored, one
+    recording:
+    - The model reading every post: movement detection precision 100%,
+      recall 92.7%; flag precision 91.9%, recall 70.8%; case exact match
+      74.3%. Its 16 missed flags show why flags that follow from the
+      fields are computed by rule (pack units, an implied place) and why a
+      photo is never left to the model.
+    - As the worker runs it (the rules first, the model for the posts they
+      decline, the reasons the validator derives by rule added): movement
+      detection precision 100%, recall 93.9%; flag precision 89.0%, recall
+      84.4%; case exact match 82.2%. The scorer still lists 4 missed
+      flags, all of them flags only a reader of the photo can raise
+      (group-004, -009, -010, -012); `photo_not_read` asks a person on each
+      of those movements, so the bar counts them as raised.
+    - Prompt `llm-0.1` read a post whose thread reply took the movement
+      back ("scratch that") as a take-out and a return. `llm-0.2` says that
+      a movement taken back is no movement.
 - **Disagreement.** When both extractors run and disagree on a quantity, a
   movement type or a location, that is a review reason.
 - **Versioning.** Prompt and schema are versioned, and the version is

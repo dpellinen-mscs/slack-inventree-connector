@@ -17,7 +17,15 @@ import pytest
 from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
-from stockthread.core.model import CandidateMovement, Extraction, LineItem, MessageInput, MovementType, PostKey
+from stockthread.core.model import (
+    CandidateMovement,
+    Extraction,
+    LineItem,
+    MessageInput,
+    MovementType,
+    PostKey,
+    ReasonCode,
+)
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.ingest import Drop, Revised
 from stockthread.slack.listener import Listener
@@ -1459,7 +1467,7 @@ def test_a_long_retry_after_near_the_end_still_gets_its_last_try_on_time(
 OTHER = "1790000001.000100"
 LLM_KEY = PostKey(WORKSPACE, CHANNEL, ROOT)
 GAVE = "gave truck 1 two Disc 40 from main stock"  # the rules do not know "gave": declined
-MODEL = "llm-0.1/test-model"
+MODEL = "llm-0.2/test-model"
 
 
 def read(quantity: int = 2, item: str = "Disc 40") -> Extraction:
@@ -1562,6 +1570,26 @@ def test_what_the_model_reads_is_still_checked_against_the_text(store: Store, sl
     movement = record.result["movements"][0]
     assert [reason["source"] for reason in movement["reasons"]] != []
     assert movement["gate"] != []  # it could not apply without a person
+
+
+@pytest.mark.parametrize("with_photo", [True, False])
+def test_a_reading_of_a_post_with_a_photo_waits_for_a_person(
+    store: Store, slack: FakeSlack, clock: Clock, with_photo: bool
+) -> None:
+    llm = FakeLLM(read())
+    worker = worker_with(llm, store, slack, clock)
+    posted = message(ROOT, GAVE, subtype="file_share" if with_photo else None)
+    if with_photo:
+        posted["event"]["files"] = [{"id": "F0ACME0001", "mimetype": "image/jpeg"}]
+    enqueue(store, posted)
+    read_and_answered(worker, clock)
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.result is not None
+    [movement] = record.result["movements"]
+    unread = {"code": ReasonCode.PHOTO_NOT_READ.value, "source": "rule", "detail": ""}
+    assert (unread in movement["reasons"]) is with_photo
+    assert (ReasonCode.PHOTO_NOT_READ.value in [gate[0] for gate in movement["gate"]]) is with_photo
 
 
 def test_a_post_the_model_declines_gets_no_reply(store: Store, slack: FakeSlack, clock: Clock, path: Path) -> None:

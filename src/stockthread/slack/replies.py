@@ -48,6 +48,7 @@ REASONS = {
     ReasonCode.QUANTITY_FROM_PHOTO: "A quantity was read from a photo.",
     ReasonCode.SERIAL_UNCONFIRMED: "A serial number is not confirmed.",
     ReasonCode.PHOTO_TEXT_MISMATCH: "The photo and the text disagree.",
+    ReasonCode.PHOTO_NOT_READ: "The post has a photo, and the connector does not read photos.",
     ReasonCode.CORRECTED_IN_THREAD: "A value was corrected.",
     ReasonCode.ACTOR_NOT_POSTER: "Someone other than the poster did this.",
     ReasonCode.SUSPICIOUS_INSTRUCTIONS: "The post contains instructions to the connector. They were ignored.",

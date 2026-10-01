@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 
@@ -12,13 +13,14 @@ from stockthread.core.model import (
     CandidateMovement,
     Flag,
     LineItem,
+    MessageInput,
     MovementType,
     PostFlag,
     ReasonCode,
     ReasonSource,
     ReviewReason,
 )
-from stockthread.core.validate import validate
+from stockthread.core.validate import photo_not_read, validate
 
 
 def take(item: str = "Disc 40", quantity: str | None = "2", **fields: Any) -> CandidateMovement:
@@ -416,3 +418,11 @@ def test_a_unit_that_is_not_the_one_in_the_text_needs_review(text: str, unit: st
 )
 def test_the_unit_in_the_text_is_accepted_in_any_spelling(text: str, unit: str | None) -> None:
     assert ReasonCode.QUANTITY_NOT_IN_TEXT not in codes(unit_take("2", unit), text)
+
+
+def test_a_photo_is_unread_while_its_message_is_in_the_post() -> None:
+    caption = MessageInput("1790000000.000100", "2 Disc 40 on my truck", file_ids=("F0ACME0001",))
+    text = MessageInput("1790000001.000100", "to truck 1")
+    assert photo_not_read([caption, text])
+    assert not photo_not_read([text])
+    assert not photo_not_read([replace(caption, deleted=True), text])

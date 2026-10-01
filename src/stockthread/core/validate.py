@@ -13,10 +13,12 @@ from __future__ import annotations
 import contextlib
 import re
 import unicodedata
+from collections.abc import Sequence
 from decimal import Decimal, InvalidOperation
 
 from stockthread.core.model import (
     CandidateMovement,
+    MessageInput,
     MovementType,
     PostFlag,
     ReasonCode,
@@ -112,6 +114,12 @@ def validate(
         if item.quantity is not None and item.quantity > max_quantity
     }
     return tuple(sorted(reasons, key=lambda reason: (reason.code.value, reason.source.value, reason.detail)))
+
+
+def photo_not_read(messages: Sequence[MessageInput]) -> bool:
+    """A message of the post that is not deleted carries a file. No extractor reads files, so every movement of
+    such a post has the reason PHOTO_NOT_READ."""
+    return any(message.file_ids for message in messages if not message.deleted)
 
 
 def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:

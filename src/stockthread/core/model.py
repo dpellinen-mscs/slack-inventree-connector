@@ -117,6 +117,7 @@ class ReasonCode(StrEnum):
     NO_TARGET_STOCK_ITEM = "no_target_stock_item"
     EXTRACTORS_DISAGREE = "extractors_disagree"
     LATE_INGEST = "late_ingest"
+    PHOTO_NOT_READ = "photo_not_read"
     PRECONDITION_FAILED = "precondition_failed"
 
 
