@@ -2650,6 +2650,24 @@ def test_a_click_handled_again_after_a_crash_tells_the_clicker_their_answer_is_r
     assert notes(worker) == [(SAM, CLICK_FEEDBACK["answered"]), (LUIS, CLICK_FEEDBACK["already_answered"])]
 
 
+def test_the_same_users_other_button_after_their_answer_is_told_it_was_not_recorded(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    clicked(store, click_on(reply, ts, 0, SAM, at="1790000100.000200"), "2")  # changes their mind: refused
+    worker.step()
+    assert statuses(path)[-2:] == [("done", "answered"), ("dropped", "already_answered")]
+    assert notes(worker) == [(SAM, CLICK_FEEDBACK["answered"]), (SAM, CLICK_FEEDBACK["already_answered"])]
+    button = store.button(reply["blocks"][-1]["elements"][1]["value"])
+    assert button is not None
+    assert store.answer(button.item.id) == (
+        {"button": 1, "kind": "record", "record": 2, "movement_type": None},
+        SAM,
+    )
+
+
 def test_a_note_belongs_to_its_own_click_only(store: Store, clock: Clock, path: Path) -> None:
     worker = asked(store, clock)
     reply, ts = posted(worker)

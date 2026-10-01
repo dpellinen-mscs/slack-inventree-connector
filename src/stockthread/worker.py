@@ -354,9 +354,11 @@ class Worker:
         status, outcome = self._answer(click, button)
         told = outcome
         if outcome == Answered.NOT_OPEN and button is not None:
-            # The click is handled again after a crash that came after its answer was recorded.
+            # The click is handled again after a crash that came after its answer was recorded: the same user,
+            # and the same button. The same user's other button is a changed answer, and it was refused.
             answer = self.store.answer(button.item.id)
-            told = Answered.ANSWERED if answer is not None and answer[1] == click.user else outcome
+            replayed = answer is not None and (answer[0].get("button"), answer[1]) == (button.position, click.user)
+            told = Answered.ANSWERED if replayed else outcome
         text = click_feedback(
             told,
             approver_only=button is not None and button.item.approver_only,
