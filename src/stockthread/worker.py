@@ -431,9 +431,11 @@ class Worker:
         except Exception as error:
             _log_failure("buttons of question", item.id, error)
             tries = self.store.buttons_failed(self.owner, item.id)
+            # Every failure pauses all take-downs, the last try of this question too: the next question waits
+            # out the same outage or rate limit instead of spending its tries in it.
+            wait = max(TAKE_DOWN_BACKOFF_SECONDS * 2 ** (min(tries, TAKE_DOWN_TRIES) - 1), _retry_after(error))
+            self._take_down_quiet_until = now + wait
             if tries < TAKE_DOWN_TRIES:
-                wait = max(TAKE_DOWN_BACKOFF_SECONDS * 2 ** (tries - 1), _retry_after(error))
-                self._take_down_quiet_until = now + wait
                 return 0
             removed = False
         self.store.buttons_taken_down(self.owner, item.id, removed=removed)
