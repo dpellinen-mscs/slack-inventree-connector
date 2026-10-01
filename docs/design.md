@@ -555,7 +555,39 @@ needs.
     after it, so a slow Slack never holds the queue up. A crash between
     the two loses the note, never the answer; a click handled again after
     its answer was recorded tells its own clicker that the answer stands.
-    Acting on the answer (validation again, the next question) comes next.
+  - **Acting on an answer (planned).** An answer is a fact about one
+    reading of the post, and it is applied to that reading only:
+    - *Scope.* A click is recorded only while the post has not moved on
+      from the dry run that asked. Every later reading is compared with
+      that one (`_same_reading`, lateness left out). While they are the
+      same, all answers given about it are replayed onto it, oldest first.
+      A reading that differs (an edit, a new thread message read
+      otherwise) starts over: earlier answers are kept in the audit trail
+      but no longer applied, and its own first question is asked.
+    - *Effects.* A part or location picked from a list, or a loose match
+      confirmed with "yes", becomes a matched line (`source: answer`).
+      "None of these" or "no" makes it unmatched, and the next question
+      names it (a thread reply). A movement type picked replaces an
+      unclear one, and validation runs again on the result, so a type
+      that contradicts the places is a new question. "Yes" to a doubt
+      about the whole reading, or to an approval-tier question from an
+      approver, clears the reason codes that question was asked for, for
+      that movement only. "No" to either ends the plan: the revision says
+      the reading was rejected and that nothing will be applied, and asks
+      for a corrected post or thread reply.
+    - *Then.* An answer makes the post due for a revision at once (no
+      sibling window). The revision applies the answers, runs validation
+      and the matcher's gate again, and posts the revised dry run with
+      the next question, or with "could apply" when none is left. Its
+      record lists the ids of the answers it applied. The answered
+      question's buttons are taken down as above.
+    - *Limits.* An answer never authorizes a write: the write gate of M3
+      checks the resolved plan again, and an approval answer counts only
+      from a user who is an approver when it is applied, not only when it
+      was clicked. A confirmed match becomes an alias only after the plan
+      is applied and verified ([0012](decisions/0012-first-confirmation-becomes-alias.md)).
+      Answers given as thread replies follow the same rules once they are
+      read (a later slice).
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can
   approve. Display names are never trusted. Only the poster or an approver
