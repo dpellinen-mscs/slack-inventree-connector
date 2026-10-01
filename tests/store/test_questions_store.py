@@ -329,3 +329,72 @@ def test_a_button_of_another_question_answers_nothing(store: Store) -> None:
     assert yes is not None
     forged = replace(yes, id="z" * 22)  # no such button of this question
     assert store.answer_question(OWNER, forged, "U0SAM0001") is Answered.NOT_OPEN
+
+
+def shown(path: Path) -> list[tuple[str, str, int]]:
+    with sqlite3.connect(path) as raw:
+        return raw.execute("SELECT status, buttons, buttons_tries FROM review_items ORDER BY id").fetchall()
+
+
+def test_a_closed_question_is_listed_until_its_buttons_are_taken_down(store: Store, path: Path) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    assert store.closed_with_buttons(limit=10) == []  # open: its buttons stay
+    yes = store.button(YES)
+    assert yes is not None
+    assert store.answer_question(OWNER, yes, "U0LUIS0005") is Answered.ANSWERED
+    [(item, answered_by)] = store.closed_with_buttons(limit=10)
+    assert (item.id, item.post, item.message_ts, item.status, answered_by) == (
+        yes.item.id, POST, REPLY, QuestionStatus.ANSWERED, "U0LUIS0005"
+    )  # fmt: skip
+    assert store.buttons_failed(OWNER, item.id) == 1
+    assert store.buttons_failed(OWNER, item.id) == 2
+    store.buttons_taken_down(OWNER, item.id, removed=True)
+    store.buttons_taken_down(OWNER, item.id, removed=False)  # once: the first outcome stands
+    assert store.closed_with_buttons(limit=10) == []
+    assert shown(path) == [("answered", "removed", 2)]
+    assert store.buttons_failed(OWNER, item.id) == 2  # no longer counted
+
+
+def test_stale_questions_are_listed_fewest_tries_first(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    second = confirm("s" * 22, "t" * 22)
+    reply_again(store, "1790000100.000100", 2, DryRunOutcome.REPLIED, question=second)
+    reply_again(store, "1790000200.000100", 3, DryRunOutcome.RETRACTED)
+    first, then = (item.id for item in store.questions(POST))
+    assert [i.id for i, _ in store.closed_with_buttons(limit=10)] == [first, then]
+    store.buttons_failed(OWNER, first)
+    assert [(i.id, by) for i, by in store.closed_with_buttons(limit=10)] == [(then, None), (first, None)]
+    assert [i.id for i, _ in store.closed_with_buttons(limit=1)] == [then]
+
+
+def test_taking_buttons_down_needs_the_lock(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    reply_again(store, "1790000100.000100", 2, DryRunOutcome.RETRACTED)
+    [(item, _)] = store.closed_with_buttons(limit=10)
+    store.release_lock(OWNER)
+    with pytest.raises(Exception, match="lock"):
+        store.buttons_taken_down(OWNER, item.id, removed=True)
+    with pytest.raises(Exception, match="lock"):
+        store.buttons_failed(OWNER, item.id)
+
+
+@pytest.mark.parametrize(
+    ("setup", "statement"),
+    [
+        ("", "UPDATE review_items SET buttons = 'removed'"),  # still open
+        ("stale", "UPDATE review_items SET buttons = 'shown'"),
+        ("removed", "UPDATE review_items SET buttons = 'left'"),
+        ("removed", "UPDATE review_items SET buttons = 'shown'"),
+    ],
+)
+def test_buttons_are_taken_down_once_after_their_question_closed(
+    store: Store, path: Path, setup: str, statement: str
+) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    if setup:
+        reply_again(store, "1790000100.000100", 2, DryRunOutcome.RETRACTED)
+    if setup == "removed":
+        [(item, _)] = store.closed_with_buttons(limit=10)
+        store.buttons_taken_down(OWNER, item.id, removed=True)
+    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.IntegrityError, match="taken down once"):
+        raw.execute(statement)

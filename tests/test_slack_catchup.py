@@ -96,6 +96,12 @@ class FakeSlack:
     def chat_postEphemeral(self, **kwargs: Any) -> dict[str, Any]:
         raise AssertionError("no clicks in these tests")
 
+    def conversations_replies(self, **kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "messages": [], "has_more": False}  # no reply found: buttons are left
+
+    def chat_update(self, **kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("no reply is edited in these tests")
+
 
 class Clock:
     def __init__(self, ts: str) -> None:

@@ -817,6 +817,44 @@ class Store:
         newest = self._db.execute("SELECT max(id) FROM post_messages WHERE post_id = ?", (post_id,)).fetchone()[0]
         return bool(newest > through or self._changes_through(post_id) > changes)
 
+    def closed_with_buttons(self, limit: int) -> list[tuple[ReviewItem, str | None]]:
+        """Questions answered or gone stale whose reply still shows them (migration 0012), with who answered (None
+        for a stale one): fewest failed tries first, then oldest first."""
+        rows = self._db.execute(
+            "SELECT i.id, i.revision, i.question, i.approver_only, i.channel_id, i.message_ts, i.status, i.poster_id,"
+            " i.expires_from, p.workspace_id, p.channel_id, p.ts, i.answered_by"
+            " FROM review_items i JOIN posts p ON p.id = i.post_id"
+            " WHERE i.status <> 'open' AND i.buttons = 'shown' AND i.message_ts IS NOT NULL"
+            " ORDER BY i.buttons_tries, i.id LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [(_review_item(PostKey(*row[9:12]), row[:9]), row[12]) for row in rows]
+
+    def buttons_taken_down(self, owner: str, item_id: int, *, removed: bool) -> None:
+        """The reply of a closed question no longer shows it (`removed`), or the connector gave up on it."""
+        with self._transaction():
+            self._check_lock(owner)
+            row = self._db.execute(
+                "SELECT post_id FROM review_items WHERE id = ? AND buttons = 'shown'", (item_id,)
+            ).fetchone()
+            if row is None:
+                return
+            self._db.execute(
+                "UPDATE review_items SET buttons = ? WHERE id = ?", ("removed" if removed else "left", item_id)
+            )
+            self._audit(Actor.PLANNER, "buttons_removed" if removed else "buttons_left", post_id=int(row[0]))
+
+    def buttons_failed(self, owner: str, item_id: int) -> int:
+        """Count a failed attempt to take a closed question's buttons down. Returns the failed attempts so far."""
+        with self._transaction():
+            self._check_lock(owner)
+            self._db.execute(
+                "UPDATE review_items SET buttons_tries = buttons_tries + 1 WHERE id = ? AND buttons = 'shown'",
+                (item_id,),
+            )
+            row = self._db.execute("SELECT buttons_tries FROM review_items WHERE id = ?", (item_id,)).fetchone()
+            return 0 if row is None else int(row[0])
+
     def answer(self, item_id: int) -> tuple[Mapping[str, Any], str] | None:
         """The answer of a question and who gave it, or None while it has none."""
         row = self._db.execute(

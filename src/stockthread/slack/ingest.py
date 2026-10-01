@@ -276,6 +276,8 @@ def revised_message(payload: object, settings: SlackSettings) -> tuple[str, str]
         team = part.get("user_team", part.get("team")) if isinstance(part, Mapping) else None
         if team is not None and team != settings.workspace_id:
             return None
+        if isinstance(part, Mapping) and part is not event and _is_bot(part):
+            return None  # an app's message, such as the connector's own reply when it takes buttons down
     if subtype == "message_deleted":
         ts = event.get("deleted_ts") or before
     elif subtype == "message_changed":

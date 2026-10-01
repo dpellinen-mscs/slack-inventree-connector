@@ -560,6 +560,9 @@ class SlowClient:
             raise self.error
         return {"ok": True, "ts": "1790000099.000100"}
 
+    def chat_update(self, **kwargs: Any) -> dict[str, Any]:
+        return self.chat_postEphemeral(**kwargs)
+
     def chat_postEphemeral(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
         if not self.release.wait(10):
@@ -641,7 +644,7 @@ def test_a_note_has_its_own_deadline_and_never_waits_for_a_reply() -> None:
         poster.chat_postEphemeral(**note)
 
 
-def test_only_one_note_is_in_flight_so_stuck_notes_never_pile_up() -> None:
+def test_only_one_side_call_is_in_flight_so_stuck_calls_never_pile_up() -> None:
     client = SlowClient()
     poster = run_module.DeadlinePoster(client, deadline=0.05, note_deadline=0.05)
     note = {"channel": CHANNEL, "user": "U0SAM0001", "thread_ts": "1790000000.000100", "text": "noted"}
@@ -649,6 +652,8 @@ def test_only_one_note_is_in_flight_so_stuck_notes_never_pile_up() -> None:
         poster.chat_postEphemeral(**note)
     with pytest.raises(run_module.PosterBusy):
         poster.chat_postEphemeral(**note)  # no second thread while the first is stuck
+    with pytest.raises(run_module.PosterBusy):
+        poster.chat_update(channel=CHANNEL, ts="1790000099.000100", text="edit", blocks=[])  # nor another side call
     assert len(client.calls) == 1
     client.release.set()
     wait_until_idle()

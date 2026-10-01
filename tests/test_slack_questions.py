@@ -266,7 +266,7 @@ def test_the_question_goes_below_the_reply_in_one_message() -> None:
     body = with_question(reply, message(question))
     assert body["text"] == reply["text"]
     assert body["blocks"][: len(reply["blocks"])] == reply["blocks"]
-    assert body["blocks"][len(reply["blocks"])] == {"type": "divider"}
+    assert body["blocks"][len(reply["blocks"])] == {"type": "divider", "block_id": "question"}
     assert body["blocks"][-2:] == message(question)["blocks"]
 
 

@@ -31,6 +31,8 @@ from stockthread.slack.replies import (
     click_feedback,
     dry_run_reply,
     escape,
+    question_closed,
+    without_question,
 )
 from stockthread.store import Answered
 
@@ -225,3 +227,22 @@ def test_click_feedback_names_the_expiry_and_who_may_answer() -> None:
         == CLICK_FEEDBACK["not_allowed"]
     )
     assert click_feedback("stale", approver_only=True, approvers=True, expiry_hours=24) == CLICK_FEEDBACK["stale"]
+
+
+def test_without_question_keeps_what_comes_before_the_marked_divider() -> None:
+    reply = [{"type": "section", "block_id": "a"}, {"type": "divider"}, {"type": "section", "block_id": "b"}]
+    question = [{"type": "divider", "block_id": "question"}, {"type": "section"}, {"type": "actions"}]
+    assert without_question([*reply, *question]) == reply
+    assert without_question(reply) is None  # an unmarked divider is part of the reply
+    assert without_question([]) is None
+    assert without_question([*reply, "junk", *question]) is None
+
+
+def test_a_closed_question_says_who_answered_only_by_a_slack_user_id() -> None:
+    def text(by: str | None) -> str:
+        return str(question_closed(by)["elements"][0]["text"])
+
+    assert text(None) == "This question was replaced by a newer reply in this thread."
+    assert text("U0SAM0001") == "This question was answered by <@U0SAM0001>."
+    assert text("<!channel>") == "This question was answered."
+    assert text("U0SAM0001> <!here") == "This question was answered."
