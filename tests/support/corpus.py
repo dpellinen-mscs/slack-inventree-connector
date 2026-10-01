@@ -1,0 +1,64 @@
+"""The eval corpus for tests: its cases, its expected movements as candidates, and its synthetic catalog."""
+
+from __future__ import annotations
+
+import json
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+from stockthread.core.matching import Alias, Catalog, LocationRecord, PartRecord
+from stockthread.core.model import CandidateMovement, LineItem, MovementType
+
+EVAL = Path(__file__).resolve().parents[2] / "eval"
+
+
+def cases() -> list[dict[str, Any]]:
+    cases = []
+    for path in sorted((EVAL / "cases").glob("*.json")):
+        cases.extend(json.loads(path.read_text(encoding="utf-8"))["cases"])
+    return cases
+
+
+def candidate(expected: dict[str, Any]) -> CandidateMovement:
+    """An expected movement as an extractor that raised no flag at all would return it."""
+    return CandidateMovement(
+        MovementType(expected["movement_type"]),
+        tuple(
+            LineItem(
+                item["item_text"],
+                None if item["quantity"] is None else Decimal(str(item["quantity"])),
+                item.get("unit"),
+                None if item.get("pack_size") is None else Decimal(str(item["pack_size"])),
+            )
+            for item in expected["line_items"]
+        ),
+        expected["source_text"],
+        expected["destination_text"],
+    )
+
+
+def _load(name: str) -> Any:
+    return json.loads((EVAL / "catalog" / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def eval_catalog() -> tuple[Catalog, dict[int, str], dict[int, str]]:
+    """The synthetic catalog, with made-up primary keys. Returns it with pk -> IPN and pk -> path."""
+    parts = tuple(
+        PartRecord(pk, p["ipn"], p["name"], p["keywords"]) for pk, p in enumerate(_load("parts")["parts"], start=1)
+    )
+    locations = tuple(
+        LocationRecord(pk, loc["path"], loc["description"], loc["structural"])
+        for pk, loc in enumerate(_load("locations")["locations"], start=101)
+    )
+    part_pk = {p.ipn: p.pk for p in parts}
+    location_pk = {loc.path: loc.pk for loc in locations}
+    aliases = _load("aliases")
+    catalog = Catalog(
+        parts=parts,
+        locations=locations,
+        part_aliases=tuple(Alias(a["text"], part_pk[a["part"]]) for a in aliases["parts"]),
+        location_aliases=tuple(Alias(a["text"], location_pk[a["location"]]) for a in aliases["locations"]),
+        vehicles={u["id"]: location_pk[u["vehicle"]] for u in _load("users")["users"] if u["vehicle"]},
+    )
+    return catalog, {v: k for k, v in part_pk.items()}, {v: k for k, v in location_pk.items()}

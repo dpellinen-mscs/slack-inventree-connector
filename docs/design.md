@@ -434,6 +434,31 @@ needs.
   row in the connector's database. The handler checks that the channel and
   the message in the payload are the ones stored with that id. Buttons are
   removed once a decision is made.
+- **Questions.** A post with review reasons gets one focused question at
+  a time in its thread (`core/questions.py`, pure: wording and buttons
+  belong to the adapter). The answer re-runs validation, and the next
+  question follows. The question is the first in this order of tiers,
+  across all movements of the post, earlier movements and lines first:
+  1. doubts about the whole reading (instructions in the text, a
+     contradiction, a correction, words not in the text, a hedge or a
+     plan): "Is this right?", yes or no, since no detail answer can
+     clear them, and details asked first would be wasted;
+  2. an unclear movement type: one button per type;
+  3. items: a missing item or an unmatched part is named in a reply; an
+     ambiguous part with at most 5 candidates is a button choice, with
+     more it is a reply; a part found by the words or fuzzy rule is
+     confirmed, yes or no;
+  4. quantities (missing, vague, a container or a pack unit): a reply;
+  5. the source, then 6. the destination, the same way as parts (an
+     implied place or an unmapped vehicle is named in a reply);
+  7. serial numbers: a reply;
+  8. stock (several stock items, none, or too few): yes or no until
+     source selection asks it as a choice of stock items;
+  9. reasons only an approver clears (late, above the limit, someone
+     else as the actor, stock changed): yes or no.
+
+  Every reason code belongs to a tier, so every reason leads to a
+  question, and a post with no reason gets none (checked on the corpus).
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can
   approve. Display names are never trusted. Only the poster or an approver

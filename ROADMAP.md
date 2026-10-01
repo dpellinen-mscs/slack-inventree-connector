@@ -80,6 +80,8 @@ The quickstart reaches the first dry-run in about 15 minutes.
 
 - [ ] Review items with explicit reasons, stored in the audit trail
 - [ ] One focused question per post in the thread, with buttons for short candidate lists
+  - [x] Which question: `core/questions.py` picks one per post by tier (design section 4, "Questions")
+  - [ ] The question in the thread, with buttons and a stored button row
 - [ ] Answers by button or by thread reply update the candidate and re-run validation
 - [ ] Authorization: who may answer and who may approve, by button and by thread reply
 - [ ] Plan revisions: an edit, a deletion or a new thread message makes a plan stale
