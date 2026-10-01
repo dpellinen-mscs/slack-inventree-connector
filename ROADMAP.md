@@ -95,7 +95,7 @@ The quickstart reaches the first dry-run in about 15 minutes.
 - [ ] Source selection: choose concrete stock items for each line, serials included
 - [ ] Plan expiry
 - [ ] Setup check: users without a vehicle, token roles, locations that are missing
-- [ ] Admin guidance: how to model vehicles and sites as stock locations
+- [x] Admin guidance: how to model vehicles and sites as stock locations (`docs/locations.md`)
 
 **DoD:** every corpus case with a review reason produces the expected
 question. An answered question leads to a fully resolved dry-run plan with

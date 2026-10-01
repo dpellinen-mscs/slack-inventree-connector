@@ -75,6 +75,8 @@ What to expect in this version:
   post. For "my truck" to work, say whose vehicle it is in the `[vehicles]` section of
   `stockthread.toml`: `U0SAM0001 = "Vehicles/Truck 1"` (the person's Slack member id, and the
   location's path exactly as InvenTree shows it). The log names every path it cannot find.
+  [Modeling vehicles and sites](docs/locations.md) shows a layout that works and how place names
+  are matched.
 - Posts made while the connector was stopped are read from the channel history when it starts
   again, up to `catch_up_hours` back (a day at most gets a reply), and their dry run says it was
   read late. Posts from before the very first start are left alone.
@@ -106,6 +108,7 @@ turn them on again in *Event Subscriptions*; catch-up reads what was missed, wit
 
 - [Design](docs/design.md): pipeline, architecture options, safety model
 - [Threat model](docs/threat-model.md): what can go wrong, and which control answers it
+- [Modeling vehicles and sites](docs/locations.md): stock locations for vehicles, sites and stock rooms
 - [Roadmap](ROADMAP.md): milestones and their definitions of done
 - [Decisions](docs/decisions/): the decision log
 - [Research notes](docs/research/): InvenTree, Slack, prior art
