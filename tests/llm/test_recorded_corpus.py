@@ -47,7 +47,8 @@ def _module(name: str, path: Path) -> Any:
 
 VISION_FLAGS = frozenset({Flag.QUANTITY_FROM_PHOTO, Flag.SERIAL_UNCONFIRMED, Flag.PHOTO_TEXT_MISMATCH})
 """The flags only a reader of the photo can raise. No extractor reads one: the worker gives every movement of a post
-with a photo the reason photo_not_read, which asks a person as these would."""
+with a photo the reason photo_not_read, which asks a person as these would. That holds only while a "yes" to
+photo_not_read does not clear the questions these flags would ask (docs/design.md, section 6)."""
 
 
 def _with_rule_reasons(extraction: Extraction, messages: Sequence[MessageInput]) -> Extraction:
@@ -153,7 +154,10 @@ def test_perfect_answers_recorded_and_read_back_score_full_marks() -> None:
     assert alone.case_exact.as_dict()["value"] == 1.0
     assert alone.detection.as_dict()["recall"] == 1.0
     assert pipeline.detection.as_dict() == alone.detection.as_dict()
-    assert pipeline.hard_failures == 0  # the rules only add reasons: ambig-005, adv-006 and adv-010 get one more
+    # The rules add a reason the corpus does not expect: quantity_missing beside quantity_vague (ambig-005,
+    # ambig-016), actor_not_poster (adv-006, adv-010). Extra reasons only ask more.
+    assert pipeline.case_exact.as_dict()["correct"] == alone.case_exact.as_dict()["correct"] - 4
+    assert pipeline.hard_failures == 0
 
 
 def test_a_recording_with_no_answers_scores_as_the_rules_alone() -> None:

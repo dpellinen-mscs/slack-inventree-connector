@@ -742,7 +742,12 @@ prompt-injection cases, and any deviation on them is a hard failure.
 - Photos are not downloaded in v1.0. No extractor sees a photo, so every
   movement of a post that has one carries the review reason
   `photo_not_read`: the photo may show other items, another quantity or
-  serials, and a person checks the reading against it.
+  serials, and a person checks the reading against it. A "yes" to that
+  question confirms the reading only: once answers clear reasons, it must
+  not clear the questions a reader of the photo would have raised
+  (serials, a quantity read from it). Those are still asked. Two
+  limits: a photo posted after the sibling window starts its own post,
+  and an image that arrives as a link preview is not a file.
 - Tokens and secrets are redacted in logs, errors and stored API calls, by
   type (a secret value type that prints as `***`) and by pattern as a
   second layer.
