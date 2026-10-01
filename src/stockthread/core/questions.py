@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 from typing import Literal, Protocol
 
-from stockthread.core.model import CandidateMovement, Match, MatchStatus, ReasonCode, ReviewReason
+from stockthread.core.model import CandidateMovement, Match, MatchStatus, MovementType, ReasonCode, ReviewReason
 from stockthread.core.validate import TYPE_UNCLEAR
 
 MAX_CHOICES = 5
@@ -218,3 +218,28 @@ def _for_match(match: Match, index: int, line: int | None, side: Side | None) ->
         ask = Ask.CHOOSE_PART if part else Ask.CHOOSE_LOCATION
         return Question(ask, reason.code, index, line, side, match.candidates)
     return Question(Ask.NAME_PART if part else Ask.NAME_LOCATION, reason.code, index, line, side)
+
+
+@dataclass(frozen=True)
+class Choice:
+    """One button of a question. A question asked as a thread reply has none."""
+
+    kind: Literal["yes", "no", "record", "none", "type"]
+    record: int | None = None
+    """The part or location (`record`), else None."""
+    movement_type: MovementType | None = None
+    """The movement type (`type`), else None."""
+
+
+_TYPES = tuple(kind for kind in MovementType if kind is not MovementType.UNCLEAR)
+
+
+def choices(question: Question) -> tuple[Choice, ...]:
+    """The buttons of a question, in order. Every button stands for exactly one answer."""
+    if question.ask in (Ask.CONFIRM, Ask.CONFIRM_PART, Ask.CONFIRM_LOCATION):
+        return (Choice("yes"), Choice("no"))
+    if question.ask is Ask.MOVEMENT_TYPE:
+        return tuple(Choice("type", movement_type=kind) for kind in _TYPES)
+    if question.ask in (Ask.CHOOSE_PART, Ask.CHOOSE_LOCATION):
+        return (*(Choice("record", record=pk) for pk in question.candidates), Choice("none"))
+    return ()

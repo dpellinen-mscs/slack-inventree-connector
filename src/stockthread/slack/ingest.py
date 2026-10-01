@@ -24,6 +24,9 @@ POST_SUBTYPES = frozenset({None, "file_share", "thread_broadcast"})
 ALLOWED_SUBTYPES = POST_SUBTYPES | {"message_changed", "message_deleted"}
 ACTIONS = frozenset({"apply", "reject", "answer", "undo"})
 """The buttons the connector posts. A click on anything else is dropped."""
+_NUMBERED = re.compile(r"(answer)-(?:0|[1-9][0-9]?)")
+"""Buttons in one block need different action ids, so the buttons of a question are answer-0, answer-1, ...
+They are read as "answer": what a button means is in its stored row, never in its action id."""
 APPROVER_ACTIONS = frozenset({"apply"})
 """Buttons only an approver may click. For the others (answers, corrections, undo) the poster may click too,
 and only the stored button row knows the poster, so review checks those (design section 4, "Authorization")."""
@@ -350,6 +353,9 @@ def _action(payload: Mapping[str, Any], settings: SlackSettings) -> Decision:
         raise _Malformed
     action = _object(actions[0])
     action_id = _text(action.get("action_id"))
+    numbered = _NUMBERED.fullmatch(action_id)
+    if numbered:
+        action_id = numbered.group(1)
     if action_id not in ACTIONS or action.get("type") != "button":
         return Drop(DropReason.UNKNOWN_ACTION)
     if action_id in APPROVER_ACTIONS and user not in settings.approvers:
