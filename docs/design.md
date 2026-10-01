@@ -465,6 +465,22 @@ needs.
   carrying a stored button id; ingest reads them all as `answer`. Labels
   that would read the same get the record's key, and a long location path
   is cut from the left so the place itself stays visible.
+  - **Asked in the reply (built).** The question goes below the dry-run
+    reply, after a divider, in the same message: the reply takes at most
+    42 blocks and the question 3, within Slack's 50. The notification text
+    stays the reply's own. The question and one row per button (a random
+    128-bit id and the answer it stands for) are stored in the same
+    transaction as the reply's record (`review_items`, `interactions`;
+    migration 0010), so no button a reply carries is without its row, and
+    no question is posted apart from the reply it belongs to. Button ids
+    are made once per decision: a reply whose call is retried is sent, and
+    stored, with the same ones. A reply that was given up on stores none. A
+    reply that Slack posted without a usable timestamp keeps a question
+    that no click can fit. The question is stored as codes, indexes and
+    primary keys, never words of the post. A post has at most one open
+    question: a revised reply, or a notice that the reply no longer stands,
+    makes it stale (an unchanged revision leaves it open). Removing stale
+    buttons from Slack and handling clicks come next.
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can
   approve. Display names are never trusted. Only the poster or an approver
@@ -909,10 +925,10 @@ and needs no extra service.
 | `extractions` | Extractor name and version, prompt version, raw output |
 | `candidates` | Candidate movements and line items |
 | `matches` | Match results with candidates and the rule that matched |
-| `review_items` | Reasons, the question asked, the answer, who answered |
+| `review_items` | One question per dry run that asked one: the question as ids and codes, approvers only or not, the message it was asked in, open, answered or stale, the answer and who answered (migration 0010) |
 | `requests` | The state machine of section 7, unique on the request key, with the marker id |
 | `request_attempts` | One row per apply or undo attempt: marker, snapshot, request body, outcome |
-| `interactions` | Button ids with the message they belong to, the plan revision and the decision |
+| `interactions` | One row per button: its random id, its question and the answer it stands for (migration 0010) |
 | `instance_lock` | The single-instance lock with its heartbeat |
 | `api_calls` | Every InvenTree request and response, redacted |
 | `aliases` | Alias, target, who confirmed it, from which review item |

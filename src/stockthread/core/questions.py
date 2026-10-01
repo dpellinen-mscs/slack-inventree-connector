@@ -12,10 +12,10 @@ Pure: the question is data. Wording and buttons belong to the Slack adapter.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from stockthread.core.model import CandidateMovement, Match, MatchStatus, MovementType, ReasonCode, ReviewReason
 from stockthread.core.validate import TYPE_UNCLEAR
@@ -246,3 +246,57 @@ def choices(question: Question) -> tuple[Choice, ...]:
     if question.ask in (Ask.CHOOSE_PART, Ask.CHOOSE_LOCATION):
         return (*(Choice("record", record=pk) for pk in question.candidates), Choice("none"))
     return ()
+
+
+def question_json(question: Question) -> dict[str, Any]:
+    """The question as stored with its reply: codes, indexes and primary keys, never words of the post."""
+    return {
+        "ask": question.ask.value,
+        "reason": question.reason.value,
+        "movement": question.movement,
+        "line": question.line,
+        "side": question.side,
+        "candidates": list(question.candidates),
+        "approver_only": question.approver_only,
+    }
+
+
+def question_from_json(stored: Mapping[str, Any]) -> Question:
+    side = stored["side"]
+    if side not in (None, "source", "destination"):
+        raise ValueError("not a side")
+    return Question(
+        Ask(stored["ask"]),
+        ReasonCode(stored["reason"]),
+        _index(stored["movement"]),
+        None if stored["line"] is None else _index(stored["line"]),
+        side,
+        tuple(_index(pk) for pk in stored["candidates"]),
+        stored["approver_only"] is True,
+    )
+
+
+def choice_json(choice: Choice) -> dict[str, Any]:
+    """What one button stands for, as stored with its row."""
+    return {
+        "kind": choice.kind,
+        "record": choice.record,
+        "movement_type": None if choice.movement_type is None else choice.movement_type.value,
+    }
+
+
+def choice_from_json(stored: Mapping[str, Any]) -> Choice:
+    kind = stored["kind"]
+    if kind not in ("yes", "no", "record", "none", "type"):
+        raise ValueError("not a choice")
+    record = None if stored["record"] is None else _index(stored["record"])
+    kind_of = None if stored["movement_type"] is None else MovementType(stored["movement_type"])
+    if (record is not None) != (kind == "record") or (kind_of is not None) != (kind == "type"):
+        raise ValueError("a choice carries a record or a type only when it is one")
+    return Choice(kind, record, kind_of)
+
+
+def _index(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError("not an index or a primary key")
+    return value

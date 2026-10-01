@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from typing import Any
 
@@ -9,8 +10,27 @@ import pytest
 from corpus import cases, corpus_views, eval_catalog
 
 from stockthread.core.model import CandidateMovement, LineItem, Match, MatchRule, MatchStatus, MovementType, ReasonCode
-from stockthread.core.questions import Ask, Choice, Question, choices, pick_question
-from stockthread.slack.replies import MAX_LABEL, REASONS, MovementView, question_message
+from stockthread.core.questions import (
+    Ask,
+    Choice,
+    Question,
+    choice_from_json,
+    choice_json,
+    choices,
+    pick_question,
+    question_from_json,
+    question_json,
+)
+from stockthread.slack.replies import (
+    MAX_BLOCKS,
+    MAX_LABEL,
+    MAX_MOVEMENTS,
+    REASONS,
+    MovementView,
+    dry_run_reply,
+    question_message,
+    with_question,
+)
 
 PARTS = {1: "Norvane Disc 40 Access Point", 2: "Norvane Disc 60 Access Point", 3: "x" * 100}
 LOCATIONS = {10: "Warehouse/Main Stock", 11: "Vehicles/Truck 1", 12: "Vehicles/Truck 2", 13: "<!channel>", 14: "  "}
@@ -184,3 +204,61 @@ def test_every_corpus_question_can_be_shown(case: dict[str, Any]) -> None:
     labels = [b["text"]["text"] for b in buttons(body)]
     assert all(0 < len(label) <= MAX_LABEL for label in labels)
     assert len(set(labels)) == len(labels)
+
+
+@pytest.mark.parametrize("case", cases(), ids=lambda case: case["id"])
+def test_every_corpus_question_is_stored_as_ids_and_read_back(case: dict[str, Any]) -> None:
+    views = corpus_views(case)
+    question = pick_question(views)
+    if question is None:
+        return
+    stored = json.loads(json.dumps(question_json(question)))
+    assert question_from_json(stored) == question
+    for choice in choices(question):
+        assert choice_from_json(json.loads(json.dumps(choice_json(choice)))) == choice
+    # Codes, indexes and keys only: no words of the post.
+    words = {message.get("text") or "" for message in case["post"]["messages"]} - {""}
+    assert not any(text in json.dumps(stored) for text in words)
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"kind": "record", "record": None, "movement_type": None},
+        {"kind": "yes", "record": 1, "movement_type": None},
+        {"kind": "type", "record": None, "movement_type": None},
+        {"kind": "maybe", "record": None, "movement_type": None},
+        {"kind": "record", "record": True, "movement_type": None},
+        {"kind": "record", "record": -1, "movement_type": None},
+    ],
+)
+def test_a_stored_choice_that_does_not_fit_its_kind_is_refused(stored: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match=r"choice|index"):
+        choice_from_json(stored)
+
+
+def test_a_stored_question_with_a_bad_side_or_index_is_refused() -> None:
+    good = question_json(Question(Ask.CHOOSE_LOCATION, ReasonCode.LOCATION_AMBIGUOUS, 0, None, "source", (10, 11)))
+    for bad in ({"side": "middle"}, {"movement": "0"}, {"candidates": [10, False]}, {"line": -1}):
+        with pytest.raises(ValueError, match=r"side|index"):
+            question_from_json({**good, **bad})
+
+
+def test_the_question_goes_below_the_reply_in_one_message() -> None:
+    question = Question(Ask.CONFIRM, ReasonCode.LATE_INGEST, 0, approver_only=True)
+    reply = dry_run_reply([view()], PARTS, LOCATIONS)
+    body = with_question(reply, message(question))
+    assert body["text"] == reply["text"]
+    assert body["blocks"][: len(reply["blocks"])] == reply["blocks"]
+    assert body["blocks"][len(reply["blocks"])] == {"type": "divider"}
+    assert body["blocks"][-2:] == message(question)["blocks"]
+
+
+def test_the_longest_reply_still_has_room_for_its_question() -> None:
+    question = Question(Ask.MOVEMENT_TYPE, ReasonCode.MOVEMENT_UNCLEAR, MAX_MOVEMENTS + 4)
+    views = [view() for _ in range(MAX_MOVEMENTS + 5)]
+    body = with_question(dry_run_reply(views, PARTS, LOCATIONS), message(question, *views))
+    assert len(body["blocks"]) <= MAX_BLOCKS
+    too_many = {"text": "", "blocks": [{"type": "divider"}] * MAX_BLOCKS}
+    with pytest.raises(ValueError, match="more blocks"):
+        with_question(too_many, message(question, *views))

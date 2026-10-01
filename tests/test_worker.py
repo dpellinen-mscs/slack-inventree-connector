@@ -2232,3 +2232,95 @@ def test_a_standing_reply_whose_record_expired_is_revised_rather_than_called_unc
     worker.step()
     assert [reply["text"] for reply in slack.posted][1] == "Revised dry run: 1 movement, nothing changed."
     assert revisions(path) == [(2, "replied", True)]
+
+
+# Questions (design section 4, "Questions"): the one question a post needs is asked in its reply.
+
+NO_SOURCE = "took 2 Disc 40 to truck 1"
+
+
+def test_a_post_with_a_reason_asks_its_question_in_the_reply(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    enqueue(store, message(ROOT, NO_SOURCE))
+    due(worker, clock)
+    [reply] = slack.posted
+    assert reply["blocks"][-2] == {"type": "divider"}
+    assert "Where was it taken from?" in reply["blocks"][-1]["text"]["text"]
+    assert reply["text"] == "Dry run: 1 movement, nothing changed."
+    [item] = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert item.question["ask"] == "name_location"
+    assert item.question["side"] == "source"
+    assert (item.revision, item.message_ts, item.approver_only) == (1, "1790009999.000001", False)
+
+
+def test_a_clear_post_asks_nothing(worker: Worker, store: Store, slack: FakeSlack, clock: Clock) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    assert all(block["type"] != "actions" for block in slack.posted[0]["blocks"])
+    assert store.questions(PostKey(WORKSPACE, CHANNEL, ROOT)) == []
+
+
+def test_each_button_carries_the_id_of_its_stored_row(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at(f"{1790000000 + LATE_AFTER_SECONDS + 60}.000000")  # read late: only an approver clears that
+    worker.step()
+    [reply] = slack.posted
+    actions = reply["blocks"][-1]
+    assert actions["type"] == "actions"
+    [item] = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert item.approver_only is True
+    assert item.question["reason"] == "late_ingest"
+    found = []
+    for n, element in enumerate(actions["elements"]):
+        assert element["action_id"] == f"answer-{n}"
+        button = store.button(element["value"])
+        assert button is not None
+        assert (button.item, button.position) == (item, n)
+        found.append(button.choice["kind"])
+    assert found == ["yes", "no"]
+    assert len({element["value"] for element in actions["elements"]}) == 2
+
+
+def test_a_reply_still_on_its_way_is_stored_with_the_buttons_it_was_sent_with(store: Store, clock: Clock) -> None:
+    slow = SlowSlack()
+    worker = Worker(settings(), store, OWNER, slow, lambda: CATALOG, clock)
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at(f"{1790000000 + LATE_AFTER_SECONDS + 60}.000000")
+    worker.step()
+    assert slow.posted == []  # still running
+    assert store.questions(PostKey(WORKSPACE, CHANNEL, ROOT)) == []
+    clock.at(f"{1790000000 + LATE_AFTER_SECONDS + 120}.000000")
+    worker.step()
+    [reply] = slow.posted
+    for element in reply["blocks"][-1]["elements"]:
+        assert store.button(element["value"]) is not None
+
+
+def test_a_reply_that_is_given_up_on_stores_no_question(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, NO_SOURCE))
+    slack.failures = 10_000
+    due(worker, clock)
+    clock.at(f"{1790000030 + RETRY_FOR_SECONDS}.000000")
+    worker.step()
+    assert replies(path) == [(ROOT, None, True)]
+    assert store.questions(PostKey(WORKSPACE, CHANNEL, ROOT)) == []
+
+
+def test_a_notice_that_the_reply_no_longer_stands_makes_its_question_stale(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, NO_SOURCE))
+    due(worker, clock)
+    enqueue(store, message("1790000040.000100", "from main stock", thread_ts=ROOT))
+    due(worker, clock, 1790000060)
+    assert revisions(path) == [(2, "retracted", True)]  # the rules read no thread
+    [item] = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert item.status.value == "stale"
+    assert all(block["type"] != "actions" for block in slack.posted[1]["blocks"])

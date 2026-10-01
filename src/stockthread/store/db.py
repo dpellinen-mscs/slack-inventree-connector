@@ -148,6 +148,46 @@ class DryRunRecord:
 
 
 @dataclass(frozen=True)
+class NewQuestion:
+    """A question asked in a dry-run reply, as stored with it. `question` and each choice are JSON of ids, codes
+    and primary keys (core.questions), never words of the post."""
+
+    question: Mapping[str, Any]
+    approver_only: bool
+    buttons: Sequence[tuple[str, Mapping[str, Any]]]
+    """One (button id, choice) per button, in order. A question answered by a thread reply has none."""
+
+
+class QuestionStatus(StrEnum):
+    OPEN = "open"
+    ANSWERED = "answered"
+    STALE = "stale"
+    """A newer dry run of the post stands in the thread: a revised reply, or a notice that none stands."""
+
+
+@dataclass(frozen=True)
+class ReviewItem:
+    id: int
+    post: PostKey
+    revision: int
+    """The dry run that asked it."""
+    question: Mapping[str, Any]
+    approver_only: bool
+    channel_id: str
+    message_ts: str | None
+    """The reply the question was asked in. None: Slack gave no usable timestamp, and no click fits it."""
+    status: QuestionStatus
+
+
+@dataclass(frozen=True)
+class Button:
+    id: str
+    item: ReviewItem
+    position: int
+    choice: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class QueuedEvent:
     id: int
     key: str
@@ -165,6 +205,29 @@ _SLACK_TS = re.compile(r"\d{1,10}\.\d{6}")
 def new_lock_owner() -> str:
     """A random owner id for the instance lock, new for every process."""
     return secrets.token_hex(16)
+
+
+def new_button_id() -> str:
+    """A random button id of 128 bits: all a click carries (design section 4, "Interactivity")."""
+    return secrets.token_urlsafe(16)
+
+
+def _json(value: Mapping[str, Any]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _review_item(post: PostKey, row: Sequence[Any]) -> ReviewItem:
+    item_id, revision, question, approver_only, channel_id, message_ts, status = row
+    return ReviewItem(
+        int(item_id),
+        post,
+        int(revision),
+        json.loads(question),
+        bool(approver_only),
+        channel_id,
+        message_ts,
+        QuestionStatus(status),
+    )
 
 
 def _utcnow() -> datetime:
@@ -568,6 +631,7 @@ class Store:
         revision: int = 1,
         read: Sequence[str] | None = None,
         changes: int | None = None,
+        question: NewQuestion | None = None,
     ) -> None:
         """Record the outcome of the post's dry run `revision`, and the timestamp of what was posted when Slack
         gave one. Each revision once, in order.
@@ -578,13 +642,23 @@ class Store:
         message that joins the post later makes it wait for the next revision. `changes` is the newest noted
         edit or deletion the decision knew of (`post_changes_through` when it was decided); None means the
         newest there is now. A change noted later makes the post wait for the next revision too.
+
+        `question` is the question the reply asks, stored with its buttons in the same transaction, so no button
+        a reply carries is without its row. A reply or a notice that a revision posts makes the post's open
+        question stale: it no longer belongs to what stands in the thread.
         """
         posted = (DryRunOutcome.REPLIED, DryRunOutcome.RETRACTED)
         if reply_ts is not None and (outcome not in posted or not _SLACK_TS.fullmatch(reply_ts)):
             raise ValueError("only a reply has a timestamp, in Slack's form")
         if revision < 1 or (revision == 1 and outcome in (DryRunOutcome.UNCHANGED, DryRunOutcome.RETRACTED)):
             raise ValueError("only a revision is unchanged or retracted")
-        stored = None if result is None else json.dumps(result, sort_keys=True, separators=(",", ":"))
+        if question is not None:
+            if outcome is not DryRunOutcome.REPLIED:
+                raise ValueError("only a reply asks a question")
+            ids = [button_id for button_id, _ in question.buttons]
+            if len(set(ids)) != len(ids) or any(len(button_id) < 22 for button_id in ids):
+                raise ValueError("every button has its own random id")
+        stored = None if result is None else _json(result)
         with self._transaction():
             self._check_lock(owner)
             post_id = self._post_id(key)
@@ -618,6 +692,10 @@ class Store:
                     (post_id, revision, through, changes, outcome.value, extractor or None, stored, reply_ts, now),
                 )
                 self._audit(Actor.PLANNER, f"revision_{outcome.value}", post_id=post_id)
+                if outcome in posted:
+                    self._questions_go_stale(post_id, now)
+                if question is not None:
+                    self._ask(post_id, key, revision, reply_ts, question, now)
                 return
             cursor = self._db.execute(
                 "UPDATE posts SET dry_run_at = ?, reply_ts = ? WHERE id = ? AND dry_run_at IS NULL",
@@ -631,6 +709,56 @@ class Store:
                 (post_id, outcome.value, extractor or None, stored, through, changes, now),
             )
             self._audit(Actor.PLANNER, f"dry_run_{outcome.value}", post_id=post_id)
+            if question is not None:
+                self._ask(post_id, key, revision, reply_ts, question, now)
+
+    def _questions_go_stale(self, post_id: int, now: str) -> None:
+        cursor = self._db.execute(
+            "UPDATE review_items SET status = 'stale', closed_at = ? WHERE post_id = ? AND status = 'open'",
+            (now, post_id),
+        )
+        if cursor.rowcount:
+            self._audit(Actor.PLANNER, "question_stale", post_id=post_id)
+
+    def _ask(
+        self, post_id: int, key: PostKey, revision: int, reply_ts: str | None, question: NewQuestion, now: str
+    ) -> None:
+        item = self._db.execute(
+            "INSERT INTO review_items (post_id, revision, question, approver_only, channel_id, message_ts, status,"
+            " created_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?)",
+            (post_id, revision, _json(question.question), int(question.approver_only), key.channel_id, reply_ts, now),
+        ).lastrowid
+        self._db.executemany(
+            "INSERT INTO interactions (id, review_item_id, position, choice) VALUES (?, ?, ?, ?)",
+            [(button_id, item, n, _json(choice)) for n, (button_id, choice) in enumerate(question.buttons)],
+        )
+        self._audit(Actor.PLANNER, "question_asked", post_id=post_id)
+
+    def questions(self, key: PostKey) -> list[ReviewItem]:
+        """The questions asked about the post, oldest first."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        rows = self._db.execute(
+            "SELECT id, revision, question, approver_only, channel_id, message_ts, status FROM review_items"
+            " WHERE post_id = ? ORDER BY id",
+            (post_id,),
+        ).fetchall()
+        return [_review_item(key, row) for row in rows]
+
+    def button(self, button_id: str) -> Button | None:
+        """The stored button with this id, with its question, or None when there is none. A click carries only
+        the id: the caller checks the channel, the message and the user against what is stored."""
+        row = self._db.execute(
+            "SELECT b.position, b.choice, i.id, i.revision, i.question, i.approver_only, i.channel_id, i.message_ts,"
+            " i.status, p.workspace_id, p.channel_id, p.ts FROM interactions b"
+            " JOIN review_items i ON i.id = b.review_item_id JOIN posts p ON p.id = i.post_id WHERE b.id = ?",
+            (button_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        item = _review_item(PostKey(*row[9:12]), row[2:9])
+        return Button(button_id, item, int(row[0]), json.loads(row[1]))
 
     def _read_through(self, post_id: int, read: Sequence[str] | None) -> int:
         """The newest post_messages.id of those read (all of the post's messages when None)."""
