@@ -64,7 +64,12 @@ Nothing is released yet. The connector cannot write stock in this state.
 - A `[vehicles]` settings section (Slack user id to stock location path): "my truck" in a post is the
   poster's vehicle. A path that is not found in InvenTree is named in the log and never guessed.
 - `python -m stockthread.llm.record`: records a model's raw answers to the eval corpus, so a model is
-  scored in CI without a provider. No model has been recorded yet.
+  scored in CI without a provider. A recording of `anthropic/claude-haiku-4.5` on prompt `llm-0.2`
+  is in `eval/recorded/`; behind the rules it has no hard failure on corpus 0.2.0.
+- The review reason `photo_not_read`: every movement of a post with a photo waits for a person,
+  because no extractor sees photos. With the default policy, a clear take-out with a photo is
+  confirmed rather than applied.
+- Prompt `llm-0.2`: a movement that a later message takes back ("scratch that") is no movement.
 - An LLM extractor behind a provider interface: a versioned prompt,
   a strict output schema (output that does not fit declines the post), masking of strings that
   look like credentials before text is sent, and an adapter for OpenAI-compatible endpoints.

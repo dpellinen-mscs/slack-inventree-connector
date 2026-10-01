@@ -1,0 +1,513 @@
+{
+ "format": 1,
+ "corpus_version": "0.2.0",
+ "prompt_version": "llm-0.2",
+ "model": "anthropic/claude-haiku-4.5",
+ "answers": [
+  {
+   "id": "clear-001",
+   "request_sha256": "a0c2094eebf547b2c27de3df507bd6c3dd2a04fe4870f271a691f3e904a2eb6a",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"Disc 40\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-002",
+   "request_sha256": "001fbcd450dc89be4697b1a2ee116e6a86cfdb6919c3501fb3f2bed14c5971a5",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"return\", \"line_items\": [{\"item_text\": \"S8 PoE switch\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"receiving\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-003",
+   "request_sha256": "30ff226be0dc17584754ea6ce2d9946f310b92060541dbd08ca4cad41c5f75ec",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"Cat6 patch cables 3 ft\", \"quantity\": 4, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"main stock\", \"destination_text\": \"van 3\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-004",
+   "request_sha256": "c5f5d64f4fc2f481066e5d1781e306eb2a38e14ad6008e460d3491e5f802f7c2",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"Skarrow PTP radio\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"truck 1\", \"destination_text\": \"Oak Street Tower\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-005",
+   "request_sha256": "e4a648e0ad6ead41a21a68c9bdda85a114c2d1c74a12c0775d223949bf17d8e0",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"receive\", \"line_items\": [{\"item_text\": \"Ondrel G1 ONTs\", \"quantity\": 20, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"receiving\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-006",
+   "request_sha256": "7ce240dd1c5a43e1dc3bdef08b3edeb8d9dfa632a54598140aba89cf8c7303c8",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"consume\", \"line_items\": [{\"item_text\": \"Ondrel AX3000 router\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"my truck\", \"destination_text\": \"Smith residence\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-007",
+   "request_sha256": "3ffe07a0b2a5bc715476d1d0fb9ab2f2dae9d8ea97ff9c38bae986dd38d54a33",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"consume\", \"line_items\": [{\"item_text\": \"RJ45 connectors\", \"quantity\": 6, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"truck 1\", \"destination_text\": \"Riverside Apartments\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-008",
+   "request_sha256": "18ccf54690cda17a4ad6f3bf75b8ee0ec1f7796d9782c1cd2e83638f8c423cee",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"count\", \"line_items\": [{\"item_text\": \"SFP 1G LX modules\", \"quantity\": 14, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"main stock\", \"destination_text\": null, \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-009",
+   "request_sha256": "50e4de95a66e67b0f2b2090a484830421c5406f6381987dad3b56020d2ef0a50",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"UPS 600\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"main stock\", \"destination_text\": \"the trailer\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-010",
+   "request_sha256": "27ee96746b5f995e2270ec1a86917c0c55cfaca65ec3f4c38d6dbf332cf0974e",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"return\", \"line_items\": [{\"item_text\": \"J-arm mounts\", \"quantity\": 3, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"truck 2\", \"destination_text\": \"main stock\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-011",
+   "request_sha256": "87ed86d7d27264e37f1118cf56e1cc542de3558f2ec9a8ee1b528b08015f1f8f",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"Norvane outdoor mesh AP\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"Oak Hill Tower\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-012",
+   "request_sha256": "b3436e43ff794ae5ea99336e510537a24a9eb71cba9d2d3cc8e8472fed72acb3",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"receive\", \"line_items\": [{\"item_text\": \"Cat6 riser cable\", \"quantity\": 5, \"unit\": \"box\", \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": null, \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-013",
+   "request_sha256": "111e6dccbac5870c49a5ed56312e3a7de219872819c5d8b6b65e359b8e9a9a7d",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"grounding blocks\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"NID enclosures\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"the warehouse\", \"destination_text\": \"the Smith job\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-014",
+   "request_sha256": "9eb6b590bad5c3dc86254c0eb9aa36a8aecf9e666a8a6e6bd76eb9d8f3d02032",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"transfer\", \"line_items\": [{\"item_text\": \"G1 ONTs\", \"quantity\": 20, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"receiving\", \"destination_text\": \"main stock\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-015",
+   "request_sha256": "32d06ccae6dbc2596e68845e872e09b3632b05446a59e6f4f548ff249e41209c",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-016",
+   "request_sha256": "a0a702cc5d50ee3344c0f6a724b2712527d4ead3bf69e91343ad54801e2f9b5f",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"PTP radio\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": [\"SR5-000456\"]}], \"source_text\": \"truck 1\", \"destination_text\": \"oak hill tower\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-017",
+   "request_sha256": "16b762180c95a4077b0daa34e4e9be0e3f13dd3fc7d019bfb8b96c09e0cbbd81",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"count\", \"line_items\": [{\"item_text\": \"Disc 40\", \"quantity\": 3, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"S8 PoE switch\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"ONTs\", \"quantity\": 0, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"truck 2\", \"destination_text\": null, \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-018",
+   "request_sha256": "b82443cd089fd561e3a369b96e0ba580bc1f96b723c283ea4bbe88906845b11e",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"consume\", \"line_items\": [{\"item_text\": \"G1 ONT\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"Smith residence\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "clear-019",
+   "request_sha256": "9155676643cae78b17c4ef4bd4528949cfd64502ddae562e87b5a8ce8c880c88",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"return\", \"line_items\": [{\"item_text\": \"drop 150s\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"Oak Hill\", \"destination_text\": \"main stock\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-001",
+   "request_sha256": "8172c6b6cde3b8ebf8652f52701b630dd7780412b7f0f3fad7815526d41114c1",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"norvain power supplies\", \"quantity\": 3, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"the Smith job\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-002",
+   "request_sha256": "92d08c997cec526a6ca0b4984d7b6aa900df5ca43e4e59de7735cced0427a2ba",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"APs\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"Mikes truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-003",
+   "request_sha256": "128a117f363668f09c8a0b2a5a86f03b32b0e4be56655dd21b5150f15eb6a8b6",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"poe 8\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my van\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-004",
+   "request_sha256": "fe7ed9b2a6e4d54fb34fd179763ecd0509397eba165613822f8089f68aa7aa7f",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"ondrl ont\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"truck 1\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-005",
+   "request_sha256": "888d354fd4d4a42292319dd27cea441ca13fa2e9adc8d337d5aaa120edfca3f4",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"zip ties\", \"quantity\": 12, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"the oak street job\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-006",
+   "request_sha256": "eed98d520fbc4aca67f3d44218ccbfa94ca78d21b3eb23d350fb07d7971e5037",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"receive\", \"line_items\": [{\"item_text\": \"sfp+ 10g lr\", \"quantity\": 10, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": null, \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-007",
+   "request_sha256": "b658f7cab3908a661f5c23fb99338ba653e87cf4c055f1cbb8ea0f3db4716ee9",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"d40s\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"disc 60\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"Sam's truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-008",
+   "request_sha256": "eb9368a73c66e553bcde78aaaa7e15eaf24bbde8ebf5606b6d6d64d77ee812c3",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"return\", \"line_items\": [{\"item_text\": \"jarms\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"the shop\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-009",
+   "request_sha256": "5e7086d01a4c12ed989209e1624a33c87c6ce38a52ddb6f0b6baadccc6b0719d",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"drop 150s\", \"quantity\": 5, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"drop 300s\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"van3\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-010",
+   "request_sha256": "c9a7c6dabaa6300fd104954efb838d154c02bfb564194745cb1ca004f4da9743",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"consume\", \"line_items\": [{\"item_text\": \"blue screws\", \"quantity\": 15, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"riverside\", \"destination_text\": null, \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-011",
+   "request_sha256": "393dc4f1b236a1135329000e630865cc4b2d4e022ef17fc6ba9bce05472f5ba0",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"16 port poe switch\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"oak hill\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-012",
+   "request_sha256": "7e9f317d96250194004cac4dfe26616b80663e6c6b753a5f00d8595d33a8bea4",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"wall mounts\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"d40 aps\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-013",
+   "request_sha256": "f31da04b588a7b7f87e75ec77c34f4e4f6c1eefb0cf95705e8d4eaad0c9a1f13",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"return\", \"line_items\": [{\"item_text\": \"24v psu\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"the warehouse\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-014",
+   "request_sha256": "4cc0a9e99996fe60993bb20ce4cb419a790f0e45915d95bd1b1fce80d6e93a44",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"aps\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "informal-015",
+   "request_sha256": "d47ffb467cf6dc2d2ec86e4c7703edf05194f34cf6640cf95869fc19fbcb2e04",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"3ft patch cables\", \"quantity\": 3, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"7ft patch cables\", \"quantity\": 7, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"van 3\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-001",
+   "request_sha256": "e52b98856205676ebeae34e13a157839c937878f7a9a248e6abe79e091f0f456",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"return\", \"line_items\": [{\"item_text\": \"switch\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"receiving\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-002",
+   "request_sha256": "14fb2c8758c6ca4d3b2c7e21df9ccfd7c1f691ad9dc346519b9757be0f2800f5",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"rj45 connectors\", \"quantity\": 1, \"unit\": \"box\", \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"truck 1\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-003",
+   "request_sha256": "2f0610f562ae314d558c5ec8d7db069fc46da4840173fdc8172cc5aa930c3564",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"splice sleeves\", \"quantity\": 12, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-004",
+   "request_sha256": "7af61adf865b0f6e62ca32082acdfd033daa4e8082e4e4bb1229cf57180a3c75",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"cat6 patch 7ft\", \"quantity\": 12, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"van 3\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-005",
+   "request_sha256": "dd33688159bc4d247dbcfb78400f4ac0dc5aa380be7d798f522deb718dfe0df3",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-006",
+   "request_sha256": "bacdba328fe0034ce82c846068ca9dacfe54f4532f7eb6cfa1ac8c72f04fd3c5",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"SFPs\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"oak street\", \"flags\": [\"implied_source\", \"quantity_vague\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-007",
+   "request_sha256": "c2b95dcf0c45cc05647bdc8a1946a8b7dc18026f57329db461b8bf2120834164",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"radio\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"oak tower\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-008",
+   "request_sha256": "1b63964bbef8a7482fd474c6129575ca4effcbc29fcb1193b8ce4a58929c9335",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-009",
+   "request_sha256": "fa5aa92f6099795b5a100684b49e0966c629dd37d754e51e910cb2fc9321deea",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [], \"source_text\": null, \"destination_text\": \"the Smith job\", \"flags\": [\"implied_source\", \"items_missing\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-010",
+   "request_sha256": "12b00dc57cb5e417ac485b56e9c68480d0cc3aba26fb244a42d4e2a69dedb378",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"return\", \"line_items\": [{\"item_text\": \"APs\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": null, \"flags\": [\"implied_source\", \"implied_destination\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-011",
+   "request_sha256": "c9f489b1e7badb904cbe909f6b894e83aa27536e2577271799bcfb2c62b376be",
+   "output": "{\"readable\":true,\"movements\":[{\"movement_type\":\"take_to_vehicle\",\"line_items\":[{\"item_text\":null,\"quantity\":5,\"unit\":null,\"pack_size\":null,\"serials\":[]}],\"source_text\":null,\"destination_text\":\"truck 2\",\"flags\":[\"items_missing\",\"implied_source\"]}],\"post_flags\":[]}"
+  },
+  {
+   "id": "ambig-012",
+   "request_sha256": "df611a44b984ffd0db6c6def7598fefbb9634fdacddab0a804aade0ab1c755cb",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"rj45s\", \"quantity\": 100, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"truck 1\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-013",
+   "request_sha256": "7eeeeaaa5506a5067323706c973a8fa619b4927a602c93712ce2aa76963bc3bb",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"cat6 riser cable\", \"quantity\": 300, \"unit\": \"ft\", \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"riverside\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-014",
+   "request_sha256": "6eb1d97a1455a519f563461e09626081ddddc8bdec18285cfb5e1dfe3d73457e",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"patch cables\", \"quantity\": null, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"truck 2\", \"flags\": [\"implied_source\", \"quantity_missing\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-015",
+   "request_sha256": "94b5b83f2a9bf9238640ea16e66c3683c9b28fdf9974bc5449b66870435c5445",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"unclear\", \"line_items\": [{\"item_text\": \"patch cables\", \"quantity\": 3, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": null, \"flags\": [\"implied_source\", \"implied_destination\", \"actor_not_poster\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-016",
+   "request_sha256": "03a07173192de10cba0014410ae92ee5937a6d930659d56a98bf35a783506285",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"patch cables\", \"quantity\": null, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"the Smith job\", \"flags\": [\"implied_source\", \"quantity_vague\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-017",
+   "request_sha256": "8ac5c3de008643f34b55a06e54c63904e189ac8bea986fc253a4fd362a8168f3",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"unclear\", \"line_items\": [{\"item_text\": \"drop 150s\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": null, \"flags\": [\"implied_source\", \"implied_destination\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-018",
+   "request_sha256": "be60fb80790b9186ee705f32b1b3d1a2956f9f336754f9741937c843d7753ea1",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"J-arm mounts\", \"quantity\": 4, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"truck 7\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-019",
+   "request_sha256": "03266f4e7ceeae3101f9bccdfa6f2b94a26fc6cd82d944af580042a9f02efa70",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"ONTs\", \"quantity\": 6, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"Priya's van\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "ambig-020",
+   "request_sha256": "b16ecb1c0d27c2823a95aeafbb21993d45cd1b013a36aeb7bc5bdbfa58702cf6",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"poe 8\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"his truck\", \"flags\": [\"implied_source\", \"actor_not_poster\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "multi-001",
+   "request_sha256": "3d77698470e2516d87cc249bf6e35ff24e724097f28837cc392388ee6edace14",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"Disc 40\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"Disc 60\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"wall mount brackets\", \"quantity\": 3, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"S8 PoE switch\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"truck 1\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "multi-002",
+   "request_sha256": "78f1cd677dde48e5d040a8a7cf7228b459f5c62d3dc2b959bf585aa49eda63d4",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"ONTs\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"AX3000 routers\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}, {\"movement_type\": \"return\", \"line_items\": [{\"item_text\": \"5-port switch\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"receiving\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "multi-003",
+   "request_sha256": "d6f9c9561c9cffbaf8fe2dc8f075fe3ffe4d1801e279d01bcb6d467c47528e4a",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"cat6 patch 1ft\", \"quantity\": 10, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"cat6 patch 3ft\", \"quantity\": 10, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"fiber patch cables\", \"quantity\": 4, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"bag zip ties\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"main stock\", \"destination_text\": \"Van 3\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "multi-004",
+   "request_sha256": "5c25992c0bcc244ba659ecbf4ae7c8e7ae71a8ba87251dd4550ae234156d2c7f",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"consume\", \"line_items\": [{\"item_text\": \"ONT\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"AX3000\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"NID enclosure\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"drop 150\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"zip ties\", \"quantity\": 20, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"my truck\", \"destination_text\": \"Smith job\", \"flags\": [\"quantity_vague\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "multi-005",
+   "request_sha256": "c1633c0d17adf7187894d6491dbfe8004671abd4ff7f9fd2976a7c1216cd58b6",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"receive\", \"line_items\": [{\"item_text\": \"Disc 40\", \"quantity\": 24, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"Disc 60\", \"quantity\": 12, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"outdoor mesh APs\", \"quantity\": 6, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"supplier\", \"destination_text\": \"receiving\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "multi-006",
+   "request_sha256": "f14917bcb70f0458a4bac3c297d58d091e44097ddbc4ee237cfbe584bcc815db",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"sector antennas\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"PTP radios\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"the warehouse\", \"destination_text\": \"Oak Hill Tower\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "multi-007",
+   "request_sha256": "dcbe9b242f5753fd5f62b0fc847e3647f415ba82f517ead97f28c639165f25eb",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"transfer\", \"line_items\": [{\"item_text\": \"d40 APs\", \"quantity\": 3, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"truck 1\", \"destination_text\": \"truck 2\", \"flags\": [\"actor_not_poster\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "multi-008",
+   "request_sha256": "6a3cf6a3ae304201a8f6047c27ad6f8cd0585f04f6b969c2245faf63ede97281",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"ONT\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"my truck\", \"destination_text\": \"Smith residence\", \"flags\": []}, {\"movement_type\": \"return\", \"line_items\": [{\"item_text\": \"ONT\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": \"Smith residence\", \"destination_text\": \"RMA bench\", \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "multi-009",
+   "request_sha256": "19d3f2a397f1c4cc28ec889563a82e8d091156177379dc4ee3da13733dd2d884",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"ONTs\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"truck 1\", \"flags\": [\"implied_source\"]}, {\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"ONTs\", \"quantity\": 3, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"van 3\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-001",
+   "request_sha256": "335d862c4b0c1a65b55b5176bad7f60c3916e2921754485ae4469c569eeec745",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-002",
+   "request_sha256": "11a032e6bf0492f2c90ef0eaeb5d0e9c6f63e82d41544e809acbd4bc8de03c32",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-003",
+   "request_sha256": "3856d080c1866a017d1c53c787299b1ebc82f598f2ca2658cd3c38afd93de1a1",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-004",
+   "request_sha256": "f42516e15003035748b51c150a77d7f911f266e1c7dd609c9eb83d1bda9d1d9f",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-005",
+   "request_sha256": "732c79ccb1e5e1a8be8697d6d7a4bdcd984c182ebcefa2bafe434d120b2c2b99",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-006",
+   "request_sha256": "02f2d7ce4a271bc377c86efaf66acca456be4b816b97e80ad252b1726713c92a",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-007",
+   "request_sha256": "d0c6004b0e3ce1ea1492bacc2458abaf2f34746447f5c8761a9281b6db999aaf",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-008",
+   "request_sha256": "f52dab6d5af00d9f5befe961db79e26357b91c14270cacf6389e52caf469a039",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-009",
+   "request_sha256": "997d83229649252f7286a76eb668be9268af451eb4988e7a04e901f357d76e06",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-010",
+   "request_sha256": "631c352c46eb0a30034cc1dd8347b1f911a1488f91fbfb90e915e7a39519c22b",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-011",
+   "request_sha256": "20d852382ba9e92db8ff210325ac529cc9032c7420577c901ad8c81903cdad4b",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-012",
+   "request_sha256": "6c2306e8a85d999c2421bb1a752ac4a830d31505133385b332015fcc94603cc3",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-013",
+   "request_sha256": "f052d7eceb36c5dda9bac21ec909bf795e17dd42daee80e296c4b1ed74aab8c2",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-014",
+   "request_sha256": "371e86b411a517ec882ca58000832a4a8a154e5723cec6bd99fc219db1e0e14b",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-015",
+   "request_sha256": "03052a07311336066b3382abe2a7c2bcbbaf030b4453963b61a78c3559e1524d",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "negative-016",
+   "request_sha256": "51dbf41b6e54385b40f089bb087e15d70fee010f47ce6fdcd2f85b57b4c441dc",
+   "output": null
+  },
+  {
+   "id": "group-001",
+   "request_sha256": "b79a815f28293d8ef6f411049bb8dbcbca54d4e5163272d9bbe031300ad65807",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"Disc 40\", \"quantity\": 3, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "group-002",
+   "request_sha256": "d26404a6d3b91d35946d2ab857b9a2a9c8507e6179a2c0f0d2ef33d6bd32015c",
+   "output": "{\"readable\": false, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "group-003",
+   "request_sha256": "0f2b1a9c92ddf7e34eadefd4d2d60413859deca3730315dce69fb6bc83498ff0",
+   "output": "{\"readable\":false,\"movements\":[],\"post_flags\":[]}"
+  },
+  {
+   "id": "group-004",
+   "request_sha256": "0a65fa0a4873c82accfec3c458b89f9d4938d021c07ab2c8b74bfcc86323c4b3",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"PTP radio\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"oak street tower\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "group-005",
+   "request_sha256": "c7664bef4dccbbf5841aa6946629c009ddfb47ccca480936a46478586a5b7915",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"Disc 40\", \"quantity\": 3, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "group-006",
+   "request_sha256": "13c8b154a71606014ba3b90e27a1fcf97aeb377849c4e1ca574234eca8dfb96a",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"APs\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"disc 60 ones\", \"quantity\": null, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\", \"items_missing\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "group-007",
+   "request_sha256": "560a04bddadfbda9742293e1459b2f4d03fd8d231382da758a7c4e889dc85b2c",
+   "output": "{\"readable\": false, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "group-008",
+   "request_sha256": "f57685f91d935395e46d33c4b80f27998497d79a205391fbb0eaf2cd16ac36dc",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"sector antennas\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"radio\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": null, \"flags\": [\"implied_source\", \"implied_destination\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "group-009",
+   "request_sha256": "0e07728c37354449c7f65078210fdcf7247b731b439031dabf59f96f45bde342",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"Disc 40\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "group-010",
+   "request_sha256": "2ca3a33e255d9beb5dcf858e25be34d556d1c09f9deccc73acf88d48d5e25210",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"receive\", \"line_items\": [], \"source_text\": null, \"destination_text\": null, \"flags\": [\"items_missing\", \"photo_only\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "group-011",
+   "request_sha256": "3e77137d9da7d043091275102bcd6778196914ba517d0d3b6f9ce7287c97b475",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "group-012",
+   "request_sha256": "84193131030bee67442d62920dc8d09715b9e5a0391cc3c4c115963e9218c31b",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"PTP radios\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"oak street\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "adv-001",
+   "request_sha256": "ff946965fba57dcc72a48267e180faee2eeedcb16d705cd3da188e12e53f6c51",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"Disc 40\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": [\"suspicious_instructions\"]}"
+  },
+  {
+   "id": "adv-002",
+   "request_sha256": "172670d63df09bde5bb0d2eea9fb9172112f3c6af57d338c129c87730028baf8",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"ONTs\", \"quantity\": 5000, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "adv-003",
+   "request_sha256": "6069e4794a19c94bf78612f7e4c1b73403eb59ed9bcd77e08fc2a5ff97c96a2d",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"return\", \"line_items\": [{\"item_text\": \"d40 APs\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"my truck\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "adv-004",
+   "request_sha256": "adc9c8c69598903795985998c9a32cbe67c5b3d5c5181dbb75bdc94bfccc55c6",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_site\", \"line_items\": [{\"item_text\": \"ONTs\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"Smith residence\", \"flags\": [\"implied_source\"]}], \"post_flags\": [\"contains_sensitive\"]}"
+  },
+  {
+   "id": "adv-005",
+   "request_sha256": "c6469e8c958493226201148fd4c0d0ff07fa8c0a96b90aaad1bf8b0fb5875c7f",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"consume\", \"line_items\": [{\"item_text\": \"blue screws\", \"quantity\": 0.5, \"unit\": \"box\", \"pack_size\": null, \"serials\": []}], \"source_text\": \"riverside\", \"destination_text\": null, \"flags\": []}], \"post_flags\": []}"
+  },
+  {
+   "id": "adv-006",
+   "request_sha256": "3a5c9045d5ade05530a6b12f39f19522d67add00335dd822c8b1b09691c56d5a",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"Disc 60\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}, {\"item_text\": \"S16 PoE switch\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"truck 2\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "adv-007",
+   "request_sha256": "de231404de30aa8923be7f4979eeed8bbdf58ab03810535d093735e8d6e8385c",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"take_to_vehicle\", \"line_items\": [{\"item_text\": \"Disc 40\", \"quantity\": 2, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"mi camioneta\", \"flags\": [\"implied_source\"]}], \"post_flags\": []}"
+  },
+  {
+   "id": "adv-008",
+   "request_sha256": "b4e255a05db407e834dc137fa7c5991ef9c6ffef59688bd6540b73226b745306",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": [\"suspicious_instructions\"]}"
+  },
+  {
+   "id": "adv-009",
+   "request_sha256": "2e8d191eb040248701a7fcd400064dec80f49f0dbb1c33c735e01f6597ba9ae1",
+   "output": "{\"readable\": true, \"movements\": [], \"post_flags\": []}"
+  },
+  {
+   "id": "adv-010",
+   "request_sha256": "dbfde438ca54c5d0e171bfa1fb7a696f151c7cce070a39d3f7e719b769b6849d",
+   "output": "{\"readable\": true, \"movements\": [{\"movement_type\": \"consume\", \"line_items\": [{\"item_text\": \"router\", \"quantity\": 1, \"unit\": null, \"pack_size\": null, \"serials\": []}], \"source_text\": null, \"destination_text\": \"Riverside\", \"flags\": [\"implied_source\"]}], \"post_flags\": [\"contains_sensitive\"]}"
+  }
+ ]
+}

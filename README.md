@@ -70,7 +70,10 @@ What to expect in this version:
   in `stockthread.toml` and point it at any OpenAI-compatible endpoint (a hosted provider with
   `LLM_API_KEY` set, or a local server such as Ollama). Only those posts are sent, their text then
   leaves this machine unless the endpoint is local, and strings that look like credentials are
-  masked first. No model has been scored on the eval corpus yet: treat it as experimental.
+  masked first. On the synthetic eval corpus, one small hosted model behind the built-in extractor
+  had no hard failure (scores in `docs/design.md`); other models may score differently, so record
+  and score yours (`eval/README.md`). A post with a photo always waits for a person: no extractor
+  sees photos.
 - A vehicle is a stock location: create one per vehicle in InvenTree ("Truck 1") and name it in the
   post. For "my truck" to work, say whose vehicle it is in the `[vehicles]` section of
   `stockthread.toml`: `U0SAM0001 = "Vehicles/Truck 1"` (the person's Slack member id, and the

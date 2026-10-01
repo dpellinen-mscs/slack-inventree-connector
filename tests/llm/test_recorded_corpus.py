@@ -2,8 +2,10 @@
 
 Every file in `eval/recorded/` is one model's answers to one prompt version. Each is scored twice: the model
 reading every post, and the pipeline as the worker runs it, where the model reads only what the rules
-decline (ADR 0011). The bar for the pipeline: zero hard failures, with an answer recorded for every case. A
-recording with a case the provider gave no answer for fails, so the rules alone never pass for a model.
+decline (ADR 0011) and the validator's rule-derived flags are added. The bar for the pipeline: zero hard
+failures, the flags only a reader of the photo can raise excepted (VISION_FLAGS), with an answer recorded for
+every case. A recording with a case the provider gave no answer for fails, so the rules alone never pass for a
+model.
 `pytest tests/llm/test_recorded_corpus.py -s` prints the reports. With no recording the scores are skipped;
 the mechanism is tested with perfect answers.
 """
@@ -12,14 +14,17 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from stockthread.config import PolicySettings
 from stockthread.core import extract_rules
-from stockthread.core.model import Extraction
+from stockthread.core.model import Extraction, Flag, MessageInput
+from stockthread.core.validate import photo_not_read, validate
 from stockthread.llm.extract import PROMPT_VERSION, NoReading, ProviderError, user_prompt
 from stockthread.llm.record import corpus_cases, corpus_messages, record, replay
 
@@ -40,6 +45,25 @@ def _module(name: str, path: Path) -> Any:
     return module
 
 
+VISION_FLAGS = frozenset({Flag.QUANTITY_FROM_PHOTO, Flag.SERIAL_UNCONFIRMED, Flag.PHOTO_TEXT_MISMATCH})
+"""The flags only a reader of the photo can raise. No extractor reads one: the worker gives every movement of a post
+with a photo the reason photo_not_read, which asks a person as these would. That holds only while a "yes" to
+photo_not_read does not clear the questions these flags would ask (docs/design.md, section 6)."""
+
+
+def _with_rule_reasons(extraction: Extraction, messages: Sequence[MessageInput]) -> Extraction:
+    """The extraction with the flags the worker derives by rule from its fields and the text (validate)."""
+    text = "\n".join(message.text for message in messages if not message.deleted)
+    limit = PolicySettings().max_quantity
+    vocabulary = {flag.value for flag in Flag}
+
+    def derived(movement: Any) -> frozenset[Flag]:
+        reasons = validate(movement, text, max_quantity=limit, post_flags=extraction.post_flags)
+        return frozenset(Flag(reason.code.value) for reason in reasons if reason.code.value in vocabulary)
+
+    return replace(extraction, movements=tuple(replace(m, flags=m.flags | derived(m)) for m in extraction.movements))
+
+
 def _model_alone(recording: Mapping[str, Any], case: Mapping[str, Any]) -> Extraction:
     try:
         return replay(recording, case)
@@ -49,8 +73,19 @@ def _model_alone(recording: Mapping[str, Any], case: Mapping[str, Any]) -> Extra
 
 
 def _as_the_worker(recording: Mapping[str, Any], case: Mapping[str, Any]) -> Extraction:
-    by_rule = extract_rules.extract(corpus_messages(case["post"]))
-    return _model_alone(recording, case) if by_rule.declined else by_rule
+    messages = corpus_messages(case["post"])
+    by_rule = extract_rules.extract(messages)
+    return _with_rule_reasons(_model_alone(recording, case) if by_rule.declined else by_rule, messages)
+
+
+def missed_by_the_worker(report: Any) -> list[str]:
+    """The pipeline's missed flags, less the flags only a reader of the photo can raise on a post with a photo."""
+    with_photo = {case["id"] for case in corpus_cases(EVAL) if photo_not_read(corpus_messages(case["post"]))}
+    return [
+        missed
+        for missed in report.missed_flags
+        if not (missed.split(" ", 1)[0] in with_photo and missed.rsplit(": ", 1)[1] in VISION_FLAGS)
+    ]
 
 
 def unscored(recording: Mapping[str, Any], expected: frozenset[str] = frozenset()) -> list[str]:
@@ -91,7 +126,7 @@ def test_a_recorded_model_behind_the_rules_has_no_hard_failures_on_the_corpus(pa
     assert unscored(recording, NO_READING_EXPECTED.get(path.stem, frozenset())) == [], "record these again"
     _, pipeline = reports(recording)
     assert pipeline.false_movements == []
-    assert pipeline.missed_flags == []
+    assert missed_by_the_worker(pipeline) == []
     assert pipeline.obeyed_instructions == []
 
 
@@ -116,8 +151,12 @@ def test_perfect_answers_recorded_and_read_back_score_full_marks() -> None:
     recording = json.loads(json.dumps(record(corpus_cases(EVAL), _Perfect(), version)))
     alone, pipeline = reports(recording)
     assert alone.hard_failures == 0
-    assert alone.case_exact.as_dict() == pipeline.case_exact.as_dict()
+    assert alone.case_exact.as_dict()["value"] == 1.0
     assert alone.detection.as_dict()["recall"] == 1.0
+    assert pipeline.detection.as_dict() == alone.detection.as_dict()
+    # The rules add a reason the corpus does not expect: quantity_missing beside quantity_vague (ambig-005,
+    # ambig-016), actor_not_poster (adv-006, adv-010). Extra reasons only ask more.
+    assert pipeline.case_exact.as_dict()["correct"] == alone.case_exact.as_dict()["correct"] - 4
     assert pipeline.hard_failures == 0
 
 
@@ -174,3 +213,13 @@ def test_a_recording_is_scored_under_a_later_corpus_version_while_every_answer_f
     recording["answers"].pop()  # as if a case had been added since
     with pytest.raises(LookupError, match="record again"):
         reports(recording)
+
+
+def test_only_a_photo_flag_on_a_post_with_a_photo_counts_as_raised() -> None:
+    missed = [
+        "group-004 movement 0: serial_unconfirmed",  # a photo post: photo_not_read asks instead
+        "group-004 movement 0: implied_source",  # not about the photo
+        "clear-012 movement 0: quantity_from_photo",  # no photo in that post
+    ]
+    report = type("Report", (), {"missed_flags": missed})()
+    assert missed_by_the_worker(report) == missed[1:]
