@@ -85,8 +85,8 @@ _BY_REASON: dict[ReasonCode, tuple[Tier, Ask, Side | None]] = {
     ReasonCode.IMPLIED_SOURCE: (Tier.SOURCE, Ask.NAME_LOCATION, "source"),
     ReasonCode.IMPLIED_DESTINATION: (Tier.DESTINATION, Ask.NAME_LOCATION, "destination"),
     ReasonCode.VEHICLE_NOT_MAPPED: (Tier.DESTINATION, Ask.NAME_LOCATION, "destination"),
-    ReasonCode.LOCATION_UNMATCHED: (Tier.DESTINATION, Ask.NAME_LOCATION, None),
-    ReasonCode.LOCATION_AMBIGUOUS: (Tier.DESTINATION, Ask.NAME_LOCATION, None),
+    ReasonCode.LOCATION_UNMATCHED: (Tier.DESTINATION, Ask.CONFIRM, None),  # a match question names the side
+    ReasonCode.LOCATION_AMBIGUOUS: (Tier.DESTINATION, Ask.CONFIRM, None),
     ReasonCode.SERIAL_UNCONFIRMED: (Tier.SERIALS, Ask.SERIALS, None),
     # Resolve (source selection) will ask these as a choice of stock items; until then a human confirms.
     ReasonCode.STOCK_CHOICE: (Tier.STOCK, Ask.CONFIRM, None),
@@ -110,7 +110,7 @@ _FROM_MATCHES = frozenset(
 """Asked from the match, with its line, side and candidates. Found among the reasons, they come last in their tier."""
 _LAST = 1 << 30
 
-_LINE = re.compile(r"line (\d+):")
+_LINE = re.compile(r"line (\d+)(?::|$)")
 
 
 class Reviewed(Protocol):
@@ -160,6 +160,8 @@ def _from_reasons(index: int, view: Reviewed) -> list[tuple[Tier, int, Question]
         tier, ask, side = _BY_REASON[reason.code]
         if reason.code is ReasonCode.MOVEMENT_UNCLEAR and reason.detail == TYPE_UNCLEAR:
             tier, ask = Tier.TYPE, Ask.MOVEMENT_TYPE
+        if reason.code is ReasonCode.PHOTO_ONLY and any((item.item_text or "").strip() for item in movement.line_items):
+            tier, ask = Tier.READING, Ask.CONFIRM  # items were read from the photo: is that reading right
         line = _line(reason, movement)
         order = _LAST if reason.code in _FROM_MATCHES else -1 if line is None else line
         found.append((tier, order, Question(ask, reason.code, index, line, side)))
@@ -168,10 +170,11 @@ def _from_reasons(index: int, view: Reviewed) -> list[tuple[Tier, int, Question]
 
 def _line(reason: ReviewReason, movement: CandidateMovement) -> int | None:
     """The line a reason is about: named in its detail, the first line it fits, the only line, or None."""
+    lines = movement.line_items
     named = _LINE.match(reason.detail)
     if named:
-        return int(named.group(1)) - 1
-    lines = movement.line_items
+        line = int(named.group(1)) - 1
+        return line if 0 <= line < len(lines) else None
     if reason.code is ReasonCode.QUANTITY_MISSING:
         return next((n for n, item in enumerate(lines) if item.quantity is None), None)
     if reason.code is ReasonCode.ITEMS_MISSING:
@@ -194,6 +197,9 @@ def _from_matches(index: int, view: Reviewed) -> list[tuple[Tier, int, Question]
         ("destination", view.destination, Tier.DESTINATION),
     )
     for side, place, tier in places:
+        text = view.movement.source_text if side == "source" else view.movement.destination_text
+        if place is None and text is not None:  # stated, but not matched: as the reply shows it
+            found.append((tier, 0, Question(Ask.NAME_LOCATION, ReasonCode.LOCATION_UNMATCHED, index, None, side)))
         question = _for_match(place, index, None, side) if place else None
         if question:
             found.append((tier, 0, question))

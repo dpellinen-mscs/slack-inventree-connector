@@ -24,6 +24,7 @@ from stockthread.core.model import (
 )
 from stockthread.core.questions import _BY_REASON, MAX_CHOICES, Ask, Question, pick_question
 from stockthread.core.validate import validate
+from stockthread.slack.replies import MovementView, gate_reasons
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ def test_a_match_reason_among_the_reasons_does_not_hide_the_match_question() -> 
 CATALOG = eval_catalog()[0]
 
 
-def corpus_views(case: dict[str, Any]) -> list[View]:
+def corpus_views(case: dict[str, Any]) -> list[MovementView]:
     """The expected movements of a case, matched against the eval catalog and validated by rule."""
     text = "\n".join(message.get("text") or "" for message in case["post"]["messages"])
     poster = case["post"]["user"]
@@ -190,7 +191,7 @@ def corpus_views(case: dict[str, Any]) -> list[View]:
     for expected in case["expected"]["movements"]:
         movement = candidate(expected)
         views.append(
-            View(
+            MovementView(
                 movement,
                 tuple(
                     match_part(item.item_text, CATALOG, poster) if item.item_text else Match(MatchStatus.UNMATCHED)
@@ -205,16 +206,10 @@ def corpus_views(case: dict[str, Any]) -> list[View]:
 
 
 @pytest.mark.parametrize("case", cases(), ids=lambda case: case["id"])
-def test_a_corpus_case_gets_a_question_exactly_when_it_needs_a_human(case: dict[str, Any]) -> None:
+def test_a_corpus_case_gets_a_question_exactly_when_the_reply_says_it_needs_a_human(case: dict[str, Any]) -> None:
     views = corpus_views(case)
-    needs_a_human = any(
-        v.reasons
-        or any(m.review_reason(kind="part") for m in v.items)
-        or any(m and m.review_reason(kind="location") for m in (v.source, v.destination))
-        for v in views
-    )
     question = pick_question(views)
-    assert (question is not None) == needs_a_human
+    assert (question is not None) == any(gate_reasons(v) for v in views)
     if question is not None:
         target = views[question.movement]
         assert question.line is None or 0 <= question.line < len(target.movement.line_items)
@@ -237,3 +232,42 @@ def test_a_corpus_case_gets_a_question_exactly_when_it_needs_a_human(case: dict[
 def test_the_expected_question_of_some_corpus_cases(case_id: str, ask: Ask | None, reason: ReasonCode | None) -> None:
     question = pick_question(corpus_views(next(case for case in cases() if case["id"] == case_id)))
     assert (question.ask, question.reason) == (ask, reason) if question else ask is None
+
+
+def test_a_line_named_in_a_detail_is_the_line_asked() -> None:
+    lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(1)))
+    reasons = validate(take(*lines), "took 2 Disc 40 from main stock to truck 1", max_quantity=100)
+    question = pick_question([View(take(*lines), (EXACT, EXACT), EXACT, EXACT, reasons)])
+    assert question == Question(Ask.CONFIRM, ReasonCode.ITEM_NOT_IN_TEXT, 0, 1)
+
+
+@pytest.mark.parametrize("detail", ["line 0: x", "line 3: x", "line 9"])
+def test_a_line_out_of_range_is_not_named(detail: str) -> None:
+    lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(1)))
+    reason = ReviewReason(ReasonCode.SERIAL_UNCONFIRMED, ReasonSource.RULE, detail)
+    question = pick_question([View(take(*lines), (EXACT, EXACT), EXACT, EXACT, (reason,))])
+    assert question == Question(Ask.SERIALS, ReasonCode.SERIAL_UNCONFIRMED, 0, None)
+
+
+def test_a_photo_read_into_items_is_confirmed_not_asked_again() -> None:
+    assert pick_question([view(take(), ReasonCode.PHOTO_ONLY)]) == Question(Ask.CONFIRM, ReasonCode.PHOTO_ONLY, 0)
+    empty = take(LineItem(None, None))
+    assert pick_question([view(empty, ReasonCode.PHOTO_ONLY)]).ask is Ask.NAME_PART  # type: ignore[union-attr]
+    nothing = CandidateMovement(MovementType.UNCLEAR, (), None, None)
+    assert pick_question(
+        [View(nothing, (), None, None, (ReviewReason(ReasonCode.PHOTO_ONLY, ReasonSource.RULE),))]
+    ) == (Question(Ask.NAME_PART, ReasonCode.PHOTO_ONLY, 0))
+
+
+def test_a_stated_place_without_a_match_is_asked_by_its_side() -> None:
+    blank = take(source_text="")
+    assert pick_question([view(blank, source=None)]) == Question(
+        Ask.NAME_LOCATION, ReasonCode.LOCATION_UNMATCHED, 0, None, "source"
+    )
+
+
+def test_a_whole_movement_reason_comes_before_a_line_in_its_tier() -> None:
+    ambiguous = Match(MatchStatus.AMBIGUOUS, candidates=(4, 5))
+    question = pick_question([view(take(), ReasonCode.ITEMS_MISSING, items=(ambiguous,))])
+    assert question is not None
+    assert question.reason is ReasonCode.ITEMS_MISSING
