@@ -3201,6 +3201,29 @@ def test_yes_to_a_doubt_about_the_reading_clears_it_and_nothing_else(store: Stor
     assert following.question["reason"] == "movement_unclear"
 
 
+def test_yes_to_a_doubt_about_the_text_leaves_the_unclear_type_to_ask(store: Store, clock: Clock) -> None:
+    slack = FakeSlack()
+    worker = Worker(approving(), store, OWNER, slack, lambda: CATALOG, clock, llm=FakeLLM(unclear()))
+    enqueue(store, message(ROOT, "shuffled 2 Disc 40 main stock to truck 1"))  # no "from": which way is unclear
+    read_and_answered(worker, clock)
+    [reply] = slack.posted
+    [item] = store.questions(KEY)
+    assert (item.question["ask"], item.question["detail"]) == (
+        "confirm",
+        "the text does not put the source on that side",
+    )
+    clicked(store, click_on({**reply, "channel": CHANNEL}, "1790009999.000001", 0, SAM), "1")  # yes
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    reasons = {(r["code"], r["detail"]) for r in record.result["movements"][0]["reasons"]}
+    assert ("movement_unclear", "the text does not put the source on that side") not in reasons
+    assert ("movement_unclear", "type unclear") in reasons
+    [_, following] = store.questions(KEY)
+    assert following.question["ask"] == "movement_type"
+
+
 def test_an_approval_answer_counts_only_from_someone_who_is_an_approver_when_it_is_applied(
     store: Store, clock: Clock, path: Path
 ) -> None:

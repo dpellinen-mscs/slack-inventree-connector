@@ -571,8 +571,10 @@ needs.
       unclear one, and validation runs again on the result, so a type
       that contradicts the places is a new question. "Yes" to a doubt
       about the whole reading, or to an approval-tier question from an
-      approver, clears the reason codes that question was asked for, for
-      that movement only. "No" to either ends the plan: the revision says
+      approver, clears the one reason that question was asked for (its
+      code and detail, on that movement and line); another doubt with the
+      same code, or an unclear type, is still asked about. "No" to any
+      yes-or-no question about the reading ends the plan: the revision says
       the reading was rejected and that nothing will be applied, and asks
       for a corrected post or thread reply.
     - *Then.* An answer makes the post due for a revision at once (no

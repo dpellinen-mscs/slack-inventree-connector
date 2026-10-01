@@ -143,6 +143,8 @@ class Question:
     """InvenTree primary keys to choose from (CHOOSE_*), or the one loosely matched record (CONFIRM_*)."""
     approver_only: bool = False
     """Only an approver may answer: the poster cannot clear these reasons (design section 4, "Authorization")."""
+    detail: str = ""
+    """The detail of the reason (written by the rules, never words of the post): a "yes" clears that reason only."""
 
 
 def pick_question(views: Sequence[Reviewed]) -> Question | None:
@@ -167,7 +169,9 @@ def _from_reasons(index: int, view: Reviewed) -> list[tuple[Tier, int, Question]
             tier, ask = Tier.READING, Ask.CONFIRM  # items were read from the photo: is that reading right
         line = reason_line(reason, movement)
         order = _LAST if reason.code in _FROM_MATCHES else -1 if line is None else line
-        question = Question(ask, reason.code, index, line, side, approver_only=tier is Tier.APPROVAL)
+        question = Question(
+            ask, reason.code, index, line, side, approver_only=tier is Tier.APPROVAL, detail=reason.detail
+        )
         found.append((tier, order, question))
     return found
 
@@ -232,11 +236,11 @@ def _for_match(match: Match, index: int, line: int | None, side: Side | None) ->
     part = side is None
     if match.record is not None:  # matched, by a rule that cannot authorize a write
         ask = Ask.CONFIRM_PART if part else Ask.CONFIRM_LOCATION
-        return Question(ask, reason.code, index, line, side, (match.record,))
+        return Question(ask, reason.code, index, line, side, (match.record,), detail=reason.detail)
     if match.status is MatchStatus.AMBIGUOUS and len(match.candidates) <= MAX_CHOICES:
         ask = Ask.CHOOSE_PART if part else Ask.CHOOSE_LOCATION
-        return Question(ask, reason.code, index, line, side, match.candidates)
-    return Question(Ask.NAME_PART if part else Ask.NAME_LOCATION, reason.code, index, line, side)
+        return Question(ask, reason.code, index, line, side, match.candidates, detail=reason.detail)
+    return Question(Ask.NAME_PART if part else Ask.NAME_LOCATION, reason.code, index, line, side, detail=reason.detail)
 
 
 @dataclass(frozen=True)
@@ -265,7 +269,7 @@ def choices(question: Question) -> tuple[Choice, ...]:
 
 
 def question_json(question: Question) -> dict[str, Any]:
-    """The question as stored with its reply: codes, indexes and primary keys, never words of the post."""
+    """The question as stored with its reply: codes, rule details, indexes and primary keys, never words of the post."""
     return {
         "ask": question.ask.value,
         "reason": question.reason.value,
@@ -274,6 +278,7 @@ def question_json(question: Question) -> dict[str, Any]:
         "side": question.side,
         "candidates": list(question.candidates),
         "approver_only": question.approver_only,
+        "detail": question.detail,
     }
 
 
@@ -286,7 +291,10 @@ def question_from_json(stored: Mapping[str, Any]) -> Question:
         raise ValueError("not a stored question") from error
     if side not in (None, "source", "destination"):
         raise ValueError("not a side")
-    if not isinstance(approver_only, bool) or not isinstance(candidates, list):
+    # A question stored before details were kept has none: a "yes" to it clears only a reason without one, so a
+    # reason it may not have shown is asked again.
+    detail = stored.get("detail", "")
+    if not isinstance(approver_only, bool) or not isinstance(candidates, list) or not isinstance(detail, str):
         raise ValueError("not a stored question")
     return Question(
         Ask(ask),
@@ -296,6 +304,7 @@ def question_from_json(stored: Mapping[str, Any]) -> Question:
         side,
         tuple(_index(pk) for pk in candidates),
         approver_only,
+        detail,
     )
 
 

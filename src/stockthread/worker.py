@@ -765,7 +765,7 @@ class Worker:
                     reasons=tuple(
                         reason
                         for reason in reasons
-                        if (n, reason_line(reason, movement), reason.code) not in effects.cleared
+                        if (n, reason_line(reason, movement), reason.code, reason.detail) not in effects.cleared
                     ),
                 )
             )

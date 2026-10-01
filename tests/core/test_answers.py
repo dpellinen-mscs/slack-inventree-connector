@@ -111,8 +111,14 @@ def test_a_movement_type_picked_replaces_the_unclear_one() -> None:
 def test_yes_to_a_doubt_about_the_reading_clears_that_code_for_that_movement_only() -> None:
     question = Question(Ask.CONFIRM, ReasonCode.PHOTO_NOT_READ, 1)
     effects = replay([given(1, question, Choice("yes"))], [1, 1], APPROVERS)
-    assert effects.cleared == {(1, None, ReasonCode.PHOTO_NOT_READ)}
+    assert effects.cleared == {(1, None, ReasonCode.PHOTO_NOT_READ, "")}
     assert effects.rejected is None
+
+
+def test_yes_clears_only_the_detail_it_was_asked_about() -> None:
+    question = Question(Ask.CONFIRM, ReasonCode.CONTRADICTION, 0, detail="source and destination are the same")
+    effects = replay([given(1, question, Choice("yes"))], [1], APPROVERS)
+    assert effects.cleared == {(0, None, ReasonCode.CONTRADICTION, "source and destination are the same")}
 
 
 def test_no_to_a_doubt_about_the_reading_ends_the_plan_and_nothing_after_it_counts() -> None:
@@ -132,7 +138,7 @@ def test_no_to_a_doubt_about_the_reading_ends_the_plan_and_nothing_after_it_coun
 def test_an_approval_answer_counts_only_from_someone_who_is_an_approver_now() -> None:
     question = Question(Ask.CONFIRM, ReasonCode.QUANTITY_ABOVE_LIMIT, 0, 0, approver_only=True)
     by_approver = replay([given(1, question, Choice("yes"), LUIS)], [1], APPROVERS)
-    assert by_approver.cleared == {(0, 0, ReasonCode.QUANTITY_ABOVE_LIMIT)}
+    assert by_approver.cleared == {(0, 0, ReasonCode.QUANTITY_ABOVE_LIMIT, "")}
     no_longer = replay([given(1, question, Choice("yes"), LUIS)], [1], frozenset())
     assert (no_longer.cleared, no_longer.ignored) == (set(), [1])
     rejected = replay([given(1, question, Choice("no"), SAM)], [1], APPROVERS)
