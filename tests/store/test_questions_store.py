@@ -237,3 +237,45 @@ def test_a_button_is_never_replaced(store: Store, path: Path, values: str) -> No
     store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
     with sqlite3.connect(path) as raw, pytest.raises(sqlite3.DatabaseError, match="a button is stored once"):
         raw.execute(f"INSERT OR REPLACE INTO interactions VALUES {values}")  # noqa: S608
+
+
+def test_an_answer_is_recorded_once_with_who_gave_it(store: Store, path: Path) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    yes, no = store.button(YES), store.button(NO)
+    assert yes is not None
+    assert no is not None
+    assert store.answer(yes.item.id) is None
+    assert store.answer_question(OWNER, no, "U0SAM0001") is True
+    assert store.answer(no.item.id) == ({"button": 1, "kind": "no"}, "U0SAM0001")
+    assert store.answer_question(OWNER, yes, "U0LUIS0005") is False  # the first answer stands
+    assert store.answer(no.item.id) == ({"button": 1, "kind": "no"}, "U0SAM0001")
+    [item] = store.questions(POST)
+    assert item.status is QuestionStatus.ANSWERED
+    with sqlite3.connect(path) as raw:
+        assert raw.execute("SELECT count(*) FROM audit_log WHERE event = 'question_answered'").fetchone() == (1,)
+
+
+def test_a_stale_question_takes_no_answer(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    yes = store.button(YES)
+    assert yes is not None
+    reply_again(store, "1790000100.000100", 2, DryRunOutcome.RETRACTED)
+    assert store.answer_question(OWNER, yes, "U0SAM0001") is False
+    assert store.answer(yes.item.id) is None
+
+
+def test_answering_needs_the_lock(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    yes = store.button(YES)
+    assert yes is not None
+    store.release_lock(OWNER)
+    with pytest.raises(Exception, match="lock"):
+        store.answer_question(OWNER, yes, "U0SAM0001")
+
+
+def test_the_poster_is_the_author_of_the_oldest_message(store: Store) -> None:
+    reply = PostKey(POST.workspace_id, POST.channel_id, "1790000003.000000")
+    store.place_message(OWNER, reply, user_id="U0LUIS0005", thread_ts=POST.ts, window_seconds=5)
+    assert store.post_poster(POST) == "U0SAM0001"
+    with pytest.raises(KeyError):
+        store.post_poster(PostKey(POST.workspace_id, POST.channel_id, "1790000999.000100"))

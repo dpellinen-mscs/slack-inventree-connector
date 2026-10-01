@@ -417,9 +417,10 @@ needs.
   so it is never logged, and retention can expire it.
 
   A crash between posting and recording posts the reply again: a
-  duplicate dry run beats a silent drop. Clicks are recorded and not
-  acted on until M2 review; edits, deletions and thread replies after
-  the dry run make revisions (above).
+  duplicate dry run beats a silent drop. Clicks on a question's buttons
+  record its answer (below); other clicks are recorded and not acted on
+  yet. Edits, deletions and thread replies after the dry run make
+  revisions (above).
 - **Replies.** The dry-run reply (`slack/replies.py`) lists each movement
   with the matched part and location names next to the words as written,
   then every review reason in plain words. Text from the post and from the
@@ -489,7 +490,20 @@ needs.
     current: a plan that has expired is not revised, so its question stays
     open, and a click is checked against expiry as well. The stored
     `approver_only` column is the mark a click trusts. Removing stale
-    buttons from Slack and handling clicks come next.
+    buttons from Slack comes next.
+  - **Answered by button (built).** The worker reads a click with the
+    ingest checks again, then against the stored button: the click's
+    channel and message must be the ones stored with it, its question
+    open (not stale, not answered), and its plan not expired (the post is
+    no older than `plan_expiry_hours`, the same bound as revisions). The
+    user must be an approver, or for a question that is not for approvers
+    only, the poster (the author of the post's oldest message). The answer
+    (the button's position and choice) and who gave it are recorded once,
+    as a compare-and-set on the open question, with an audit row by
+    `human`. Every refusal finishes the click as dropped, with its reason
+    (`unknown_button`, `other_message`, `stale`, `already_answered`,
+    `expired`, `not_allowed`). Telling the clicker why, and acting on the
+    answer (validation again, the next question), come next.
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can
   approve. Display names are never trusted. Only the poster or an approver

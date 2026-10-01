@@ -746,6 +746,40 @@ class Store:
         ).fetchall()
         return [_review_item(key, row) for row in rows]
 
+    def post_poster(self, key: PostKey) -> str:
+        """The Slack user id of the post's author: the author of its oldest message."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        rows = self._db.execute("SELECT ts, user_id FROM post_messages WHERE post_id = ?", (post_id,)).fetchall()
+        return str(min(rows, key=lambda row: seconds(row[0]))[1])
+
+    def answer_question(self, owner: str, button: Button, user: str) -> bool:
+        """Record `user`'s answer by `button`: its question is answered with the button's choice. Once: False when
+        the question was no longer open (answered, or stale), and nothing changed. The caller checks who may
+        answer, and the click's channel and message, first."""
+        answer = _json({"button": button.position, **button.choice})
+        with self._transaction():
+            self._check_lock(owner)
+            cursor = self._db.execute(
+                "UPDATE review_items SET status = 'answered', answer = ?, answered_by = ?, closed_at = ?"
+                " WHERE id = ? AND status = 'open'"
+                " AND EXISTS (SELECT 1 FROM interactions WHERE id = ? AND review_item_id = review_items.id)",
+                (answer, user, self._now(), button.item.id, button.id),
+            )
+            if cursor.rowcount != 1:
+                return False
+            post_id = self._db.execute("SELECT post_id FROM review_items WHERE id = ?", (button.item.id,)).fetchone()
+            self._audit(Actor.HUMAN, "question_answered", post_id=post_id[0])
+            return True
+
+    def answer(self, item_id: int) -> tuple[Mapping[str, Any], str] | None:
+        """The answer of a question and who gave it, or None while it has none."""
+        row = self._db.execute(
+            "SELECT answer, answered_by FROM review_items WHERE id = ? AND status = 'answered'", (item_id,)
+        ).fetchone()
+        return None if row is None else (json.loads(row[0]), str(row[1]))
+
     def button(self, button_id: str) -> Button | None:
         """The stored button with this id, with its question, or None when there is none. A click carries only
         the id: the caller checks the channel, the message and the user against what is stored."""
