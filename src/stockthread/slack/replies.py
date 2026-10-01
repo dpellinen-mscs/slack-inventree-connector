@@ -13,11 +13,14 @@ from decimal import Decimal
 from typing import Any
 
 from stockthread.core.model import CandidateMovement, Match, MatchStatus, MovementType, ReasonCode, ReviewReason
+from stockthread.core.questions import Ask, Choice, Question, choices
 
 MAX_SECTION = 2900
 """Slack allows 3000 characters in a section block. Longer text is cut, with a marker."""
 MAX_CANDIDATES = 5
 """How many candidates a line shows. The result keeps all of them; only the display is capped."""
+MAX_LABEL = 75
+"""Slack allows 75 characters in a button label."""
 MAX_MOVEMENTS = 20
 """How many movements a reply shows. Slack refuses more than 50 blocks; each movement takes 2."""
 
@@ -229,3 +232,119 @@ def retraction_notice(why: str) -> dict[str, Any]:
             )
         ],
     }
+
+
+ANSWER_ACTION = "answer"
+"""The action id of every question button. Its value is the id of the stored button row."""
+
+
+def question_message(
+    question: Question,
+    views: Sequence[MovementView],
+    parts: Mapping[int, str],
+    locations: Mapping[int, str],
+    values: Sequence[str],
+) -> dict[str, Any]:
+    """The body of a question in a post's thread. `values` holds one stored button id per `choices(question)`,
+    in order; a question without choices is answered by a thread reply."""
+    buttons = choices(question)
+    if len(values) != len(buttons) or not all(values):
+        raise ValueError("one stored button id per choice")
+    view = views[question.movement]
+    movement = view.movement
+    item = movement.line_items[question.line] if question.line is not None else None
+    written = f"“{escape(item.item_text)}”" if item is not None and item.item_text else None
+    side = question.side or "destination"
+    place_text = movement.source_text if side == "source" else movement.destination_text
+    place = f"“{escape(place_text)}”" if place_text else f"the {side}"
+    names = locations if question.side else parts
+    record = escape(names.get(question.candidates[0], f"#{question.candidates[0]}")) if question.candidates else ""
+    ask = question.ask
+    if ask is Ask.CONFIRM:
+        about = f"About {written}: " if written else ""
+        text = f"{about}{REASONS[question.reason]} Is this reading of the post right?"
+    elif ask is Ask.MOVEMENT_TYPE:
+        text = "What kind of movement is this?"
+    elif ask is Ask.NAME_PART:
+        text = (
+            f"Which part is {written}? Reply in this thread with its name or IPN."
+            if written
+            else "Which item was moved? Reply in this thread with its name or IPN."
+        )
+    elif ask is Ask.CHOOSE_PART:
+        text = f"Which part is {written or 'meant'}?"
+    elif ask is Ask.CONFIRM_PART:
+        text = f"Is {written or 'the item'} *{record}*?"
+    elif ask is Ask.QUANTITY:
+        text = (
+            f"How many {written}? Reply in this thread with a number of pieces."
+            if written
+            else "How many of each item? Reply in this thread with a number of pieces for each."
+        )
+    elif ask is Ask.NAME_LOCATION:
+        if question.reason is ReasonCode.VEHICLE_NOT_MAPPED:
+            text = "Which vehicle? Reply in this thread with its stock location."
+        elif place_text:
+            text = f"Which stock location is {place}? Reply in this thread with its name."
+        elif side == "source":
+            text = "Where was it taken from? Reply in this thread with the stock location."
+        else:
+            text = "Where did it go? Reply in this thread with the stock location."
+    elif ask is Ask.CHOOSE_LOCATION:
+        text = f"Which stock location is {place}?"
+    elif ask is Ask.CONFIRM_LOCATION:
+        text = f"Is {place} *{record}*?"
+    else:
+        text = (
+            f"Which serial numbers of {written}? Reply in this thread with one per piece."
+            if written
+            else "Which serial numbers? Reply in this thread with one per piece."
+        )
+    if len(views) > 1:
+        text = f"Movement {question.movement + 1}: {text}"
+    plain = text.replace(f"*{record}*", record) if record else text
+    blocks: list[dict[str, Any]] = [_section(text)]
+    labels = _labels(buttons, names, cut_left=question.side is not None)
+    if buttons:
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": f"{ANSWER_ACTION}-{n}",
+                        "text": {"type": "plain_text", "text": label, "emoji": False},
+                        "value": value,
+                    }
+                    for n, (label, value) in enumerate(zip(labels, values, strict=True))
+                ],
+            }
+        )
+    return {"text": plain, "blocks": blocks}
+
+
+def _labels(buttons: Sequence[Choice], names: Mapping[int, str], *, cut_left: bool) -> list[str]:
+    """Button labels. Records that would look alike get their primary key, so no two buttons read the same.
+    A location path is cut from the left, since its last part names the place."""
+    labels = [_label(choice, names, cut_left=cut_left) for choice in buttons]
+    if len(set(labels)) < len(labels):
+        labels = [
+            _label(choice, names, cut_left=cut_left, suffix=f" #{choice.record}")
+            if choice.record is not None
+            else label
+            for choice, label in zip(buttons, labels, strict=True)
+        ]
+    return labels
+
+
+def _label(choice: Choice, names: Mapping[int, str], *, cut_left: bool, suffix: str = "") -> str:
+    if choice.kind == "record" and choice.record is not None:
+        label = " ".join(names.get(choice.record, "").split()) or f"#{choice.record}"
+    elif choice.kind == "type" and choice.movement_type is not None:
+        label = TYPE_LABELS[choice.movement_type]
+    else:
+        label = {"yes": "Yes", "no": "No", "none": "None of these"}[choice.kind]
+    room = MAX_LABEL - len(suffix)
+    if len(label) > room:
+        label = "…" + label[-(room - 1) :].lstrip() if cut_left else label[: room - 1].rstrip() + "…"
+    return label + suffix

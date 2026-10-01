@@ -459,6 +459,12 @@ needs.
 
   Every reason code belongs to a tier, so every reason leads to a
   question, and a post with no reason gets none (checked on the corpus).
+  A question of the last tier is marked for approvers only, and the
+  stored button row keeps that mark. Its buttons are `answer-0`,
+  `answer-1`, ... (Slack wants different action ids in one block), each
+  carrying a stored button id; ingest reads them all as `answer`. Labels
+  that would read the same get the record's key, and a long location path
+  is cut from the left so the place itself stays visible.
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can
   approve. Display names are never trusted. Only the poster or an approver

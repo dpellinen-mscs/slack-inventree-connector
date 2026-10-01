@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 from typing import Literal, Protocol
 
-from stockthread.core.model import CandidateMovement, Match, MatchStatus, ReasonCode, ReviewReason
+from stockthread.core.model import CandidateMovement, Match, MatchStatus, MovementType, ReasonCode, ReviewReason
 from stockthread.core.validate import TYPE_UNCLEAR
 
 MAX_CHOICES = 5
@@ -140,6 +140,8 @@ class Question:
     side: Side | None = None
     candidates: tuple[int, ...] = ()
     """InvenTree primary keys to choose from (CHOOSE_*), or the one loosely matched record (CONFIRM_*)."""
+    approver_only: bool = False
+    """Only an approver may answer: the poster cannot clear these reasons (design section 4, "Authorization")."""
 
 
 def pick_question(views: Sequence[Reviewed]) -> Question | None:
@@ -164,7 +166,8 @@ def _from_reasons(index: int, view: Reviewed) -> list[tuple[Tier, int, Question]
             tier, ask = Tier.READING, Ask.CONFIRM  # items were read from the photo: is that reading right
         line = _line(reason, movement)
         order = _LAST if reason.code in _FROM_MATCHES else -1 if line is None else line
-        found.append((tier, order, Question(ask, reason.code, index, line, side)))
+        question = Question(ask, reason.code, index, line, side, approver_only=tier is Tier.APPROVAL)
+        found.append((tier, order, question))
     return found
 
 
@@ -218,3 +221,28 @@ def _for_match(match: Match, index: int, line: int | None, side: Side | None) ->
         ask = Ask.CHOOSE_PART if part else Ask.CHOOSE_LOCATION
         return Question(ask, reason.code, index, line, side, match.candidates)
     return Question(Ask.NAME_PART if part else Ask.NAME_LOCATION, reason.code, index, line, side)
+
+
+@dataclass(frozen=True)
+class Choice:
+    """One button of a question. A question asked as a thread reply has none."""
+
+    kind: Literal["yes", "no", "record", "none", "type"]
+    record: int | None = None
+    """The part or location (`record`), else None."""
+    movement_type: MovementType | None = None
+    """The movement type (`type`), else None."""
+
+
+_TYPES = tuple(kind for kind in MovementType if kind is not MovementType.UNCLEAR)
+
+
+def choices(question: Question) -> tuple[Choice, ...]:
+    """The buttons of a question, in order. Every button stands for exactly one answer."""
+    if question.ask in (Ask.CONFIRM, Ask.CONFIRM_PART, Ask.CONFIRM_LOCATION):
+        return (Choice("yes"), Choice("no"))
+    if question.ask is Ask.MOVEMENT_TYPE:
+        return tuple(Choice("type", movement_type=kind) for kind in _TYPES)
+    if question.ask in (Ask.CHOOSE_PART, Ask.CHOOSE_LOCATION):
+        return (*(Choice("record", record=pk) for pk in question.candidates), Choice("none"))
+    return ()

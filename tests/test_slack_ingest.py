@@ -136,6 +136,15 @@ def test_only_apply_needs_an_approver() -> None:
     assert click.action_id == "answer"
 
 
+@pytest.mark.parametrize("action_id", ["answer-0", "answer-7", "answer-99"])
+def test_a_numbered_question_button_is_an_answer(action_id: str) -> None:
+    body = copy.deepcopy(load(EVENTS / "block_actions_not_approver.json")["body"])
+    body["actions"][0]["action_id"] = action_id
+    click = ingest_action(body, SETTINGS)
+    assert isinstance(click, Click)
+    assert click.action_id == "answer"
+
+
 def test_clicks_from_another_workspace_app_or_channel_are_dropped() -> None:
     for path, reason in (
         (("team", "id"), DropReason.WRONG_WORKSPACE),
@@ -332,6 +341,12 @@ def test_enterprise_org_ids_are_refused_in_settings() -> None:
     [
         (lambda body: body["actions"][0].update(action_id="Apply"), DropReason.UNKNOWN_ACTION),
         (lambda body: body["actions"][0].update(action_id="apply "), DropReason.UNKNOWN_ACTION),
+        (lambda body: body["actions"][0].update(action_id="apply-0"), DropReason.UNKNOWN_ACTION),
+        (lambda body: body["actions"][0].update(action_id="answer-01"), DropReason.UNKNOWN_ACTION),
+        (lambda body: body["actions"][0].update(action_id="answer-100"), DropReason.UNKNOWN_ACTION),
+        (lambda body: body["actions"][0].update(action_id="answer-"), DropReason.UNKNOWN_ACTION),
+        (lambda body: body["actions"][0].update(action_id="answer-1\n"), DropReason.UNKNOWN_ACTION),
+        (lambda body: body["actions"][0].update(action_id="answer-\u0663"), DropReason.UNKNOWN_ACTION),
         (lambda body: body["actions"][0].update(type="static_select"), DropReason.UNKNOWN_ACTION),
         (lambda body: body["container"].update(type="view"), DropReason.MALFORMED),
         (lambda body: body["container"].update(channel_id="C0OTHER999"), DropReason.MALFORMED),
