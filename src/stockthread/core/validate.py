@@ -86,6 +86,10 @@ def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
     return ReviewReason(code, ReasonSource.RULE, detail)
 
 
+TYPE_UNCLEAR = "type unclear"
+"""The detail of the reason an unclear movement type raises (other MOVEMENT_UNCLEAR details doubt the text)."""
+
+
 def validate(
     movement: CandidateMovement,
     text: str,
@@ -132,7 +136,7 @@ def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     if not text.strip():
         reasons.add(_rule(ReasonCode.PHOTO_ONLY, "no text"))
     if kind is MovementType.UNCLEAR:
-        reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, "type unclear"))
+        reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, TYPE_UNCLEAR))
     return reasons
 
 

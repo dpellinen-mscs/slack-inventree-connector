@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import pytest
+from corpus import candidate, cases
 
 from stockthread.core.model import (
     CandidateMovement,
@@ -20,8 +19,6 @@ from stockthread.core.model import (
     ReviewReason,
 )
 from stockthread.core.validate import validate
-
-EVAL = Path(__file__).resolve().parents[2] / "eval"
 
 
 def take(item: str = "Disc 40", quantity: str | None = "2", **fields: Any) -> CandidateMovement:
@@ -202,40 +199,15 @@ def test_a_count_may_be_zero() -> None:
     assert codes(count, "truck 1 count: 0 Disc 40") == set()
 
 
-def _cases() -> list[dict[str, Any]]:
-    cases = []
-    for path in sorted((EVAL / "cases").glob("*.json")):
-        cases.extend(json.loads(path.read_text(encoding="utf-8"))["cases"])
-    return cases
-
-
-def _candidate(expected: dict[str, Any]) -> CandidateMovement:
-    """An expected movement as an extractor that raised no flag at all would return it."""
-    return CandidateMovement(
-        MovementType(expected["movement_type"]),
-        tuple(
-            LineItem(
-                item["item_text"],
-                None if item["quantity"] is None else Decimal(str(item["quantity"])),
-                item.get("unit"),
-                None if item.get("pack_size") is None else Decimal(str(item["pack_size"])),
-            )
-            for item in expected["line_items"]
-        ),
-        expected["source_text"],
-        expected["destination_text"],
-    )
-
-
 RULE_FLAGS = {"implied_source", "implied_destination", "pack_unit_ambiguous", "items_missing", "photo_only"}
 """The flags that follow from the fields and the text (eval/README.md, "Flags")."""
 
 
-@pytest.mark.parametrize("case", _cases(), ids=lambda case: case["id"])
+@pytest.mark.parametrize("case", cases(), ids=lambda case: case["id"])
 def test_rules_alone_raise_every_field_flag_in_the_corpus(case: dict[str, Any]) -> None:
     text = "\n".join(m.get("text", "") for m in case["post"]["messages"] if not m.get("is_bot"))
     for expected in case["expected"]["movements"]:
-        movement = _candidate(expected)
+        movement = candidate(expected)
         raised = {reason.code.value for reason in validate(movement, text, max_quantity=100)}
         assert set(expected["flags"]) & RULE_FLAGS <= raised
         if any(item["quantity"] is None for item in expected["line_items"]):
