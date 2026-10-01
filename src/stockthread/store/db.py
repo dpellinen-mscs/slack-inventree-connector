@@ -643,14 +643,15 @@ class Store:
         return int(row[0] or 0)
 
     def answers(self, key: PostKey, through: int) -> list[tuple[ReviewItem, Mapping[str, Any], str]]:
-        """The post's answered questions up to `through`, oldest first: each with its answer and who gave it."""
+        """The post's answered questions up to `through`, oldest first: each with its answer and who gave it.
+        Answers given before migration 0013 (up to the first dry run's `answers_through`) are never listed."""
         post_id = self._post_id(key)
         if post_id is None:
             raise KeyError("no such post")
         rows = self._db.execute(
             "SELECT id, revision, question, approver_only, channel_id, message_ts, status, poster_id, expires_from,"
-            " answer, answered_by FROM review_items WHERE post_id = ? AND status = 'answered' AND id <= ?"
-            " ORDER BY id",
+            " answer, answered_by FROM review_items WHERE post_id = ?1 AND status = 'answered' AND id <= ?2"
+            " AND id > (SELECT answers_through FROM dry_runs WHERE post_id = ?1) ORDER BY id",
             (post_id, through),
         ).fetchall()
         return [(_review_item(key, row[:9]), json.loads(row[9]), str(row[10])) for row in rows]

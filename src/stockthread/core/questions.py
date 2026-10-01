@@ -165,7 +165,7 @@ def _from_reasons(index: int, view: Reviewed) -> list[tuple[Tier, int, Question]
             tier, ask = Tier.TYPE, Ask.MOVEMENT_TYPE
         if reason.code is ReasonCode.PHOTO_ONLY and any((item.item_text or "").strip() for item in movement.line_items):
             tier, ask = Tier.READING, Ask.CONFIRM  # items were read from the photo: is that reading right
-        line = _line(reason, movement)
+        line = reason_line(reason, movement)
         order = _LAST if reason.code in _FROM_MATCHES else -1 if line is None else line
         question = Question(ask, reason.code, index, line, side, approver_only=tier is Tier.APPROVAL)
         found.append((tier, order, question))
@@ -187,7 +187,7 @@ def tier_of(question: Question) -> Tier:
     return _BY_REASON[question.reason][0]
 
 
-def _line(reason: ReviewReason, movement: CandidateMovement) -> int | None:
+def reason_line(reason: ReviewReason, movement: CandidateMovement) -> int | None:
     """The line a reason is about: named in its detail, the first line it fits, the only line, or None."""
     lines = movement.line_items
     named = _LINE.match(reason.detail)

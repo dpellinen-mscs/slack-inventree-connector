@@ -111,7 +111,7 @@ def test_a_movement_type_picked_replaces_the_unclear_one() -> None:
 def test_yes_to_a_doubt_about_the_reading_clears_that_code_for_that_movement_only() -> None:
     question = Question(Ask.CONFIRM, ReasonCode.PHOTO_NOT_READ, 1)
     effects = replay([given(1, question, Choice("yes"))], [1, 1], APPROVERS)
-    assert effects.cleared == {(1, ReasonCode.PHOTO_NOT_READ)}
+    assert effects.cleared == {(1, None, ReasonCode.PHOTO_NOT_READ)}
     assert effects.rejected is None
 
 
@@ -130,20 +130,21 @@ def test_no_to_a_doubt_about_the_reading_ends_the_plan_and_nothing_after_it_coun
 
 
 def test_an_approval_answer_counts_only_from_someone_who_is_an_approver_now() -> None:
-    question = Question(Ask.CONFIRM, ReasonCode.QUANTITY_ABOVE_LIMIT, 0, approver_only=True)
+    question = Question(Ask.CONFIRM, ReasonCode.QUANTITY_ABOVE_LIMIT, 0, 0, approver_only=True)
     by_approver = replay([given(1, question, Choice("yes"), LUIS)], [1], APPROVERS)
-    assert by_approver.cleared == {(0, ReasonCode.QUANTITY_ABOVE_LIMIT)}
+    assert by_approver.cleared == {(0, 0, ReasonCode.QUANTITY_ABOVE_LIMIT)}
     no_longer = replay([given(1, question, Choice("yes"), LUIS)], [1], frozenset())
     assert (no_longer.cleared, no_longer.ignored) == (set(), [1])
     rejected = replay([given(1, question, Choice("no"), SAM)], [1], APPROVERS)
     assert (rejected.rejected, rejected.ignored) == (None, [1])
 
 
-def test_yes_to_a_stock_doubt_clears_nothing_yet() -> None:
+def test_yes_to_a_stock_doubt_clears_nothing_yet_and_no_ends_the_plan() -> None:
     question = Question(Ask.CONFIRM, ReasonCode.STOCK_CHOICE, 0)
     assert not clears_on_yes(question)
     effects = replay([given(1, question, Choice("yes"))], [1], APPROVERS)
     assert (effects.cleared, effects.ignored) == (set(), [1])
+    assert replay([given(1, question, Choice("no"))], [1], APPROVERS).rejected == 1
 
 
 def test_a_later_answer_about_the_same_line_wins() -> None:

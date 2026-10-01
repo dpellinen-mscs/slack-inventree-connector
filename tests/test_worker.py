@@ -3300,6 +3300,7 @@ def test_answers_given_before_the_upgrade_start_no_revision(path: Path, monkeypa
     try:
         assert store.posts_waiting_for_dry_run() == []
         assert store.post_answers_through(KEY) == 1
+        assert store.answers(KEY, 1) == []  # never replayed, even onto a reading that stays the same
     finally:
         store.close()
 
@@ -3325,3 +3326,28 @@ def test_a_revision_needs_something_new_and_an_answer_is_something_new(store: St
     [(item, answer, by)] = store.answers(KEY, 1)
     assert (item.status.value, answer["kind"], by) == ("answered", "yes", SAM)
     assert store.answers(KEY, 0) == []
+
+
+def test_yes_to_one_line_above_the_limit_leaves_the_other_line_to_ask(store: Store, clock: Clock) -> None:
+    text = "shuffled 5000 Disc 40 and 6000 ONT 100 from main stock to truck 1"
+    lines = (LineItem("Disc 40", Decimal(5000)), LineItem("ONT 100", Decimal(6000)))
+    movement = CandidateMovement(MovementType.TAKE_TO_VEHICLE, lines, "main stock", "truck 1")
+    slack = FakeSlack()
+    worker = Worker(
+        approving(), store, OWNER, slack, lambda: CATALOG, clock, llm=FakeLLM(Extraction(MODEL, (movement,)))
+    )
+    enqueue(store, message(ROOT, text))
+    read_and_answered(worker, clock)
+    [reply] = slack.posted
+    [item] = store.questions(KEY)
+    assert (item.question["reason"], item.question["line"]) == ("quantity_above_limit", 0)
+    clicked(store, click_on({**reply, "channel": CHANNEL}, "1790009999.000001", 0, LUIS), "1")  # yes
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    reasons = [(r["code"], r["detail"].split(":")[0]) for r in record.result["movements"][0]["reasons"]]
+    assert ("quantity_above_limit", "line 1") not in reasons
+    assert ("quantity_above_limit", "line 2") in reasons
+    [_, following] = store.questions(KEY)
+    assert (following.question["reason"], following.question["line"]) == ("quantity_above_limit", 1)

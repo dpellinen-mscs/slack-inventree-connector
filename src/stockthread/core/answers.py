@@ -9,8 +9,9 @@ the reading that stands, oldest first, onto that same reading read again; this m
 - A movement type picked replaces an unclear one. The caller validates the movement again, so a type that
   contradicts the places raises its own question.
 - "Yes" to a doubt about the whole reading, or to a question for approvers, clears the reason code it was asked
-  for, for that movement only. Any other reason (a serial, a quantity) is still asked about.
-- "No" to either ends the plan: nothing of this reading will be applied.
+  for, for that movement and line only (the line the question named, or none). Any other reason (a serial, a
+  quantity, the same doubt about another line) is still asked about.
+- "No" to any yes-or-no question about the reading ends the plan: nothing of this reading will be applied.
 
 An answer to a question for approvers counts only while its author is an approver; one that does not fit its
 question (a record that was not offered, a movement or line the reading does not have) changes nothing. Neither
@@ -60,7 +61,8 @@ class Effects:
     types: dict[int, MovementType] = field(default_factory=dict)
     parts: dict[tuple[int, int], Match] = field(default_factory=dict)
     places: dict[tuple[int, Side], Match] = field(default_factory=dict)
-    cleared: set[tuple[int, ReasonCode]] = field(default_factory=set)
+    cleared: set[tuple[int, int | None, ReasonCode]] = field(default_factory=set)
+    """(movement, line or None, code): the reasons a "yes" cleared (`questions.reason_line` gives a reason's line)."""
     rejected: int | None = None
     """The id of the question whose "no" ended the plan, or None."""
     applied: list[int] = field(default_factory=list)
@@ -108,14 +110,14 @@ def _apply(answer: Given, shape: Sequence[int], approvers: Collection[str], effe
                 return False
             effects.places[(movement, question.side)] = match
         return True
-    if ask is Ask.CONFIRM and clears_on_yes(question):
-        if choice.kind == "yes":
-            effects.cleared.add((movement, question.reason))
-            return True
+    if ask is Ask.CONFIRM:
         if choice.kind == "no":
-            effects.rejected = answer.item
+            effects.rejected = answer.item  # whatever it doubted, the person says the reading is wrong
             return True
-    return False  # a question answered by a thread reply has no buttons; any other confirm clears nothing yet
+        if choice.kind == "yes" and clears_on_yes(question):
+            effects.cleared.add((movement, question.line, question.reason))
+            return True
+    return False  # a question answered by a thread reply has no buttons; a yes to a stock doubt clears nothing yet
 
 
 def clears_on_yes(question: Question) -> bool:

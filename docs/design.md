@@ -593,8 +593,10 @@ needs.
       asked again and cannot read the same words otherwise. A part or
       location answer is a match by the `answer` rule. "Yes" clears a
       reason only for a doubt about the whole reading or an approval
-      question; a "yes" to a stock question clears nothing until source
-      selection asks its own. An answer that does not fit its question
+      question, and only on the line the question named (a reason
+      about another line is asked next); a "yes" to a stock question
+      clears nothing until source selection asks its own. "No" to any
+      yes-or-no question about the reading ends the plan. An answer that does not fit its question
       (a record not offered, a line the reading lacks) is ignored. A new
       answer always posts a reply, even one that changes nothing, so the
       next question is asked.

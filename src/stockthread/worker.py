@@ -76,7 +76,7 @@ from stockthread.core.model import (
     ReasonSource,
     ReviewReason,
 )
-from stockthread.core.questions import choice_json, choices, pick_question, question_json
+from stockthread.core.questions import choice_json, choices, pick_question, question_json, reason_line
 from stockthread.core.validate import photo_not_read, validate
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.catchup import is_catch_up
@@ -762,7 +762,11 @@ class Worker:
                     items=[effects.parts.get((n, line), match) for line, match in enumerate(view.items)],
                     source=effects.places.get((n, "source"), view.source),
                     destination=effects.places.get((n, "destination"), view.destination),
-                    reasons=tuple(reason for reason in reasons if (n, reason.code) not in effects.cleared),
+                    reasons=tuple(
+                        reason
+                        for reason in reasons
+                        if (n, reason_line(reason, movement), reason.code) not in effects.cleared
+                    ),
                 )
             )
         return found
