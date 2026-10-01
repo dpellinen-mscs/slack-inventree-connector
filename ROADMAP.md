@@ -82,7 +82,7 @@ The quickstart reaches the first dry-run in about 15 minutes.
 - [ ] One focused question per post in the thread, with buttons for short candidate lists
   - [x] Which question: `core/questions.py` picks one per post by tier (design section 4, "Questions")
   - [x] The question in the thread, with buttons and a stored button row (in the dry-run reply; migration 0010)
-  - [ ] Stale buttons removed from Slack when a revision replaces the reply
+  - [x] Stale buttons removed from Slack when a revision replaces the reply (and once a question is answered; migration 0012)
 - [ ] Answers by button or by thread reply update the candidate and re-run validation
   - [x] A click on a question's button is checked against its stored row and recorded as the answer
   - [x] The clicker is told why a click did nothing (stale, expired, not allowed): an ephemeral note in the thread

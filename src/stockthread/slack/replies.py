@@ -7,6 +7,7 @@ mention such as <!channel> or a disguised link. Catalog names are escaped too.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -325,11 +326,16 @@ def question_message(
     return {"text": plain, "blocks": blocks}
 
 
+QUESTION_BLOCK = "question"
+"""The block id of the divider above a question: everything from it on is the question (`without_question`)."""
+_SLACK_USER = re.compile(r"[UW][A-Z0-9]{2,}")
+
+
 def with_question(reply: Mapping[str, Any], question: Mapping[str, Any]) -> dict[str, Any]:
     """The dry-run reply with its question below it, so the reply and its buttons are one message: the buttons are
     stored with the reply's record, and no question is posted without the reply it belongs to. The notification
     text stays the reply's own."""
-    blocks = [*reply["blocks"], {"type": "divider"}, *question["blocks"]]
+    blocks = [*reply["blocks"], {"type": "divider", "block_id": QUESTION_BLOCK}, *question["blocks"]]
     if len(blocks) > MAX_BLOCKS:
         raise ValueError("a reply with its question has more blocks than Slack allows")
     return {"text": reply["text"], "blocks": blocks}
@@ -388,3 +394,25 @@ def click_feedback(outcome: str, *, approver_only: bool, approvers: bool, expiry
     text = CLICK_FEEDBACK.get(outcome)
     hours = "1 hour" if expiry_hours == 1 else f"{expiry_hours} hours"
     return None if text is None else text.format(hours=hours)
+
+
+def without_question(blocks: Sequence[Any]) -> list[dict[str, Any]] | None:
+    """The blocks of a reply as Slack returns them, without the question asked in it: everything before the
+    divider marked QUESTION_BLOCK. None when there is no such divider, or a block is not an object."""
+    if not all(isinstance(block, Mapping) for block in blocks):
+        return None
+    for n, block in enumerate(blocks):
+        if block.get("type") == "divider" and block.get("block_id") == QUESTION_BLOCK:
+            return [dict(kept) for kept in blocks[:n]]
+    return None
+
+
+def question_closed(answered_by: str | None) -> dict[str, Any]:
+    """The line that stands where a question was, once it is answered (by whom) or replaced by a newer reply."""
+    if answered_by is None:
+        text = "This question was replaced by a newer reply in this thread."
+    elif _SLACK_USER.fullmatch(answered_by):
+        text = f"This question was answered by <@{answered_by}>."
+    else:
+        text = "This question was answered."
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}

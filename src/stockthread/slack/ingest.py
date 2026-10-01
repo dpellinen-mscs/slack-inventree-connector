@@ -198,6 +198,13 @@ def ingest_action(payload: object, settings: SlackSettings) -> Decision:
         return Drop(DropReason.MALFORMED)
 
 
+def posted_by_app(message: Mapping[str, Any], app_id: str) -> bool:
+    """A message this app posted, as the message itself says: a bot id, and the app's id where it names one."""
+    profile = message.get("bot_profile")
+    apps = {message.get("app_id"), profile.get("app_id") if isinstance(profile, Mapping) else None} - {None}
+    return message.get("bot_id") is not None and apps == {app_id}
+
+
 def _is_bot(message: Mapping[str, Any]) -> bool:
     return message.get("subtype") == "bot_message" or any(
         message.get(key) is not None for key in ("bot_id", "bot_profile", "app_id")
@@ -276,6 +283,8 @@ def revised_message(payload: object, settings: SlackSettings) -> tuple[str, str]
         team = part.get("user_team", part.get("team")) if isinstance(part, Mapping) else None
         if team is not None and team != settings.workspace_id:
             return None
+        if isinstance(part, Mapping) and part is not event and posted_by_app(part, settings.app_id):
+            return None  # the connector's own reply, edited to take its buttons down
     if subtype == "message_deleted":
         ts = event.get("deleted_ts") or before
     elif subtype == "message_changed":

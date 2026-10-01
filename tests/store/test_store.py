@@ -13,7 +13,16 @@ import pytest
 from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, IllegalTransition, RequestState
-from stockthread.store import InstanceLocked, LockLost, SchemaTooNew, StateConflict, Store, WriteBlocked
+from stockthread.store import (
+    DryRunOutcome,
+    InstanceLocked,
+    LockLost,
+    NewQuestion,
+    SchemaTooNew,
+    StateConflict,
+    Store,
+    WriteBlocked,
+)
 from stockthread.store import db as store_db
 
 S = RequestState
@@ -692,4 +701,23 @@ def test_a_file_from_before_the_row_id_triggers_gets_them_and_keeps_working(
     upgraded.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
     assert upgraded.create_plan(POST, HASH, (Operation.TRANSFER,)) == 1  # ordinary updates still pass
     upgraded.transition(key(), expected=S.PLANNED, target=S.APPROVED, actor=A.HUMAN)
+    upgraded.close()
+
+
+def test_questions_closed_before_buttons_were_taken_down_are_left_as_they_are(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = store_db._migrations()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real[:11])
+    old = Store.open(path)
+    old.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
+    old.place_message(OWNER, POST, user_id="U0SAM0001", thread_ts=None, window_seconds=5)
+    ask = NewQuestion({"ask": "confirm"}, False, [("y" * 22, {"kind": "yes"})], poster="U0SAM0001", expires_from="1")
+    old.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, "1790000020.000100", question=ask)
+    old.close()
+    raw(path).execute("UPDATE review_items SET status = 'stale', closed_at = 'then'")
+    monkeypatch.setattr(store_db, "_migrations", lambda: real)
+    upgraded = Store.open(path)
+    assert upgraded.closed_with_buttons(limit=10) == []  # never edited after the upgrade
+    assert raw(path).execute("SELECT buttons, buttons_tries FROM review_items").fetchall() == [("left", 0)]
     upgraded.close()

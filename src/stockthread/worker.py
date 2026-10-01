@@ -83,6 +83,7 @@ from stockthread.slack.ingest import (
     Revised,
     ingest_action,
     ingest_event,
+    posted_by_app,
     revised_message,
 )
 from stockthread.slack.replies import (
@@ -91,9 +92,11 @@ from stockthread.slack.replies import (
     click_feedback,
     dry_run_reply,
     gate_reasons,
+    question_closed,
     question_message,
     retraction_notice,
     with_question,
+    without_question,
 )
 from stockthread.store import (
     Answered,
@@ -103,6 +106,7 @@ from stockthread.store import (
     LockLost,
     NewQuestion,
     QuestionStatus,
+    ReviewItem,
     Store,
     WaitingPost,
     new_button_id,
@@ -123,6 +127,14 @@ RETRY_FOR_SECONDS = 15 * 60
 """How long posting a reply, or asking the LLM provider, is retried with backoff before the post is finished
 without a reply."""
 MAX_BACKOFF_SECONDS = 60
+TAKE_DOWN_SPACING_SECONDS = 2
+"""One reply is edited to take a closed question's buttons down at most this often: two calls each, within the
+50 a minute that `conversations.replies` and `chat.update` each allow."""
+TAKE_DOWN_TRIES = 3
+"""Failed attempts on one question before the connector gives up on taking its buttons down."""
+TAKE_DOWN_BACKOFF_SECONDS = 60
+"""After a failed attempt no buttons are taken down for this long (doubled for the question's each further
+failure), or for as long as Slack asks, if longer."""
 NOTE_QUIET_SECONDS = 60
 """After a note to a clicker fails, no note is sent for this long: a slow Slack never holds the queue up."""
 HEARTBEAT_SECONDS = 10.0
@@ -155,12 +167,22 @@ class SlackPoster(Protocol):
 
     def chat_postEphemeral(self, *, channel: str, user: str, thread_ts: str, text: str) -> Any: ...
 
+    def conversations_replies(
+        self, *, channel: str, ts: str, oldest: str, latest: str, inclusive: bool, limit: int
+    ) -> Any: ...
+
+    def chat_update(self, *, channel: str, ts: str, text: str, blocks: Sequence[dict[str, Any]]) -> Any: ...
+
 
 class PostExtractor(Protocol):
     """The LLM extractor (`llm.extract.LLMExtractor`). Raises ProviderError when its provider gives no answer,
     and its subclass NoReading when the answer is no reading of this post."""
 
     def extract(self, messages: Sequence[MessageInput]) -> Extraction: ...
+
+
+class PosterBusy(Exception):
+    """Another thread's call is still running, and this one was not sent. An ordinary failure: try again."""
 
 
 class PostStillRunning(Exception):
@@ -258,6 +280,8 @@ class Worker:
     """What to tell the clicker about the event being handled."""
     _notes_quiet_until: Decimal = Decimal(0)
     """A note failed: no note is sent before this time."""
+    _take_down_quiet_until: Decimal = Decimal(0)
+    """No buttons are taken down before this time."""
 
     def beat(self, *, now: bool = False) -> None:
         """Beat the instance lock's heartbeat, at most every HEARTBEAT_SECONDS unless `now`. Raises LockLost."""
@@ -268,7 +292,7 @@ class Worker:
     def step(self) -> int:
         """Drain the queue and, once it is empty, reply to the posts that are due. Returns how much was done."""
         done, empty = self.drain()
-        return done + self.reply_due() if empty else done
+        return done + self.reply_due() + self.take_down_buttons() if empty else done
 
     def drain(self) -> tuple[int, bool]:
         """Handle pending events: how many, and whether the queue is empty now."""
@@ -384,6 +408,65 @@ class Worker:
         except Exception as error:
             _log_failure("click feedback", event_id, error)
             self._notes_quiet_until = now + NOTE_QUIET_SECONDS
+
+    def take_down_buttons(self) -> int:
+        """Take a question out of the reply it was asked in, once it is answered or a newer reply replaced it
+        (design section 4, "Interactivity"): the reply is read back from Slack, and edited to end with a line that
+        says what became of the question. Best effort, one reply per TAKE_DOWN_SPACING_SECONDS, fewest failed
+        tries first; the clicks are checked against the store whatever Slack shows. Returns 1 when a reply was
+        edited or given up on."""
+        now = self._now()
+        if self.stopping() or now < max(self._quiet_until, self._take_down_quiet_until):
+            return 0
+        listed = self.store.closed_with_buttons(limit=1)
+        if not listed:
+            return 0
+        item, answered_by = listed[0]
+        self.beat()
+        self._take_down_quiet_until = now + TAKE_DOWN_SPACING_SECONDS
+        try:
+            removed = self._take_down(item, answered_by)
+        except PosterBusy:
+            return 0  # another call is still on its way: nothing was tried
+        except Exception as error:
+            _log_failure("buttons of question", item.id, error)
+            tries = self.store.buttons_failed(self.owner, item.id)
+            # Every failure pauses all take-downs, the last try of this question too: the next question waits
+            # out the same outage or rate limit instead of spending its tries in it.
+            wait = max(TAKE_DOWN_BACKOFF_SECONDS * 2 ** (min(tries, TAKE_DOWN_TRIES) - 1), _retry_after(error))
+            self._take_down_quiet_until = now + wait
+            if tries < TAKE_DOWN_TRIES:
+                return 0
+            removed = False
+        self.store.buttons_taken_down(self.owner, item.id, removed=removed)
+        if not removed:
+            log.warning("buttons of question %s: left in Slack", item.id)
+        return 1
+
+    def _take_down(self, item: ReviewItem, answered_by: str | None) -> bool:
+        """Edit the reply; False when it is gone or carries no question to take out."""
+        if item.message_ts is None:  # closed_with_buttons lists none
+            return False
+        found = self.slack.conversations_replies(
+            channel=item.channel_id,
+            ts=item.post.ts,
+            oldest=item.message_ts,
+            latest=item.message_ts,
+            inclusive=True,
+            limit=2,  # the thread's root always comes first
+        )
+        reply = next((m for m in found["messages"] if m.get("ts") == item.message_ts), None)
+        if reply is None or not posted_by_app(reply, self.settings.slack.app_id):
+            return False
+        blocks = reply.get("blocks") or []
+        closing = question_closed(answered_by if item.status is QuestionStatus.ANSWERED else None)
+        kept = without_question(blocks)
+        if kept is None:
+            return _closed_already(blocks, closing)  # an edit whose call ran out of time went through
+        self.slack.chat_update(
+            channel=item.channel_id, ts=item.message_ts, text=str(reply.get("text") or ""), blocks=[*kept, closing]
+        )
+        return True
 
     def _answer(self, click: Click, button: Button | None) -> tuple[EventStatus, str]:
         if button is None:
@@ -888,6 +971,14 @@ def _as_changed(stored: NewMessage, changes: Sequence[Decision | None]) -> tuple
     if deleted:
         return MessageInput(original.ts, "", newest.edited_ts, deleted=True), source
     return MessageInput(newest.ts, newest.text, newest.edited_ts, newest.file_ids), source
+
+
+def _closed_already(blocks: Sequence[Any], closing: Mapping[str, Any]) -> bool:
+    last = blocks[-1] if blocks else None
+    if not isinstance(last, Mapping) or last.get("type") != "context" or not last.get("elements"):
+        return False
+    first = last["elements"][0]
+    return isinstance(first, Mapping) and first.get("text") == closing["elements"][0]["text"]
 
 
 def _part(text: str | None, catalog: Catalog, poster: str) -> Match:

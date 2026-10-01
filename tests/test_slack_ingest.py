@@ -364,3 +364,25 @@ def test_only_known_buttons_on_our_message_count(change: Any, reason: DropReason
 def test_a_payload_that_is_not_an_object_is_dropped(payload: Any) -> None:
     assert ingest_event(payload, SETTINGS, RecentEvents()) == Drop(DropReason.MALFORMED)
     assert ingest_action(payload, SETTINGS) == Drop(DropReason.MALFORMED)
+
+
+@pytest.mark.parametrize("where", ["message", "previous_message"])
+@pytest.mark.parametrize("how", ["app_id", "bot_profile"])
+def test_an_edit_of_the_connectors_own_reply_is_never_a_revision(where: str, how: str) -> None:
+    """The connector edits its own replies to take buttons down; Slack sends that edit back as an event."""
+    body = changed()
+    assert revised_message(body, SETTINGS) is not None
+    body["event"][where]["bot_id"] = "B0STOCKBOT"
+    body["event"][where][how] = {"app_id": "A0ACME001"} if how == "bot_profile" else "A0ACME001"
+    assert revised_message(body, SETTINGS) is None
+    assert ingest_event(body, SETTINGS, RecentEvents()) == Drop(DropReason.BOT)
+
+
+@pytest.mark.parametrize(
+    "fields", [{"app_id": "A0OTHER999"}, {"bot_id": "B0STOCKBOT"}, {"bot_id": "B0OTHER01", "app_id": "A0OTHER999"}]
+)
+def test_an_edit_that_does_not_name_this_app_is_still_a_revision(fields: dict[str, str]) -> None:
+    """A person's post edited through some other app, or an edit that names no app: still read as a revision."""
+    body = changed()
+    body["event"]["message"].update(fields)
+    assert revised_message(body, SETTINGS) == ("C0ACME001", body["event"]["message"]["ts"])

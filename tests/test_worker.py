@@ -10,9 +10,11 @@ from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from slack_sdk.errors import SlackApiError
 
 from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules
@@ -33,6 +35,10 @@ from stockthread.worker import (
     NOTE_QUIET_SECONDS,
     RETRY_FOR_SECONDS,
     ROOT_WAIT_SECONDS,
+    TAKE_DOWN_BACKOFF_SECONDS,
+    TAKE_DOWN_SPACING_SECONDS,
+    TAKE_DOWN_TRIES,
+    PosterBusy,
     PostStillRunning,
     Worker,
 )
@@ -61,6 +67,10 @@ class FakeSlack:
         self.failures = 0
         self.notes: list[dict[str, Any]] = []
         self.note_failures = 0
+        self.updates: list[dict[str, Any]] = []
+        self.update_failures = 0
+        self.edited: dict[str, list[dict[str, Any]]] = {}
+        """Blocks of a reply as it stands after an edit, by its ts."""
 
     def chat_postMessage(self, **kwargs: Any) -> dict[str, Any]:
         if self.failures:
@@ -68,6 +78,27 @@ class FakeSlack:
             raise ConnectionError("synthetic outage")
         self.posted.append(kwargs)
         return {"ok": True, "ts": f"1790009999.{len(self.posted):06d}"}
+
+    def conversations_replies(self, **kwargs: Any) -> dict[str, Any]:
+        """The thread's root (a person's post), then the replies the connector posted within the bounds."""
+        assert kwargs["inclusive"] is True
+        root = {"type": "message", "user": "U0SAM0001", "text": "a post", "ts": kwargs["ts"]}
+        listed = [root]
+        for n, reply in enumerate(self.posted, start=1):
+            ts = f"1790009999.{n:06d}"
+            if reply["thread_ts"] == kwargs["ts"] and kwargs["oldest"] <= ts <= kwargs["latest"]:
+                blocks = self.edited.get(ts, reply["blocks"])
+                listed.append({"type": "message", "bot_id": "B0STOCKBOT", "app_id": APP, "ts": ts,
+                               "thread_ts": kwargs["ts"], "text": reply["text"], "blocks": blocks})  # fmt: skip
+        return {"ok": True, "messages": listed[: kwargs["limit"]], "has_more": False}
+
+    def chat_update(self, **kwargs: Any) -> dict[str, Any]:
+        if self.update_failures:
+            self.update_failures -= 1
+            raise ConnectionError("synthetic outage")
+        self.updates.append(kwargs)
+        self.edited[kwargs["ts"]] = list(kwargs["blocks"])
+        return {"ok": True, "ts": kwargs["ts"]}
 
     def chat_postEphemeral(self, **kwargs: Any) -> dict[str, Any]:
         if self.note_failures:
@@ -2256,7 +2287,7 @@ def test_a_post_with_a_reason_asks_its_question_in_the_reply(
     enqueue(store, message(ROOT, NO_SOURCE))
     due(worker, clock)
     [reply] = slack.posted
-    assert reply["blocks"][-2] == {"type": "divider"}
+    assert reply["blocks"][-2] == {"type": "divider", "block_id": "question"}
     assert "Where was it taken from?" in reply["blocks"][-1]["text"]["text"]
     assert reply["text"] == "Dry run: 1 movement, nothing changed."
     [item] = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
@@ -2760,3 +2791,237 @@ def test_recorded_answer_clicks_are_checked_against_the_stored_button(
     [item] = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
     expected = ({"button": 1, "kind": "record", "record": 2}, SAM) if outcome == "answered" else None
     assert store.answer(item.id) == expected
+
+
+# Buttons taken down once their question is closed (design section 4, "Interactivity").
+
+
+def buttons(path: Path) -> list[tuple[str, str, int]]:
+    with sqlite3.connect(path) as raw:
+        return raw.execute("SELECT status, buttons, buttons_tries FROM review_items ORDER BY id").fetchall()
+
+
+def buttons_audit(path: Path) -> list[str]:
+    with sqlite3.connect(path) as raw:
+        return [row[0] for row in raw.execute("SELECT event FROM audit_log WHERE event LIKE 'buttons_%' ORDER BY id")]
+
+
+def test_a_replaced_question_is_taken_out_of_its_reply(store: Store, clock: Clock, path: Path) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    enqueue(store, message("1790000040.000100", "the pro one", thread_ts=ROOT))
+    due(worker, clock, 1790000060)
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    [update] = slack.updates
+    marker = reply["blocks"].index({"type": "divider", "block_id": "question"})
+    assert update["channel"] == CHANNEL
+    assert update["ts"] == ts
+    assert update["text"] == reply["text"]
+    assert update["blocks"][:-1] == reply["blocks"][:marker]
+    assert update["blocks"][-1]["elements"][0]["text"] == "This question was replaced by a newer reply in this thread."
+    assert buttons(path) == [("stale", "removed", 0)]
+    assert buttons_audit(path) == ["buttons_removed"]
+    worker.step()
+    assert len(slack.updates) == 1  # once
+
+
+def test_an_answered_question_is_taken_out_and_says_who_answered(store: Store, clock: Clock, path: Path) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    worker.step()
+    assert slack.updates == []  # an open question keeps its buttons
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    [update] = slack.updates
+    assert update["blocks"][-1]["elements"][0]["text"] == f"This question was answered by <@{SAM}>."
+    assert all(block["type"] != "actions" for block in update["blocks"])
+    assert buttons(path) == [("answered", "removed", 0)]
+
+
+def test_buttons_that_cannot_be_taken_down_are_tried_with_backoff_then_left(
+    store: Store, clock: Clock, path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    slack.update_failures = TAKE_DOWN_TRIES
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    assert buttons(path) == [("answered", "shown", 1)]
+    worker.step()
+    assert buttons(path) == [("answered", "shown", 1)]  # not before its backoff
+    at = 1790000030
+    for tries, wait in enumerate([TAKE_DOWN_BACKOFF_SECONDS, 2 * TAKE_DOWN_BACKOFF_SECONDS], start=2):
+        at += wait
+        clock.at(f"{at}.000000")
+        worker.step()
+        assert buttons(path)[0][2] == tries
+    assert buttons(path) == [("answered", "left", 3)]
+    assert slack.updates == []
+    assert buttons_audit(path) == ["buttons_left"]
+    assert "synthetic outage" not in caplog.text
+
+
+class EditedButLostSlack(FakeSlack):
+    """Slack makes the edit, and the answer never comes back."""
+
+    def chat_update(self, **kwargs: Any) -> dict[str, Any]:
+        self.edited[kwargs["ts"]] = list(kwargs["blocks"])
+        raise TimeoutError("synthetic")
+
+
+def test_an_edit_that_went_through_unseen_counts_as_done(store: Store, clock: Clock, path: Path) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    lost = EditedButLostSlack()
+    lost.posted = worker.slack.posted  # type: ignore[attr-defined]
+    worker.slack = lost
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    assert buttons(path) == [("answered", "shown", 1)]
+    clock.at(f"{1790000030 + TAKE_DOWN_BACKOFF_SECONDS}.000000")
+    worker.step()
+    assert buttons(path) == [("answered", "removed", 1)]
+
+
+@pytest.mark.parametrize("change", ["gone", "not_ours", "no_marker"])
+def test_a_reply_that_is_gone_or_not_ours_or_has_no_question_is_left_alone(
+    store: Store, clock: Clock, path: Path, change: str
+) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    real = slack.conversations_replies
+
+    def replies(**kwargs: Any) -> dict[str, Any]:
+        found = real(**kwargs)
+        if change == "gone":
+            found["messages"] = found["messages"][:1]
+        elif change == "not_ours":
+            found["messages"][-1]["app_id"] = "A0OTHER999"
+        else:
+            found["messages"][-1]["blocks"] = [b for b in found["messages"][-1]["blocks"] if b["type"] != "divider"]
+        return found
+
+    slack.conversations_replies = replies  # type: ignore[method-assign]
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    assert slack.updates == []
+    assert buttons(path) == [("answered", "left", 0)]
+
+
+def test_the_connectors_own_edit_of_a_reply_is_not_a_revision(store: Store, clock: Clock, path: Path) -> None:
+    worker = asked(store, clock)
+    _, ts = posted(worker)
+    edit = {
+        "type": "event_callback",
+        "team_id": WORKSPACE,
+        "api_app_id": APP,
+        "event_id": "Ev0EDIT0001",
+        "event": {
+            "type": "message",
+            "subtype": "message_changed",
+            "channel": CHANNEL,
+            "ts": "1790000200.000100",
+            "message": {"type": "message", "bot_id": "B0STOCKBOT", "app_id": APP, "text": "edited", "ts": ts},
+            "previous_message": {"type": "message", "bot_id": "B0STOCKBOT", "app_id": APP, "text": "", "ts": ts},
+        },
+    }
+    enqueue(store, edit)
+    worker.step()
+    assert last_status(path) == ("dropped", "bot")
+
+
+class BusySlack(FakeSlack):
+    """Another side call is still on its way (run.DeadlinePoster), then Slack rate-limits."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.busy = 1
+        self.limited = 0
+
+    def conversations_replies(self, **kwargs: Any) -> dict[str, Any]:
+        if self.busy:
+            self.busy -= 1
+            raise PosterBusy
+        if self.limited:
+            self.limited -= 1
+            limited = SimpleNamespace(headers={"Retry-After": "300"}, data={})
+            raise SlackApiError("ratelimited", limited)  # type: ignore[no-untyped-call]
+        return super().conversations_replies(**kwargs)
+
+
+def test_a_busy_slot_costs_no_try_and_a_rate_limit_waits_as_long_as_slack_asks(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    busy = BusySlack()
+    busy.posted = worker.slack.posted  # type: ignore[attr-defined]
+    worker.slack = busy
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    assert buttons(path) == [("answered", "shown", 0)]  # nothing was tried
+    busy.limited = 1
+    clock.at(f"{1790000030 + TAKE_DOWN_SPACING_SECONDS}.000000")
+    worker.step()
+    assert buttons(path) == [("answered", "shown", 1)]
+    clock.at(f"{1790000030 + TAKE_DOWN_SPACING_SECONDS + 299}.000000")
+    worker.step()
+    assert busy.updates == []  # Retry-After (300 s) is longer than the backoff (60 s)
+    clock.at(f"{1790000030 + TAKE_DOWN_SPACING_SECONDS + 300}.000000")
+    worker.step()
+    assert buttons(path) == [("answered", "removed", 1)]
+
+
+def test_one_reply_is_edited_per_spacing(store: Store, clock: Clock, path: Path) -> None:
+    slack = FakeSlack()
+    worker = Worker(approving(), store, OWNER, slack, lambda: TWO_DISCS, clock)
+    enqueue(store, message(ROOT, TAKE))
+    enqueue(store, message("1790000010.000100", TAKE))  # a second post, past the sibling window
+    due(worker, clock, 1790000040)
+    first, second = slack.posted
+    clicked(store, click_on(first, "1790009999.000001", 1, SAM), "1")
+    clicked(store, click_on(second, "1790009999.000002", 1, SAM, at="1790000100.000200"), "2")
+    worker.step()
+    assert [status for status, _, _ in buttons(path)] == ["answered", "answered"]
+    assert len(slack.updates) == 1
+    worker.step()
+    assert len(slack.updates) == 1  # within the spacing
+    clock.at(f"{1790000040 + TAKE_DOWN_SPACING_SECONDS}.000000")
+    worker.step()
+    assert [update["ts"] for update in slack.updates] == ["1790009999.000001", "1790009999.000002"]
+
+
+class LimitedSlack(FakeSlack):
+    """Slack rate-limits every read of a thread, asking for 300 s."""
+
+    def conversations_replies(self, **kwargs: Any) -> dict[str, Any]:
+        limited = SimpleNamespace(headers={"Retry-After": "300"}, data={})
+        raise SlackApiError("ratelimited", limited)  # type: ignore[no-untyped-call]
+
+
+def test_the_last_failed_try_of_a_question_still_pauses_the_others(store: Store, clock: Clock, path: Path) -> None:
+    slack = LimitedSlack()
+    worker = Worker(approving(), store, OWNER, slack, lambda: TWO_DISCS, clock)
+    enqueue(store, message(ROOT, TAKE))
+    enqueue(store, message("1790000010.000100", TAKE))
+    due(worker, clock, 1790000040)
+    first, second = slack.posted
+    with sqlite3.connect(path) as raw:
+        raw.execute("UPDATE review_items SET buttons_tries = ?", (TAKE_DOWN_TRIES - 1,))
+    clicked(store, click_on(first, "1790009999.000001", 1, SAM), "1")
+    clicked(store, click_on(second, "1790009999.000002", 1, SAM, at="1790000100.000200"), "2")
+    worker.step()
+    assert buttons(path) == [("answered", "left", TAKE_DOWN_TRIES), ("answered", "shown", TAKE_DOWN_TRIES - 1)]
+    clock.at(f"{1790000040 + 299}.000000")
+    worker.step()
+    assert buttons(path)[1] == ("answered", "shown", TAKE_DOWN_TRIES - 1)  # Slack asked for 300 s
+    clock.at(f"{1790000040 + 300}.000000")
+    worker.step()
+    assert buttons(path)[1] == ("answered", "left", TAKE_DOWN_TRIES)

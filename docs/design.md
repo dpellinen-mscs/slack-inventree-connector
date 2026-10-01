@@ -489,8 +489,36 @@ needs.
     stands, and its question, were read on time). Open does not mean
     current: a plan that has expired is not revised, so its question stays
     open, and a click is checked against expiry as well. The stored
-    `approver_only` column is the mark a click trusts. Removing stale
-    buttons from Slack comes next.
+    `approver_only` column is the mark a click trusts.
+  - **Taken down once closed (built).** A question that is answered, or
+    replaced by a newer reply, is taken out of the reply it was asked in.
+    The divider above a question carries the block id `question`. A step
+    of the worker, once the queue is empty, reads the reply back from
+    Slack (`conversations.replies`, bounded to that one message), keeps
+    every block before that divider, and edits the reply
+    (`chat.update`) to end with one line: "answered by @user" or
+    "replaced by a newer reply". The text of the reply passes through
+    memory only; nothing of it is stored or logged. One reply is edited
+    every 2 seconds at most, fewest failed tries first, within the 50 a
+    minute that each of the two Slack methods allows (`conversations.replies`
+    is limited to 1 a minute only for apps distributed outside the Slack
+    Marketplace, not for a team's own app). A reply that is gone, that
+    this app did not post, or that has no marked divider is left as it
+    is. A failed attempt counts one try for its question and pauses all
+    take-downs for 1, then 2 minutes, or as long as Slack's Retry-After
+    asks; a call that could not start because another is still on its way
+    counts nothing. After 3 failures the connector gives up on that
+    question. An edit whose answer was lost is seen on the next
+    read (the reply already ends with its line) and counts as done. Where
+    each question's buttons stand is stored (`review_items.buttons`:
+    shown, removed or left, with a count of failed tries; migration
+    0012), so a restart does not edit a reply twice or forget one.
+    Questions closed before that migration are left. Slack sends the
+    connector's own edit back as a `message_changed` event; an edit of a
+    message that names this app (a bot id, and this app's id) is never a
+    revision. Clicks are checked against the
+    store whatever a reply shows, so a button that is still visible
+    answers nothing.
   - **Answered by button (built).** The worker reads a click with the
     ingest checks again, then against the stored button: the click's
     channel and message must be the ones stored with it, its question

@@ -35,7 +35,7 @@ from stockthread.slack.catchup import SWEEP_SECONDS, CatchUp, HistoryClient
 from stockthread.slack.http_server import HttpServer, ServeError
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
-from stockthread.worker import PostStillRunning, Worker
+from stockthread.worker import PosterBusy, PostStillRunning, Worker
 
 log = logging.getLogger(__name__)
 
@@ -103,10 +103,6 @@ class CatalogCache:
         return self._catalog
 
 
-class PosterBusy(Exception):
-    """Another thread's call is still running, and this one was not sent. An ordinary failure: try again."""
-
-
 class _Call:
     def __init__(self) -> None:
         self.done = threading.Event()
@@ -129,7 +125,7 @@ class DeadlinePoster:
         self._client = client
         self._deadline = deadline
         self._note_deadline = note_deadline
-        self._note: _Call | None = None
+        self._side: _Call | None = None
         self._calls: dict[tuple[Any, Any], _Call] = {}
 
     def chat_postMessage(self, **kwargs: Any) -> Any:  # slack_sdk's name
@@ -151,15 +147,25 @@ class DeadlinePoster:
         return call.result
 
     def chat_postEphemeral(self, **kwargs: Any) -> Any:  # slack_sdk's name
-        """A note to one user, on its own helper thread, apart from the replies. A note that runs out of time is
-        left running and not tried again; until it has ended no other note is sent, so stuck calls never pile
-        up."""
-        if self._note is not None and not self._note.done.is_set():
+        """A note to one user (a side call)."""
+        return self._side_call(self._client.chat_postEphemeral, kwargs)
+
+    def conversations_replies(self, **kwargs: Any) -> Any:  # slack_sdk's name
+        """Read a reply back before its buttons are taken down (a side call)."""
+        return self._side_call(self._client.conversations_replies, kwargs)
+
+    def chat_update(self, **kwargs: Any) -> Any:  # slack_sdk's name
+        """Edit a reply to take its buttons down (a side call)."""
+        return self._side_call(self._client.chat_update, kwargs)
+
+    def _side_call(self, method: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
+        """A call besides the replies, on its own helper thread, that may be sent twice without harm. One that
+        runs out of time is left running and not tried again; until it has ended no other side call is made,
+        so stuck calls never pile up. Replies never wait for side calls, nor side calls for replies."""
+        if self._side is not None and not self._side.done.is_set():
             raise PosterBusy
-        call = self._note = _Call()
-        threading.Thread(
-            target=self._run, args=(call, self._client.chat_postEphemeral, kwargs), name="slack-note", daemon=True
-        ).start()
+        call = self._side = _Call()
+        threading.Thread(target=self._run, args=(call, method, kwargs), name="slack-side", daemon=True).start()
         if not call.done.wait(self._note_deadline):
             raise PostStillRunning
         if call.error is not None:
