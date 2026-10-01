@@ -172,6 +172,21 @@ def _from_reasons(index: int, view: Reviewed) -> list[tuple[Tier, int, Question]
     return found
 
 
+def tier_of(question: Question) -> Tier:
+    """The tier a question was asked in, from what is stored with it."""
+    if question.approver_only:
+        return Tier.APPROVAL
+    if question.ask is Ask.MOVEMENT_TYPE:
+        return Tier.TYPE
+    if question.ask is Ask.CONFIRM and question.reason is ReasonCode.PHOTO_ONLY:
+        return Tier.READING  # items were read from the photo (`_from_reasons`)
+    if question.side is not None:
+        return Tier.SOURCE if question.side == "source" else Tier.DESTINATION
+    if question.ask in (Ask.NAME_PART, Ask.CHOOSE_PART, Ask.CONFIRM_PART):
+        return Tier.ITEMS
+    return _BY_REASON[question.reason][0]
+
+
 def _line(reason: ReviewReason, movement: CandidateMovement) -> int | None:
     """The line a reason is about: named in its detail, the first line it fits, the only line, or None."""
     lines = movement.line_items

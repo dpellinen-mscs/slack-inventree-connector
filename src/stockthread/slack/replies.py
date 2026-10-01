@@ -182,12 +182,15 @@ def dry_run_reply(
     locations: Mapping[int, str],
     *,
     revised: bool = False,
+    answered: bool = False,
 ) -> dict[str, Any]:
     """The body of the dry-run reply: `text` for notifications, and `blocks`. Nothing was written. `revised`:
-    the post was read again because the thread changed, and this reply takes the place of the one above."""
+    the post was read again because the thread changed, and this reply takes the place of the one above.
+    `answered`: what changed is only that a question was answered."""
     if not views:
         raise ValueError("a dry-run reply shows at least one movement")
-    heading = "*Revised dry run* (the thread changed)." if revised else "*Dry run.*"
+    because = "a question was answered" if answered else "the thread changed"
+    heading = f"*Revised dry run* ({because})." if revised else "*Dry run.*"
     blocks: list[dict[str, Any]] = [_section(f"{heading} Nothing was changed in inventory.")]
     for number, view in enumerate(views[:MAX_MOVEMENTS], start=1):
         movement = view.movement
@@ -233,6 +236,19 @@ def retraction_notice(why: str) -> dict[str, Any]:
         "blocks": [
             _section(
                 f"*The dry run above no longer stands.* {RETRACTION_REASONS[why]} Nothing was changed in inventory."
+            )
+        ],
+    }
+
+
+def rejection_notice() -> dict[str, Any]:
+    """The reply once a "no" in the thread rejected the reading: nothing of it will be applied."""
+    return {
+        "text": "The reading above was rejected. Nothing will be applied.",
+        "blocks": [
+            _section(
+                "*The reading above was rejected.* Nothing was changed in inventory, and nothing of this reading"
+                " will be applied. To record the movement, edit the post or reply in this thread with what happened."
             )
         ],
     }

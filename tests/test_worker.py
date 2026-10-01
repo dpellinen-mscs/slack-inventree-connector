@@ -3059,3 +3059,269 @@ def test_the_last_failed_try_of_a_question_still_pauses_the_others(store: Store,
     clock.at(f"{1790000040 + 300}.000000")
     worker.step()
     assert buttons(path)[1] == ("answered", "left", TAKE_DOWN_TRIES)
+
+
+# Acting on an answer (design section 4, "Acting on an answer").
+
+SHUFFLED = "shuffled 2 Disc 40 from main stock to truck 1"  # declined by the rules
+KEY = PostKey(WORKSPACE, CHANNEL, ROOT)
+
+
+def unclear(kind: MovementType = MovementType.UNCLEAR) -> Extraction:
+    movement = CandidateMovement(kind, (LineItem("Disc 40", Decimal(2)),), "main stock", "truck 1")
+    return Extraction(MODEL, (movement,))
+
+
+def reply_text(reply: dict[str, Any]) -> str:
+    return json.dumps(reply["blocks"])
+
+
+def test_a_part_picked_by_button_is_applied_in_a_revised_dry_run_at_once(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    [item] = store.questions(KEY)
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()  # no sibling window: the answer is acted on in the same step
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    assert len(slack.posted) == 2
+    revised = slack.posted[1]
+    assert revised["text"].startswith("Revised dry run")
+    assert "Disc 40 Lite" in reply_text(revised)
+    assert "*Revised dry run* (a question was answered)." in reply_text(revised)
+    assert "this could apply" in reply_text(revised)
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.revision == 2
+    assert record.outcome is DryRunOutcome.REPLIED
+    assert record.result is not None
+    part = record.result["movements"][0]["items"][0]["part"]
+    assert part == {"status": "matched", "rule": "answer", "record": 2, "candidates": []}
+    assert record.result["answers"] == [item.id]
+    assert record.result["ignored"] == []
+    assert record.result["rejected"] is None
+    assert [q.status.value for q in store.questions(KEY)] == ["answered"]  # nothing else to ask
+    worker.step()
+    assert len(slack.posted) == 2  # the answer is applied once
+
+
+def test_none_of_these_leaves_the_line_unmatched_and_asks_for_the_part_by_name(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 2, SAM), "1")  # the third button: none of these
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["movements"][0]["items"][0]["part"]["status"] == "unmatched"
+    first, second = store.questions(KEY)
+    assert (first.status.value, second.status.value) == ("answered", "open")
+    assert second.question["ask"] == "name_part"
+    assert second.revision == 2
+
+
+def test_a_type_picked_is_validated_again_and_the_model_is_not_asked_again(store: Store, clock: Clock) -> None:
+    llm = FakeLLM(unclear())
+    slack = FakeSlack()
+    worker = Worker(approving(), store, OWNER, slack, lambda: CATALOG, clock, llm=llm)
+    enqueue(store, message(ROOT, SHUFFLED))
+    read_and_answered(worker, clock)
+    [reply] = slack.posted
+    [item] = store.questions(KEY)
+    assert item.question["ask"] == "movement_type"
+    kinds = [kind for kind in MovementType if kind is not MovementType.UNCLEAR]
+    clicked(
+        store, click_on({**reply, "channel": CHANNEL}, "1790009999.000001", kinds.index(MovementType.RETURN), SAM), "1"
+    )
+    worker.step()
+    assert len(llm.calls) == 1  # only answers are new: the reading that stands is kept
+    assert len(slack.posted) == 2
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.extractor == MODEL
+    assert record.result["extracted"] == ["unclear"]
+    movement = record.result["movements"][0]
+    assert movement["type"] == "return"
+    assert ["contradiction", "a return whose destination is a vehicle"] in movement["gate"]
+    [_, contradiction] = store.questions(KEY)
+    assert (contradiction.question["ask"], contradiction.question["reason"]) == ("confirm", "contradiction")
+    # The next answer replays both onto the reading as extracted, not as the type answer left it.
+    clicked(store, click_on({**slack.posted[1], "channel": CHANNEL}, "1790009999.000002", 0, SAM), "2")  # yes
+    worker.step()
+    assert len(llm.calls) == 1
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.revision == 3
+    assert record.result["answers"] == [item.id, contradiction.id]
+    assert record.result["movements"][0]["type"] == "return"
+    assert "contradiction" not in {reason["code"] for reason in record.result["movements"][0]["reasons"]}
+
+
+def test_no_to_a_doubt_about_the_reading_ends_the_plan(store: Store, clock: Clock) -> None:
+    llm = FakeLLM(unclear(MovementType.RETURN))  # a return onto a truck: a contradiction
+    slack = FakeSlack()
+    worker = Worker(approving(), store, OWNER, slack, lambda: CATALOG, clock, llm=llm)
+    enqueue(store, message(ROOT, SHUFFLED))
+    read_and_answered(worker, clock)
+    [reply] = slack.posted
+    [item] = store.questions(KEY)
+    assert (item.question["ask"], item.question["reason"]) == ("confirm", "contradiction")
+    clicked(store, click_on({**reply, "channel": CHANNEL}, "1790009999.000001", 1, SAM), "1")  # no
+    worker.step()
+    rejected = slack.posted[1]
+    assert rejected["text"] == "The reading above was rejected. Nothing will be applied."
+    assert all(block["type"] != "actions" for block in rejected["blocks"])
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["rejected"] == item.id
+    assert [q.status.value for q in store.questions(KEY)] == ["answered"]  # nothing more is asked
+
+
+def test_yes_to_a_doubt_about_the_reading_clears_it_and_nothing_else(store: Store, clock: Clock) -> None:
+    llm = FakeLLM(unclear(MovementType.RETURN))
+    slack = FakeSlack()
+    worker = Worker(approving(), store, OWNER, slack, lambda: CATALOG, clock, llm=llm)
+    enqueue(store, message(ROOT, SHUFFLED))
+    read_and_answered(worker, clock)
+    [reply] = slack.posted
+    clicked(store, click_on({**reply, "channel": CHANNEL}, "1790009999.000001", 0, SAM), "1")  # yes
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    codes = {reason["code"] for reason in record.result["movements"][0]["reasons"]}
+    assert "contradiction" not in codes
+    assert "movement_unclear" in codes  # "shuffled ... truck 1" still does not say which way: asked next
+    [_, following] = store.questions(KEY)
+    assert following.question["reason"] == "movement_unclear"
+
+
+def test_an_approval_answer_counts_only_from_someone_who_is_an_approver_when_it_is_applied(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    asked(store, clock, CATALOG, late=True)
+    [item] = store.questions(KEY)
+    assert item.approver_only
+    button = store.button(next(iter(_button_ids(path))))
+    assert button is not None
+    assert store.answer_question(OWNER, button, LUIS).value == "answered"  # clicked while an approver
+    slack = FakeSlack()
+    no_approvers = Worker(settings(), store, OWNER, slack, lambda: CATALOG, clock)
+    no_approvers.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["answers"] == []
+    assert record.result["ignored"] == [item.id]
+    assert "late_ingest" in {reason["code"] for reason in record.result["movements"][0]["reasons"]}
+    [revised] = slack.posted
+    assert revised["text"].startswith("Revised dry run")  # and the question is asked again
+    [_, again] = store.questions(KEY)
+    assert again.question["reason"] == "late_ingest"
+    assert again.status.value == "open"
+
+
+def test_an_approval_answer_from_an_approver_clears_its_reason(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, late=True)
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 0, LUIS, at="1790090000.000200"), "1")
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["movements"][0]["reasons"] == []
+    assert "this could apply" in reply_text(worker.slack.posted[1])  # type: ignore[attr-defined]
+
+
+def test_answers_are_not_carried_over_to_a_post_read_otherwise(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    assert len(worker.slack.posted) == 2  # type: ignore[attr-defined]
+    enqueue(store, edit_of(ROOT, "1790000200.000100", TAKE, "took 3 Disc 40 from main stock to truck 1"))
+    clock.at("1790000300.000000")
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.revision == 3
+    assert record.result["answers"] == []
+    assert record.result["movements"][0]["items"][0]["part"]["status"] == "ambiguous"
+    first, second = store.questions(KEY)
+    assert first.status.value == "answered"
+    assert second.status.value == "open"
+    assert second.revision == 3
+    assert second.question["ask"] == "choose_part"
+
+
+def test_an_edit_that_reads_the_same_keeps_the_answers(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    [item] = store.questions(KEY)
+    enqueue(store, edit_of(ROOT, "1790000200.000100", TAKE, "took 2 Disc 40 from main stock to truck 1 "))
+    clock.at("1790000300.000000")
+    worker.step()
+    assert len(worker.slack.posted) == 2  # type: ignore[attr-defined]
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.outcome is DryRunOutcome.UNCHANGED
+    assert record.result["answers"] == [item.id]
+
+
+def _button_ids(path: Path) -> list[str]:
+    with sqlite3.connect(path) as raw:
+        return [row[0] for row in raw.execute("SELECT id FROM interactions ORDER BY position")]
+
+
+def test_answers_given_before_the_upgrade_start_no_revision(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = store_db._migrations()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real[:12])
+    old = Store.open(path)
+    old.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
+    old.place_message(OWNER, KEY, user_id=SAM, thread_ts=None, window_seconds=5)
+    question = NewQuestion({"ask": "confirm"}, False, [("y" * 22, {"kind": "yes"})], poster=SAM, expires_from=ROOT)
+    old.finish_dry_run(OWNER, KEY, DryRunOutcome.REPLIED, "1790009999.000001", result={}, question=question)
+    button = old.button("y" * 22)
+    assert button is not None
+    assert old.answer_question(OWNER, button, SAM).value == "answered"
+    old.release_lock(OWNER)
+    old.close()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real)
+    store = Store.open(path)
+    try:
+        assert store.posts_waiting_for_dry_run() == []
+        assert store.post_answers_through(KEY) == 1
+    finally:
+        store.close()
+
+
+def test_a_revision_needs_something_new_and_an_answer_is_something_new(store: Store) -> None:
+    store.place_message(OWNER, KEY, user_id=SAM, thread_ts=None, window_seconds=5)
+    question = NewQuestion({"ask": "confirm"}, False, [("y" * 22, {"kind": "yes"})], poster=SAM, expires_from=ROOT)
+    store.finish_dry_run(OWNER, KEY, DryRunOutcome.REPLIED, "1790009999.000001", result={}, question=question)
+    assert store.posts_waiting_for_dry_run() == []
+    with pytest.raises(StateConflict):
+        store.finish_dry_run(OWNER, KEY, DryRunOutcome.UNCHANGED, revision=2, result={})
+    button = store.button("y" * 22)
+    assert button is not None
+    assert store.answer_question(OWNER, button, SAM).value == "answered"
+    [waiting] = store.posts_waiting_for_dry_run()
+    assert (waiting.key, waiting.revision) == (KEY, 2)
+    with pytest.raises(ValueError, match="answers given about its post"):
+        store.finish_dry_run(OWNER, KEY, DryRunOutcome.UNCHANGED, revision=2, result={}, answers=2)
+    with pytest.raises(StateConflict):
+        store.finish_dry_run(OWNER, KEY, DryRunOutcome.UNCHANGED, revision=2, result={}, answers=0)
+    store.finish_dry_run(OWNER, KEY, DryRunOutcome.UNCHANGED, revision=2, result={}, answers=1)
+    assert store.posts_waiting_for_dry_run() == []
+    [(item, answer, by)] = store.answers(KEY, 1)
+    assert (item.status.value, answer["kind"], by) == ("answered", "yes", SAM)
+    assert store.answers(KEY, 0) == []

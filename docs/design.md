@@ -555,7 +555,7 @@ needs.
     after it, so a slow Slack never holds the queue up. A crash between
     the two loses the note, never the answer; a click handled again after
     its answer was recorded tells its own clicker that the answer stands.
-  - **Acting on an answer (planned).** An answer is a fact about one
+  - **Acting on an answer (built).** An answer is a fact about one
     reading of the post, and it is applied to that reading only:
     - *Scope.* A click is recorded only while the post has not moved on
       from the dry run that asked. Every later reading is compared with
@@ -581,8 +581,26 @@ needs.
       the next question, or with "could apply" when none is left. Its
       record lists the ids of the answers it applied. The answered
       question's buttons are taken down as above.
+    - *How (built).* Each record keeps `reading`, a digest of what it
+      read before any answer (lateness left out), and the ids of the
+      answers it `applied`, those it `ignored` and the one that `rejected`
+      the plan. The answers replayed are those to questions asked by the
+      newest records in a row whose `reading` is the current one, up to
+      the newest answer known when the post was read (`answers_through`,
+      migration 0013; answers from before it are not acted on). A
+      revision with only answers new keeps the reading that stands
+      (`extracted` keeps its types before answers), so a model is not
+      asked again and cannot read the same words otherwise. A part or
+      location answer is a match by the `answer` rule. "Yes" clears a
+      reason only for a doubt about the whole reading or an approval
+      question; a "yes" to a stock question clears nothing until source
+      selection asks its own. An answer that does not fit its question
+      (a record not offered, a line the reading lacks) is ignored. A new
+      answer always posts a reply, even one that changes nothing, so the
+      next question is asked.
     - *Limits.* An answer never authorizes a write: the write gate of M3
-      checks the resolved plan again, and an approval answer counts only
+      checks the resolved plan again, refuses a record with `rejected`,
+      and an approval answer counts only
       from a user who is an approver when it is applied, not only when it
       was clicked. A confirmed match becomes an alias only after the plan
       is applied and verified ([0012](decisions/0012-first-confirmation-becomes-alias.md)).
@@ -1204,7 +1222,10 @@ Deterministic. The rules run in this order:
 - A single hit at rule 4 or 5 is `matched`, because the corpus clerk would
   pick that one record. It still cannot authorize a write: it raises the
   `fuzzy_match` review reason. Only rules 1 to 3 authorize, and the code
-  enforces that with an allowlist (`Match.can_authorize_a_write`).
+  enforces that with an allowlist (`Match.can_authorize_a_write`). The
+  allowlist also holds `answer`: a record a person picked or confirmed
+  by button in the thread (section 4, "Acting on an answer"). The
+  matcher never produces it.
 - Corpus 0.2.0, with the expected text as input (`tests/core/test_matching_corpus.py`):
   part match 100% (109 results) and location match 100% (92 results).
   Of the 99 single part matches, 80 came from rule 4 and 1 from rule 5
