@@ -2324,3 +2324,44 @@ def test_a_notice_that_the_reply_no_longer_stands_makes_its_question_stale(
     [item] = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
     assert item.status.value == "stale"
     assert all(block["type"] != "actions" for block in slack.posted[1]["blocks"])
+
+
+@pytest.mark.parametrize(
+    ("after", "outcome"), [("took two Disc 40 to truck 1", "unchanged"), ("took 3 Disc 40 to truck 1", "replied")]
+)
+def test_an_edit_keeps_the_question_or_asks_it_again_in_the_revised_reply(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path, after: str, outcome: str
+) -> None:
+    enqueue(store, message(ROOT, NO_SOURCE))
+    due(worker, clock)
+    enqueue(store, edit_of(ROOT, "1790000040.000100", NO_SOURCE, after))
+    due(worker, clock, 1790000060)
+    assert revisions(path) == [(2, outcome, outcome == "replied")]
+    items = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
+    if outcome == "unchanged":
+        assert [(item.revision, item.status.value, item.message_ts) for item in items] == [
+            (1, "open", "1790009999.000001")
+        ]
+        assert len(slack.posted) == 1
+    else:
+        assert [(item.revision, item.status.value, item.message_ts) for item in items] == [
+            (1, "stale", "1790009999.000001"),
+            (2, "open", "1790009999.000002"),
+        ]
+        assert "Where was it taken from?" in slack.posted[1]["blocks"][-1]["text"]["text"]
+
+
+def test_a_question_that_cannot_be_put_leaves_the_reply_without_it(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("synthetic wording bug")
+
+    monkeypatch.setattr("stockthread.worker.question_message", broken)
+    enqueue(store, message(ROOT, NO_SOURCE))
+    due(worker, clock)
+    [reply] = slack.posted
+    assert "No source location was stated." in json.dumps(reply["blocks"])
+    assert all(block["type"] != "divider" for block in reply["blocks"])
+    assert store.questions(PostKey(WORKSPACE, CHANNEL, ROOT)) == []
+    assert store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT)).outcome is DryRunOutcome.REPLIED  # type: ignore[union-attr]

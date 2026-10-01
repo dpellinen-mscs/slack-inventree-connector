@@ -217,8 +217,10 @@ def test_every_corpus_question_is_stored_as_ids_and_read_back(case: dict[str, An
     for choice in choices(question):
         assert choice_from_json(json.loads(json.dumps(choice_json(choice)))) == choice
     # Codes, indexes and keys only: no words of the post.
-    words = {message.get("text") or "" for message in case["post"]["messages"]} - {""}
-    assert not any(text in json.dumps(stored) for text in words)
+    codes = {ask.value for ask in Ask} | {code.value for code in ReasonCode} | {"source", "destination"}
+    for name, value in stored.items():
+        for leaf in value if isinstance(value, list) else [value]:
+            assert leaf is None or isinstance(leaf, int) or leaf in codes, name
 
 
 @pytest.mark.parametrize(
@@ -230,6 +232,8 @@ def test_every_corpus_question_is_stored_as_ids_and_read_back(case: dict[str, An
         {"kind": "maybe", "record": None, "movement_type": None},
         {"kind": "record", "record": True, "movement_type": None},
         {"kind": "record", "record": -1, "movement_type": None},
+        {"kind": "type", "record": None, "movement_type": "unclear"},
+        {"kind": "yes", "record": None},
     ],
 )
 def test_a_stored_choice_that_does_not_fit_its_kind_is_refused(stored: dict[str, Any]) -> None:
@@ -239,9 +243,21 @@ def test_a_stored_choice_that_does_not_fit_its_kind_is_refused(stored: dict[str,
 
 def test_a_stored_question_with_a_bad_side_or_index_is_refused() -> None:
     good = question_json(Question(Ask.CHOOSE_LOCATION, ReasonCode.LOCATION_AMBIGUOUS, 0, None, "source", (10, 11)))
-    for bad in ({"side": "middle"}, {"movement": "0"}, {"candidates": [10, False]}, {"line": -1}):
-        with pytest.raises(ValueError, match=r"side|index"):
+    bad_ones: list[dict[str, Any]] = [
+        {"side": "middle"},
+        {"movement": "0"},
+        {"candidates": [10, False]},
+        {"line": -1},
+        {"approver_only": 1},
+        {"approver_only": "true"},
+        {"candidates": "10"},
+    ]
+    for bad in bad_ones:
+        with pytest.raises(ValueError, match=r"side|index|stored question"):
             question_from_json({**good, **bad})
+    without = {name: value for name, value in good.items() if name != "approver_only"}
+    with pytest.raises(ValueError, match="stored question"):
+        question_from_json(without)
 
 
 def test_the_question_goes_below_the_reply_in_one_message() -> None:

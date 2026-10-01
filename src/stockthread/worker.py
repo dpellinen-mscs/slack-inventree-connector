@@ -431,9 +431,14 @@ class Worker:
             parts = {part.pk: part.name for part in catalog.parts}
             locations = {location.pk: location.path for location in catalog.locations}
             body = dry_run_reply(views, parts, locations, revised=standing is not None)
-            # The one question the post needs goes in the reply, with buttons whose ids are stored with it.
+        except Exception as error:
+            self._broken(post, now, error, extraction.extractor, read=seen, changes=changes)
+            return True
+        # The one question the post needs goes in the reply, with buttons whose ids are stored with it. A
+        # question that cannot be put is left out: the reply still says what needs a human.
+        asked = None
+        try:
             question = pick_question(views)
-            asked = None
             if question is not None:
                 buttons = choices(question)
                 ids = [new_button_id() for _ in buttons]
@@ -444,8 +449,7 @@ class Worker:
                     [(button_id, choice_json(choice)) for button_id, choice in zip(ids, buttons, strict=True)],
                 )
         except Exception as error:
-            self._broken(post, now, error, extraction.extractor, read=seen, changes=changes)
-            return True
+            _log_failure("question", key.ts, error)
         if standing is not None and _same_reading(standing, decided):
             log.info("post %s: revision %d reads as the reply that stands", key.ts, post.revision)
             self._finish(key, DryRunOutcome.UNCHANGED, extraction.extractor, decided, post.revision, seen, changes)

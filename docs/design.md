@@ -473,13 +473,22 @@ needs.
     transaction as the reply's record (`review_items`, `interactions`;
     migration 0010), so no button a reply carries is without its row, and
     no question is posted apart from the reply it belongs to. Button ids
-    are made once per decision: a reply whose call is retried is sent, and
-    stored, with the same ones. A reply that was given up on stores none. A
-    reply that Slack posted without a usable timestamp keeps a question
-    that no click can fit. The question is stored as codes, indexes and
+    are made once per decision: a reply still on its way to Slack is
+    checked on, and stored, with the same ones. A reply posted again after
+    an error or a restart gets new ones, so the buttons of a copy Slack may
+    have posted before match no row (the click handler says so). A reply
+    that was given up on stores none. A reply that Slack posted without a
+    usable timestamp keeps a question that no click can fit. A question
+    that cannot be put (a bug in its wording) is left out, and the reply
+    is posted without it. The question is stored as codes, indexes and
     primary keys, never words of the post. A post has at most one open
     question: a revised reply, or a notice that the reply no longer stands,
-    makes it stale (an unchanged revision leaves it open). Removing stale
+    makes it stale. An unchanged revision leaves it open, also when only
+    the lateness differs (`late_ingest` is not compared; the reply that
+    stands, and its question, were read on time). Open does not mean
+    current: a plan that has expired is not revised, so its question stays
+    open, and a click is checked against expiry as well. The stored
+    `approver_only` column is the mark a click trusts. Removing stale
     buttons from Slack and handling clicks come next.
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can

@@ -5,7 +5,8 @@
 -- (ids, codes and primary keys, never words of the post), whether only an approver may answer it, and the
 -- message it was asked in. NULL `message_ts`: Slack gave no usable timestamp, so no click can fit it. A
 -- question is `open` until it is answered, or until a newer dry run of its post stands in the thread (a
--- revised reply, or a notice that the reply no longer stands) and makes it `stale`. Both are final.
+-- revised reply, or a notice that the reply no longer stands) and makes it `stale`. Both are final. Open does
+-- not mean current: a click is checked against plan expiry too. `approver_only` is the mark a click trusts.
 --
 -- `interactions` holds one row per button: a random id of at least 128 bits (the button's value, all a click
 -- carries) and the answer it stands for. A button row never changes.
@@ -23,7 +24,8 @@ CREATE TABLE review_items (
     answered_by TEXT CHECK (answered_by IS NULL OR answered_by <> ''),
     created_at TEXT NOT NULL,
     closed_at TEXT,
-    CHECK ((status = 'answered') = (answer IS NOT NULL AND answered_by IS NOT NULL)),
+    CHECK ((status = 'answered') = (answer IS NOT NULL)),
+    CHECK ((answer IS NULL) = (answered_by IS NULL)),
     CHECK ((status = 'open') = (closed_at IS NULL)),
     UNIQUE (post_id, revision)
 ) STRICT;
@@ -44,6 +46,9 @@ WHEN EXISTS (SELECT 1 FROM review_items WHERE id = NEW.id OR (post_id = NEW.post
     OR NEW.status <> 'open'
     OR EXISTS (SELECT 1 FROM review_items WHERE post_id = NEW.post_id AND status = 'open')
 BEGIN SELECT RAISE(ABORT, 'a post has one open question, asked once per dry run'); END;
+CREATE TRIGGER review_items_same_channel BEFORE INSERT ON review_items
+WHEN NEW.channel_id IS NOT (SELECT channel_id FROM posts WHERE id = NEW.post_id)
+BEGIN SELECT RAISE(ABORT, 'a question is asked in the channel of its post'); END;
 
 CREATE TABLE interactions (
     id TEXT PRIMARY KEY CHECK (length(id) >= 22),
@@ -61,3 +66,6 @@ CREATE TRIGGER interactions_no_replace BEFORE INSERT ON interactions
 WHEN EXISTS (SELECT 1 FROM interactions WHERE id = NEW.id OR (review_item_id = NEW.review_item_id
     AND position = NEW.position))
 BEGIN SELECT RAISE(ABORT, 'a button is stored once'); END;
+CREATE TRIGGER interactions_of_an_open_question BEFORE INSERT ON interactions
+WHEN NOT EXISTS (SELECT 1 FROM review_items WHERE id = NEW.review_item_id AND status = 'open')
+BEGIN SELECT RAISE(ABORT, 'a button belongs to an open question'); END;

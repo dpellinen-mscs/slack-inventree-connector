@@ -156,15 +156,12 @@ def test_asking_needs_the_lock(store: Store) -> None:
         ("UPDATE review_items SET message_ts = '1790000099.000100'", "a question never changes"),
         ("UPDATE review_items SET approver_only = 1", "a question never changes"),
         ("UPDATE review_items SET id = 7", "a question never changes"),
+        ("UPDATE review_items SET rowid = 7", "a question never changes"),
         ("UPDATE review_items SET status = 'open', closed_at = NULL", "answered or goes stale once"),
         ("UPDATE review_items SET status = 'answered', answer = '{}', answered_by = 'U0SAM0001'", "once"),
         ("DELETE FROM review_items", "never deleted"),
         ('UPDATE interactions SET choice = \'{"kind":"no"}\'', "a button never changes"),
         ("DELETE FROM interactions", "buttons are never deleted"),
-        (
-            "INSERT OR REPLACE INTO interactions VALUES ('aaaaaaaaaaaaaaaaaaaaaa', 1, 0, '{}')",
-            "a button is stored once",
-        ),
     ],
 )
 def test_triggers_keep_questions_and_buttons(store: Store, path: Path, statement: str, message: str) -> None:
@@ -174,17 +171,53 @@ def test_triggers_keep_questions_and_buttons(store: Store, path: Path, statement
         raw.execute(statement)
 
 
-@pytest.mark.parametrize(("revision", "message"), [(1, "asked once per dry run"), (2, "one open question")])
-def test_a_post_has_one_open_question_asked_once_per_dry_run(
-    store: Store, path: Path, revision: int, message: str
+INSERT_ITEM = (
+    "INSERT {verb} INTO review_items (id, post_id, revision, question, approver_only, channel_id, status, created_at)"
+    " VALUES ({id}, 1, {revision}, '{{}}', 0, '{channel}', 'open', 'now')"
+)
+
+
+def test_a_post_has_one_open_question(store: Store, path: Path) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.DatabaseError, match="one open question"):
+        raw.execute(INSERT_ITEM.format(verb="", id="NULL", revision=2, channel=POST.channel_id))
+
+
+@pytest.mark.parametrize(
+    ("verb", "item_id", "revision"), [("", "NULL", 1), ("OR REPLACE", "1", 3), ("OR REPLACE", "NULL", 1)]
+)
+def test_a_question_is_asked_once_per_dry_run_and_never_replaced(
+    store: Store, path: Path, verb: str, item_id: str, revision: int
 ) -> None:
     store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
-    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.DatabaseError, match=message):
-        raw.execute(
-            "INSERT INTO review_items (post_id, revision, question, approver_only, channel_id, status, created_at)"
-            " VALUES (1, ?, '{}', 0, 'C0STOCK001', 'open', 'now')",
-            (revision,),
-        )
+    reply_again(store, "1790000100.000100", 2, DryRunOutcome.RETRACTED)  # stale: no open question is in the way
+    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.DatabaseError, match="asked once per dry run"):
+        raw.execute(INSERT_ITEM.format(verb=verb, id=item_id, revision=revision, channel=POST.channel_id))
+
+
+def test_a_question_is_asked_in_the_channel_of_its_post(store: Store, path: Path) -> None:
+    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.DatabaseError, match="channel of its post"):
+        raw.execute(INSERT_ITEM.format(verb="", id="NULL", revision=1, channel="C0OTHER001"))
+
+
+def test_a_button_belongs_to_an_open_question(store: Store, path: Path) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    reply_again(store, "1790000100.000100", 2, DryRunOutcome.RETRACTED)
+    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.DatabaseError, match="open question"):
+        raw.execute("INSERT INTO interactions VALUES ('cccccccccccccccccccccc', 1, 2, '{}')")
+
+
+@pytest.mark.parametrize(
+    "columns",
+    [
+        "status = 'stale', answer = '{}', closed_at = 'now'",
+        "status = 'stale', answered_by = 'U0SAM0001', closed_at = 'now'",
+    ],
+)
+def test_an_answer_and_who_gave_it_come_together_and_only_with_answered(store: Store, path: Path, columns: str) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        raw.execute(f"UPDATE review_items SET {columns}")  # noqa: S608
 
 
 def test_an_open_question_closes_once_with_an_answer(store: Store, path: Path) -> None:
@@ -197,3 +230,10 @@ def test_an_open_question_closes_once_with_an_answer(store: Store, path: Path) -
         )
         with pytest.raises(sqlite3.DatabaseError, match="once"):
             raw.execute("UPDATE review_items SET status = 'stale'")
+
+
+@pytest.mark.parametrize("values", ["('aaaaaaaaaaaaaaaaaaaaaa', 1, 5, '{}')", "('cccccccccccccccccccccc', 1, 0, '{}')"])
+def test_a_button_is_never_replaced(store: Store, path: Path, values: str) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.DatabaseError, match="a button is stored once"):
+        raw.execute(f"INSERT OR REPLACE INTO interactions VALUES {values}")  # noqa: S608

@@ -262,17 +262,24 @@ def question_json(question: Question) -> dict[str, Any]:
 
 
 def question_from_json(stored: Mapping[str, Any]) -> Question:
-    side = stored["side"]
+    """The stored question. Raises ValueError for anything `question_json` does not make."""
+    try:
+        side, line, approver_only = stored["side"], stored["line"], stored["approver_only"]
+        ask, reason, movement, candidates = stored["ask"], stored["reason"], stored["movement"], stored["candidates"]
+    except KeyError as error:
+        raise ValueError("not a stored question") from error
     if side not in (None, "source", "destination"):
         raise ValueError("not a side")
+    if not isinstance(approver_only, bool) or not isinstance(candidates, list):
+        raise ValueError("not a stored question")
     return Question(
-        Ask(stored["ask"]),
-        ReasonCode(stored["reason"]),
-        _index(stored["movement"]),
-        None if stored["line"] is None else _index(stored["line"]),
+        Ask(ask),
+        ReasonCode(reason),
+        _index(movement),
+        None if line is None else _index(line),
         side,
-        tuple(_index(pk) for pk in stored["candidates"]),
-        stored["approver_only"] is True,
+        tuple(_index(pk) for pk in candidates),
+        approver_only,
     )
 
 
@@ -286,13 +293,19 @@ def choice_json(choice: Choice) -> dict[str, Any]:
 
 
 def choice_from_json(stored: Mapping[str, Any]) -> Choice:
-    kind = stored["kind"]
+    """The stored choice. Raises ValueError for anything `choice_json` does not make."""
+    try:
+        kind, record, kind_of = stored["kind"], stored["record"], stored["movement_type"]
+    except KeyError as error:
+        raise ValueError("not a choice") from error
     if kind not in ("yes", "no", "record", "none", "type"):
         raise ValueError("not a choice")
-    record = None if stored["record"] is None else _index(stored["record"])
-    kind_of = None if stored["movement_type"] is None else MovementType(stored["movement_type"])
+    record = None if record is None else _index(record)
+    kind_of = None if kind_of is None else MovementType(kind_of)
     if (record is not None) != (kind == "record") or (kind_of is not None) != (kind == "type"):
         raise ValueError("a choice carries a record or a type only when it is one")
+    if kind_of is MovementType.UNCLEAR:
+        raise ValueError("not a choice: no button offers an unclear type")
     return Choice(kind, record, kind_of)
 
 
