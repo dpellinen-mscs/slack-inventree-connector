@@ -378,9 +378,11 @@ class Worker:
         status, outcome = self._answer(click, button)
         told = outcome
         if outcome == Answered.NOT_OPEN and button is not None:
-            # The click is handled again after a crash that came after its answer was recorded.
+            # The click is handled again after a crash that came after its answer was recorded: the same user,
+            # and the same button. The same user's other button is a changed answer, and it was refused.
             answer = self.store.answer(button.item.id)
-            told = Answered.ANSWERED if answer is not None and answer[1] == click.user else outcome
+            replayed = answer is not None and (answer[0].get("button"), answer[1]) == (button.position, click.user)
+            told = Answered.ANSWERED if replayed else outcome
         text = click_feedback(
             told,
             approver_only=button is not None and button.item.approver_only,
@@ -429,9 +431,11 @@ class Worker:
         except Exception as error:
             _log_failure("buttons of question", item.id, error)
             tries = self.store.buttons_failed(self.owner, item.id)
+            # Every failure pauses all take-downs, the last try of this question too: the next question waits
+            # out the same outage or rate limit instead of spending its tries in it.
+            wait = max(TAKE_DOWN_BACKOFF_SECONDS * 2 ** (min(tries, TAKE_DOWN_TRIES) - 1), _retry_after(error))
+            self._take_down_quiet_until = now + wait
             if tries < TAKE_DOWN_TRIES:
-                wait = max(TAKE_DOWN_BACKOFF_SECONDS * 2 ** (tries - 1), _retry_after(error))
-                self._take_down_quiet_until = now + wait
                 return 0
             removed = False
         self.store.buttons_taken_down(self.owner, item.id, removed=removed)
