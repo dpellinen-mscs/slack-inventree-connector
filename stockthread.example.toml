@@ -18,6 +18,13 @@ catch_up_hours = 72           # read posts missed during downtime this far back.
 group_window_seconds = 5      # join sibling messages from one user
 plan_expiry_hours = 24
 
+[slack.http]                  # only with transport = "http"
+# Slack needs a public https URL: put a reverse proxy that terminates TLS in
+# front, and give Slack https://<public host>/slack/events as the request URL.
+host = "127.0.0.1"            # in a container: "0.0.0.0"
+port = 3000
+path = "/slack/events"        # events and button clicks both arrive here
+
 [inventree]
 # Use https unless InvenTree runs on the same host or a trusted network:
 # INVENTREE_TOKEN is sent with every request.

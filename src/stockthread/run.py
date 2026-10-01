@@ -4,8 +4,8 @@ Startup order: open the store and take the instance lock; put back events an ear
 unfinished; check the bot token (`auth.test`) and InvenTree (version and a first catalog read); then connect
 to Slack, start catch-up, and run the worker loop in this thread. The listener stores and acknowledges on
 Bolt's threads, catch-up stores what Slack did not deliver on its own thread (slack/catchup.py), and the
-worker processes from the queue here. Socket Mode only for now: HTTP serving needs a production WSGI
-server and comes in a later release.
+worker processes from the queue here. Over HTTP, waitress serves Bolt on a thread of its own
+(slack/http_server.py); the rest is the same for both transports.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from stockthread.inventree import InvenTreeError, InvenTreeReader, check_version
 from stockthread.llm.extract import LLMExtractor, WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
 from stockthread.slack.catchup import SWEEP_SECONDS, CatchUp, HistoryClient
+from stockthread.slack.http_server import HttpServer, ServeError
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
 from stockthread.worker import PostStillRunning, Worker
@@ -228,10 +229,19 @@ def slack_tls() -> ssl.SSLContext:
     return context
 
 
-def socket_mode(app: Any, app_token: str) -> Connection:
+def serve(app: Any, settings: Settings) -> Connection:
+    """The connection for the configured transport."""
+    if settings.slack.transport == "http":
+        signing_secret = settings.secrets.slack_signing_secret
+        if signing_secret is None:  # the settings refuse this already
+            raise ValueError("HTTP mode needs SLACK_SIGNING_SECRET")
+        return HttpServer(app, settings.slack.http, signing_secret.get_secret_value())
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-    return SocketModeHandler(app, app_token)
+    app_token = settings.secrets.slack_app_token
+    if app_token is None:  # the settings refuse this already
+        raise ValueError("Socket Mode needs SLACK_APP_TOKEN")
+    return SocketModeHandler(app, app_token.get_secret_value())
 
 
 def run(
@@ -241,15 +251,13 @@ def run(
     slack_client: WebClient | None = None,
     catalog: Callable[[], Catalog] | None = None,
     check: Callable[[Settings], str] = check_inventree,
-    connect: Callable[[Any, str], Connection] = socket_mode,
+    connect: Callable[[Any, Settings], Connection] = serve,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> int:
     """Serve until `stop` is set. Returns the process exit code."""
-    if settings.slack.transport != "socket":
-        log.error('HTTP serving is not built yet: set slack.transport = "socket"')
-        return 2
-    app_token = settings.secrets.slack_app_token
-    if app_token is None:  # the settings refuse this already
+    http = settings.slack.transport == "http"
+    signing_secret = settings.secrets.slack_signing_secret
+    if (signing_secret if http else settings.secrets.slack_app_token) is None:  # the settings refuse this already
         return 2
     store = Store.open(settings.storage.database)
     owner = new_lock_owner()
@@ -292,9 +300,17 @@ def run(
             if stop.is_set():
                 return 0
             listener = Listener(settings.slack, ThreadStores(settings.storage.database))
-            app = build_app(settings.slack, identity, listener, bot_token=bot_token, signing_secret=None, client=client)
-            connection = connect(app, app_token.get_secret_value())
-            log.info("connecting to Slack over Socket Mode")
+            app = build_app(
+                settings.slack,
+                identity,
+                listener,
+                bot_token=bot_token,
+                signing_secret=signing_secret.get_secret_value() if http and signing_secret is not None else None,
+                client=client,
+            )
+            connection = connect(app, settings)
+            if not http:
+                log.info("connecting to Slack over Socket Mode")
             connection.connect()
             if settings.slack.catch_up_hours:
                 # From here on Slack delivers; what was posted before is read from the history. The time is
@@ -308,7 +324,7 @@ def run(
                 sweeping.start()
             else:
                 log.info("catch-up is off (slack.catch_up_hours = 0): posts made during downtime are not read")
-        except (IdentityError, InvenTreeError) as error:
+        except (IdentityError, InvenTreeError, ServeError) as error:
             log.error("cannot start: %s", error)
             return 2
         except SlackApiError as error:
@@ -320,11 +336,12 @@ def run(
             return 2
         worker.slack, worker.catalog = DeadlinePoster(client), cache
         provider = llm_provider(settings)
+        alive: Callable[[], bool] = getattr(connection, "alive", lambda: True)
         if provider is None or settings.llm is None:
-            return _loop(worker, stop)
+            return _loop(worker, stop, alive)
         try:
             worker.llm = LLMExtractor(WithinDeadline(provider, settings.llm.timeout_seconds))
-            return _loop(worker, stop)
+            return _loop(worker, stop, alive)
         finally:
             provider.close()
     except LockLost:
@@ -382,9 +399,14 @@ def lock_stale_after(settings: Settings) -> timedelta:
     return max(LOCK_STALE_AFTER, timedelta(seconds=max(4 * settings.inventree.timeout_seconds + 60, llm)))
 
 
-def _loop(worker: Worker, stop: threading.Event) -> int:
+def _loop(worker: Worker, stop: threading.Event, alive: Callable[[], bool] = lambda: True) -> int:
+    """Exit code 1 when the connection to Slack stops serving by itself (HTTP): Slack's deliveries then fail
+    while the process looks healthy, and a supervisor should start it again."""
     errors = 0
     while not stop.is_set():
+        if not alive():
+            log.error("the connection to Slack has stopped serving; stopping")
+            return 1
         wait = POLL_SECONDS
         try:
             worker.beat()

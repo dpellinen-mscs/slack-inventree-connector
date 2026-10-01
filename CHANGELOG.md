@@ -10,6 +10,8 @@ Nothing is released yet. The connector cannot write stock in this state.
 
 ### Added
 
+- HTTP mode for `stockthread run` (`slack.transport = "http"`): waitress serves the signed Events API
+  and button clicks at `[slack.http]` `host`, `port` and `path`, with `manifests/slack-http.json`.
 - Design, roadmap and architecture decisions (`docs/`).
 - A synthetic eval corpus with a schema, a validator and a reference scorer (`eval/`).
 - The Python package scaffold with one-command checks (`make check`).

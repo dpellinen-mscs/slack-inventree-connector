@@ -136,12 +136,16 @@ needs.
   public URL and no TLS setup, which suits a small team behind NAT. HTTP
   with the Events API is supported for teams that prefer it. The listeners
   are the same, and only the entry point differs. The repository ships one
-  app manifest per transport. `stockthread run` serves Socket Mode today;
-  it refuses HTTP until a production WSGI server is chosen. At startup it
+  app manifest per transport. `stockthread run` serves either. Over HTTP,
+  waitress serves Bolt's WSGI adapter on a thread of the same process, at
+  `[slack.http]` `host`, `port` and `path` (default
+  `127.0.0.1:3000/slack/events`, behind a reverse proxy with TLS; ADR
+  0013). It refuses bodies over 4 MiB and answers 404 to anything but a
+  POST to the path. At startup it
   takes the instance lock (another instance on the same database refuses
   to start), puts back events an earlier instance left unfinished, checks
   the bot token (`auth.test`), the InvenTree version and a first catalog
-  read, and only then connects. A startup failure (a revoked token, no
+  read, and only then connects or listens. A startup failure (a revoked token, no
   network, InvenTree down) exits with code 2 and names only the error
   code or class. The worker runs in the main thread. It beats the lock's
   heartbeat between startup phases and before each batch and each post,

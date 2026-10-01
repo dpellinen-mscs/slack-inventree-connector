@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import http.client
 import json
 import logging
 import signal
+import socket
 import sqlite3
 import ssl
 import threading
@@ -52,6 +56,7 @@ def settings(
     llm_key: str = "",
     vehicles: dict[str, str] | None = None,
     catch_up_hours: int = 72,
+    http_port: int = 3000,
 ) -> Settings:
     data: dict[str, Any] = {
         "slack": {
@@ -60,6 +65,7 @@ def settings(
             "channels": [CHANNEL],
             "transport": transport,
             "catch_up_hours": catch_up_hours,
+            "http": {"port": http_port},
         },
         "inventree": {"url": "http://inventree.local:8000"},
         "storage": {"database": str(database)},
@@ -226,8 +232,88 @@ def test_startup_checks_stop_before_connecting_and_free_the_lock(
     assert lock_is_free(database)
 
 
-def test_http_serving_is_refused_for_now(tmp_path: Path) -> None:
-    assert run(settings(tmp_path / "stockthread.db", transport="http"), threading.Event()) == 2
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: int = probe.getsockname()[1]
+        return port
+
+
+def post_signed(port: int, body: dict[str, Any], secret: str = "synthetic-secret") -> int:
+    """POST an event as Slack would, once the server listens. Returns the status."""
+    raw, timestamp = json.dumps(body), int(time.time())
+    digest = hmac.new(secret.encode(), f"v0:{timestamp}:{raw}".encode(), hashlib.sha256).hexdigest()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Slack-Request-Timestamp": str(timestamp),
+        "X-Slack-Signature": f"v0={digest}",
+    }
+    deadline = time.monotonic() + 5
+    while True:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            connection.request("POST", "/slack/events", body=raw.encode(), headers=headers)
+            return connection.getresponse().status
+        except ConnectionRefusedError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.02)  # startup is still checking InvenTree
+        finally:
+            connection.close()
+
+
+def test_a_post_delivered_over_http_gets_its_dry_run(tmp_path: Path, stop: threading.Event) -> None:
+    database, port = tmp_path / "stockthread.db", free_port()
+    client = FakeClient(stop)
+    codes: list[int] = []
+    running = threading.Thread(
+        target=lambda: codes.append(
+            run(
+                settings(database, transport="http", http_port=port),
+                stop,
+                slack_client=client,
+                catalog=lambda: CATALOG,
+                check=lambda _: "",
+                clock=lambda: datetime.fromtimestamp(1790000030, UTC),
+            )
+        )
+    )
+    running.start()
+    event = {"type": "message", "channel": CHANNEL, "user": "U0SAM0001", "ts": "1790000000.000100"}
+    event["text"] = "took 2 Disc 40 from main stock to truck 1"
+    body = {
+        "type": "event_callback",
+        "team_id": WORKSPACE,
+        "api_app_id": APP,
+        "event_id": "Ev0HTTP0001",
+        "event": event,
+    }
+    try:
+        assert post_signed(port, body, secret="another-synthetic-secret") == 401
+        assert post_signed(port, body) == 200
+    finally:
+        running.join(10)
+    assert codes == [0]
+    assert [reply["thread_ts"] for reply in client.posted] == ["1790000000.000100"]
+    with socket.socket() as again:
+        again.bind(("127.0.0.1", port))  # the server is closed: the port is free
+    assert lock_is_free(database)
+
+
+def test_http_mode_stops_with_exit_2_when_the_port_is_taken(tmp_path: Path, stop: threading.Event) -> None:
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        code = run(
+            settings(tmp_path / "stockthread.db", transport="http", http_port=port),
+            stop,
+            slack_client=FakeClient(stop),
+            catalog=lambda: CATALOG,
+            check=lambda _: "",
+        )
+    assert code == 2
+    assert lock_is_free(tmp_path / "stockthread.db")
 
 
 def test_the_catalog_is_refreshed_and_a_failed_refresh_keeps_the_last_snapshot_for_a_while() -> None:
@@ -345,7 +431,7 @@ def test_a_lost_lock_stops_with_exit_1_and_leaves_the_new_owner_alone(tmp_path: 
     database = tmp_path / "stockthread.db"
     connection = FakeConnection()
 
-    def connect(app: Any, token: str) -> FakeConnection:
+    def connect(app: Any, _: Settings) -> FakeConnection:
         with sqlite3.connect(database) as raw:  # another instance takes the lock over
             raw.execute("UPDATE instance_lock SET owner = 'instance-b'")
         return connection
@@ -356,12 +442,20 @@ def test_a_lost_lock_stops_with_exit_1_and_leaves_the_new_owner_alone(tmp_path: 
         assert raw.execute("SELECT owner FROM instance_lock").fetchall() == [("instance-b",)]
 
 
+def test_a_connection_that_stops_serving_stops_the_run_with_exit_1(tmp_path: Path, stop: threading.Event) -> None:
+    connection = FakeConnection()
+    connection.alive = lambda: False  # type: ignore[attr-defined]
+    assert run_with(tmp_path / "stockthread.db", stop, connection) == 1
+    assert connection.calls == ["connect", "close"]
+    assert lock_is_free(tmp_path / "stockthread.db")
+
+
 def test_a_failing_close_still_frees_the_lock(tmp_path: Path, stop: threading.Event) -> None:
     database = tmp_path / "stockthread.db"
     connection = FakeConnection()
     connection.close = lambda: _raise(OSError("synthetic"))  # type: ignore[method-assign]
 
-    def connect(app: Any, token: str) -> FakeConnection:
+    def connect(app: Any, _: Settings) -> FakeConnection:
         stop.set()
         return connection
 

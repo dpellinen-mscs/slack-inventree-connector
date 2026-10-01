@@ -4,7 +4,15 @@ from typing import Any
 
 import pytest
 
-from stockthread.config import REDACTED, ConfigError, LLMSettings, Settings, load_settings, parse_settings
+from stockthread.config import (
+    REDACTED,
+    ConfigError,
+    LLMSettings,
+    Settings,
+    SlackHttpSettings,
+    load_settings,
+    parse_settings,
+)
 
 MINIMAL = """
 [slack]
@@ -402,3 +410,16 @@ def test_a_wrong_vehicle_is_refused_and_named_without_its_value(vehicles: dict[s
     assert where in message
     assert "SPOT" not in message
     assert "forged" not in message
+
+
+@pytest.mark.parametrize("path", ["/slack/events", "/hooks/stock-thread_1", "/a.b"])
+def test_an_http_path_of_plain_segments_is_accepted(path: str) -> None:
+    assert SlackHttpSettings(path=path).path == path
+
+
+@pytest.mark.parametrize(
+    "path", ["", "/", "slack", "/slack/", "//slack", "/slack//events", "/../slack", "/./x", "/a b"]
+)
+def test_an_http_path_a_proxy_could_rewrite_is_refused(path: str) -> None:
+    with pytest.raises(ValueError, match="path"):
+        SlackHttpSettings(path=path)

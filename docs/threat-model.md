@@ -51,7 +51,7 @@ Slack (workspace, users, bots) ──► connector ──► InvenTree REST API
 
 | ID | Threat | Control | Status |
 | --- | --- | --- | --- |
-| T1 | Forged Slack events or button clicks over HTTP | The signature check is always on, with no switch. HTTP mode refuses to start without a signing secret. Stale timestamps are rejected. | Designed. Test vectors and fixtures are built (`tests/fixtures/slack/`) |
+| T1 | Forged Slack events or button clicks over HTTP | The signature check is always on, with no switch. HTTP mode refuses to start without a signing secret. Stale timestamps are rejected. Bodies over 4 MiB are refused before they are read, and a refused request is not parsed or logged. | Built: test vectors and fixtures (`tests/fixtures/slack/`), through Bolt and over a real socket (`tests/test_slack_http.py`) |
 | T2 | Events from another workspace, app or channel | Workspace id and app id are checked on every payload. Channels are allowlisted, and an empty allowlist means the connector acts nowhere. | Designed. Fixtures are built |
 | T3 | Replayed or retried deliveries cause two writes | Deduplication on `event_id` and on message key. The request key and its state are enforced by unique constraints and compare-and-set. | Store built (#21). Ingest designed |
 | T4 | Someone who is not an approver approves, undoes or answers | Approvers are listed by Slack user id and display names are never trusted. An empty list means nobody can approve. A button holds only a random id of 128 bits or more, checked against its stored channel and message. | Designed |

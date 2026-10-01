@@ -49,6 +49,19 @@ class _Section(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
+class SlackHttpSettings(_Section):
+    """Where `stockthread run` listens in HTTP mode. Slack needs a public https URL: put a reverse proxy that
+    terminates TLS in front, and give Slack `https://<public host><path>` as the request URL."""
+
+    host: str = Field(default="127.0.0.1", pattern=r"^[A-Za-z0-9.:-]+$")
+    """The address to listen on. The default takes requests from this machine only (the reverse proxy); in a
+    container, "0.0.0.0"."""
+    port: int = Field(default=3000, ge=1, le=65535)
+    path: str = Field(default="/slack/events", pattern=r"^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")
+    """Events and button clicks both arrive here. Matched exactly, so no empty or dot segments and no trailing
+    slash: a proxy that normalizes the path would otherwise get 404s."""
+
+
 class SlackSettings(_Section):
     transport: Literal["socket", "http"] = "socket"
     workspace_id: str = Field(pattern=r"^T[A-Z0-9]{2,}$")
@@ -61,6 +74,7 @@ class SlackSettings(_Section):
     catch_up_hours: int = Field(default=72, ge=0, le=24 * 30)
     group_window_seconds: int = Field(default=5, ge=0, le=300)
     plan_expiry_hours: int = Field(default=24, ge=1, le=24 * 30)
+    http: SlackHttpSettings = SlackHttpSettings()
 
 
 class InvenTreeSettings(_Section):
