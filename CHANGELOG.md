@@ -49,8 +49,8 @@ Nothing is released yet. The connector cannot write stock in this state.
   python.org build of Python on macOS works without its "Install Certificates" step.
 - The worker (migration 0004): stored events become grouped posts, and once a post's sibling window
   has passed it gets one dry-run reply in its thread. Posts that are not read as a movement get no
-  reply. Edits, deletions and clicks are recorded and not acted on yet; a post that was edited or
-  deleted before its dry run gets none, whichever event Slack delivers first. Each dry run keeps a
+  reply. Clicks are recorded and not acted on yet; edits and deletions are noted whichever event
+  Slack delivers first, and read as described under revised dry runs below. Each dry run keeps a
   record of what was decided and why (candidates, matches, reasons).
 - The validator reads a quantity expression as a whole ("2 of the 5", "half a dozen") and checks the
   unit against the text: a swapped, missing or made-up unit needs review.
@@ -69,3 +69,8 @@ Nothing is released yet. The connector cannot write stock in this state.
 - Catch-up after downtime: posts made while the connector was down or disconnected are read from
   the channel history (up to `slack.catch_up_hours`, and never from before the connector first
   watched the channel) and answered with the review reason `late_ingest` (migration 0006).
+- Revised dry runs (migrations 0007 to 0009): a message that joins a post after its dry run, or an
+  edit or deletion of one of its messages, makes the post read again. A different reading posts a
+  *Revised dry run*, the same reading posts nothing, and no movement any more posts one notice
+  that the reply above no longer stands. A post is read as its messages are now: each as its newest
+  edit shows it, a deleted one left out, and a change that cannot be read withholds the post.

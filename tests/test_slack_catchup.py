@@ -369,22 +369,34 @@ def test_a_root_that_does_not_date_its_newest_reply_is_read(
 # Edits
 
 
-def test_an_edit_made_during_downtime_withholds_a_post_that_still_waits(
+def quantities(store: Store, ts: str) -> list[str]:
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ts))
+    assert record is not None
+    assert record.result is not None
+    return [item["quantity"] for movement in record.result["movements"] for item in movement["items"]]
+
+
+THREE = "took 3 Disc 40 from main stock to truck 1"
+
+
+def test_an_edit_made_during_downtime_is_read_in_a_post_that_still_waits(
     sweeper: CatchUp, worker: Worker, store: Store, history: FakeHistory, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:
     ts = "1790000100.000100"
     live(store, ts)
     clock.at("1790000101.000000")
     worker.step()  # placed; the connector stops before the dry run
-    history.channels[CHANNEL] = [said(ts, "took 3 Disc 40", edited={"user": SAM, "ts": "1790000150.000000"})]
+    history.channels[CHANNEL] = [said(ts, THREE, edited={"user": SAM, "ts": "1790000150.000000"})]
     clock.at("1790000400.000000")
     assert sweeper.sweep(Decimal("1790000400.000000")) == 1
     worker.step()
-    assert slack.posted == []
+    assert len(slack.posted) == 1
     record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ts))
     assert record is not None
-    assert record.outcome is DryRunOutcome.WITHHELD
-    assert record.result == {"withheld": "changed"}
+    assert record.result is not None
+    assert record.outcome is DryRunOutcome.REPLIED
+    assert quantities(store, ts) == ["3"]  # as edited, not as delivered
+    assert record.result["late"] is True  # the text read was found in the history
     clock.at("1790002000.000000")
     assert sweeper.sweep() == 0  # and once only
 
@@ -403,6 +415,32 @@ def test_a_message_found_already_edited_is_read_as_it_is_now_and_not_withheld(
     assert sweeper.sweep(Decimal("1790000401.000000")) == 0  # the same edit as the stored event shows
     history.channels[CHANNEL][0]["edited"] = {"user": SAM, "ts": "1790000402.000000"}
     assert sweeper.sweep(Decimal("1790000410.000000")) == 1
+
+
+def test_an_edit_slack_delivered_is_not_noted_again_from_the_history(
+    sweeper: CatchUp, worker: Worker, store: Store, history: FakeHistory, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    ts = "1790000100.000100"
+    live(store, ts)
+    edit = {
+        "type": "event_callback",
+        "team_id": WORKSPACE,
+        "api_app_id": APP,
+        "event_id": "Ev1790000150.000000",
+        "event": {
+            "type": "message",
+            "subtype": "message_changed",
+            "channel": CHANNEL,
+            "message": {**said(ts, THREE), "edited": {"user": SAM, "ts": "1790000150.000000"}},
+            "previous_message": said(ts),
+        },
+    }
+    assert store.enqueue_event("Ev1790000150.000000", "event", json.dumps(edit))
+    clock.at("1790000101.000000")
+    worker.step()  # placed, and its edit noted
+    history.channels[CHANNEL] = [said(ts, THREE, edited={"user": SAM, "ts": "1790000150.000000"})]
+    clock.at("1790000400.000000")
+    assert sweeper.sweep(Decimal("1790000400.000000")) == 0  # the same edit: nothing to note again
 
 
 def test_a_thread_root_deleted_during_downtime_withholds_its_waiting_post(
@@ -430,7 +468,7 @@ def test_a_thread_root_deleted_during_downtime_withholds_its_waiting_post(
     assert record.outcome is DryRunOutcome.WITHHELD
 
 
-def test_an_edit_found_in_the_history_of_a_post_that_has_its_dry_run_takes_its_reply_back(
+def test_an_edit_found_in_the_history_of_a_post_that_has_its_dry_run_revises_it(
     sweeper: CatchUp, worker: Worker, store: Store, history: FakeHistory, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:
     ts = "1790000100.000100"
@@ -439,12 +477,13 @@ def test_an_edit_found_in_the_history_of_a_post_that_has_its_dry_run_takes_its_r
     clock.at("1790000120.000000")
     worker.step()
     assert len(slack.posted) == 1
-    history.channels[CHANNEL] = [said(ts, "took 3 Disc 40", edited={"user": SAM, "ts": "1790000150.000000"})]
+    history.channels[CHANNEL] = [said(ts, THREE, edited={"user": SAM, "ts": "1790000150.000000"})]
     clock.at("1790001000.000000")
     assert sweeper.sweep() == 1  # the edit, as Slack would have sent it
     worker.step()
-    assert len(slack.posted) == 2  # the edit alone starts a revision, and the reply above no longer stands
-    assert "edited or deleted" in json.dumps(slack.posted[1]["blocks"])
+    assert len(slack.posted) == 2  # the edit alone starts a revision, read as edited
+    assert slack.posted[1]["text"] == "Revised dry run: 1 movement, nothing changed."
+    assert quantities(store, ts) == ["3"]
     assert store.post_has_revision(PostKey(WORKSPACE, CHANNEL, ts))
     clock.at("1790002000.000000")
     assert sweeper.sweep() == 0  # stored once
@@ -670,15 +709,13 @@ def test_an_edit_is_not_missed_when_the_event_from_before_it_is_still_queued(
 ) -> None:
     ts = "1790000100.000100"
     live(store, ts)  # stored by the instance before, not placed; then the message was edited
-    history.channels[CHANNEL] = [said(ts, "took 3 Disc 40", edited={"user": SAM, "ts": "1790000150.000000"})]
+    history.channels[CHANNEL] = [said(ts, THREE, edited={"user": SAM, "ts": "1790000150.000000"})]
     clock.at("1790000400.000000")
     assert sweeper.sweep(Decimal("1790000400.000000")) == 1
     worker.step()
-    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ts))
-    assert slack.posted == []
-    assert record is not None
-    assert record.outcome is DryRunOutcome.WITHHELD
-    assert [outcome for _, _, outcome in events(path)] == [None, "withheld_changed_post"]
+    assert len(slack.posted) == 1
+    assert quantities(store, ts) == ["3"]  # placed from the event before the edit, read as edited
+    assert [outcome for _, _, outcome in events(path)] == [None, "revision_noted"]
 
 
 def test_a_post_is_late_when_any_of_its_messages_came_from_the_history(
@@ -690,8 +727,8 @@ def test_a_post_is_late_when_any_of_its_messages_came_from_the_history(
     assert sweeper.sweep(Decimal("1790000150.000000")) == 1
     live(store, reply, "2 Disc 40 from main stock", thread_ts=root)
     worker.step()
-    read = worker._messages(PostKey(WORKSPACE, CHANNEL, root))
-    assert read is not None
+    read = worker._messages(PostKey(WORKSPACE, CHANNEL, root), 0)
+    assert not isinstance(read, str)
     assert [message.ts for message in read[0]] == [root, reply]
     assert read[2] is True
 
