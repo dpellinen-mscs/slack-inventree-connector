@@ -21,7 +21,7 @@ from stockthread.core.model import CandidateMovement, Extraction, LineItem, Mess
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.ingest import Drop, Revised
 from stockthread.slack.listener import Listener
-from stockthread.slack.replies import APPROVERS_ONLY, CLICK_FEEDBACK
+from stockthread.slack.replies import APPROVERS_ONLY, CLICK_FEEDBACK, NO_APPROVERS
 from stockthread.store import DryRunOutcome, LockLost, NewQuestion, StateConflict, Store
 from stockthread.store import db as store_db
 from stockthread.worker import (
@@ -30,6 +30,7 @@ from stockthread.worker import (
     LATE_AFTER_SECONDS,
     MAX_BACKOFF_SECONDS,
     MAX_POSTS_PER_STEP,
+    NOTE_QUIET_SECONDS,
     RETRY_FOR_SECONDS,
     ROOT_WAIT_SECONDS,
     PostStillRunning,
@@ -2610,7 +2611,7 @@ def test_the_note_is_sent_once_the_click_is_finished(store: Store, clock: Clock,
     assert slack.seen == [("done", "answered")]
 
 
-def test_a_note_that_fails_is_logged_and_not_sent_again(
+def test_a_note_that_fails_is_logged_not_sent_again_and_quiets_notes_for_a_while(
     store: Store, clock: Clock, path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     worker = asked(store, clock)
@@ -2625,10 +2626,64 @@ def test_a_note_that_fails_is_logged_and_not_sent_again(
     assert "click feedback" in caplog.text
     assert "synthetic outage" not in caplog.text
     worker.step()
-    assert notes(worker) == []
     clicked(store, click_on(reply, ts, 1, SAM, at="1790000100.000200"), "2")
+    worker.step()  # within NOTE_QUIET_SECONDS of the failure: a slow Slack is not asked again
+    assert notes(worker) == []
+    clock.at(f"{1790000030 + NOTE_QUIET_SECONDS}.000000")
+    clicked(store, click_on(reply, ts, 1, LUIS, at="1790000100.000300"), "3")
     worker.step()
-    assert notes(worker) == [(SAM, CLICK_FEEDBACK["already_answered"])]
+    assert notes(worker) == [(LUIS, CLICK_FEEDBACK["already_answered"])]
+
+
+def test_a_click_handled_again_after_a_crash_tells_the_clicker_their_answer_is_recorded(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    button = store.button(reply["blocks"][-1]["elements"][1]["value"])
+    assert button is not None
+    store.answer_question(OWNER, button, SAM)  # recorded, then the process died before the click was finished
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    clicked(store, click_on(reply, ts, 0, LUIS, at="1790000100.000200"), "2")
+    worker.step()
+    assert statuses(path)[-2:] == [("dropped", "already_answered"), ("dropped", "already_answered")]
+    assert notes(worker) == [(SAM, CLICK_FEEDBACK["answered"]), (LUIS, CLICK_FEEDBACK["already_answered"])]
+
+
+def test_a_note_belongs_to_its_own_click_only(store: Store, clock: Clock, path: Path) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    enqueue(store, message("1790000040.000100", "anyone seen my coffee?"))
+    clicked(store, {"type": "block_actions", "garbage": True}, "2")
+    worker.step()  # one batch: a click, a message, a click the ingest checks drop
+    assert notes(worker) == [(SAM, CLICK_FEEDBACK["answered"])]
+
+
+def test_no_note_is_sent_when_the_click_cannot_be_finished(
+    store: Store, clock: Clock, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+
+    def lost(*args: Any, **kwargs: Any) -> None:
+        raise LockLost("synthetic")
+
+    monkeypatch.setattr(store, "finish_event", lost)
+    with pytest.raises(LockLost):
+        worker.step()
+    assert notes(worker) == []
+
+
+def test_no_note_is_sent_once_the_worker_is_stopping(store: Store, clock: Clock, path: Path) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    worker.stopping = lambda: True
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.drain()
+    assert last_status(path) == ("done", "answered")
+    assert notes(worker) == []
 
 
 def test_a_button_of_a_post_in_another_workspace_answers_nothing(store: Store, clock: Clock, path: Path) -> None:
@@ -2658,6 +2713,8 @@ def test_with_no_approvers_the_poster_still_answers_and_nobody_answers_for_appro
     clicked(store, click_on(reply, ts, 0, user, at="1790090000.000100"), "1")
     worker.step()
     assert last_status(path) == ("done" if outcome == "answered" else "dropped", outcome)
+    told = {"answered": CLICK_FEEDBACK["answered"], "not_allowed": NO_APPROVERS}[outcome]
+    assert notes(worker) == [(user, told)]
 
 
 @pytest.mark.parametrize(

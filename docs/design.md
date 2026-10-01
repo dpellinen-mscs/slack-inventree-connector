@@ -521,9 +521,12 @@ needs.
     The notes are fixed sentences that quote neither the post nor the
     catalog (`replies.CLICK_FEEDBACK`). A payload the ingest checks drop,
     and a button that does nothing yet, get no note. A note is best
-    effort: it is sent after the event is finished, with its own 10 second
-    deadline, and one that fails is logged by error class and not tried
-    again. A crash between the two loses the note, never the answer.
+    effort: it is sent after the event is finished, with its own 5 second
+    deadline and one note in flight at most. One that fails is logged by
+    error class and not tried again, and no note is sent for a minute
+    after it, so a slow Slack never holds the queue up. A crash between
+    the two loses the note, never the answer; a click handled again after
+    its answer was recorded tells its own clicker that the answer stands.
     Acting on the answer (validation again, the next question) comes next.
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can

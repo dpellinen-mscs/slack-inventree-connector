@@ -25,6 +25,7 @@ from stockthread.slack.replies import (
     MAX_CANDIDATES,
     MAX_MOVEMENTS,
     MAX_SECTION,
+    NO_APPROVERS,
     REASONS,
     MovementView,
     click_feedback,
@@ -204,18 +205,23 @@ def test_every_outcome_of_an_answer_click_tells_the_clicker_something() -> None:
     outcomes = {"answered", "unknown_button", "other_message", "stale", "already_answered", "expired", "not_allowed"}
     outcomes |= {answered.value for answered in Answered}
     for outcome in outcomes:
-        text = click_feedback(outcome, approver_only=False, expiry_hours=24)
+        text = click_feedback(outcome, approver_only=False, approvers=True, expiry_hours=24)
         assert text, outcome
         assert not set(text) & set("{}<>*_`"), outcome  # plain words: no placeholder left, no markup
 
 
 def test_the_clicker_is_told_nothing_about_a_payload_the_ingest_checks_drop() -> None:
     for outcome in [*(reason.value for reason in DropReason), "not_a_click", "action_not_handled_yet"]:
-        assert click_feedback(outcome, approver_only=False, expiry_hours=24) is None, outcome
+        assert click_feedback(outcome, approver_only=False, approvers=True, expiry_hours=24) is None, outcome
 
 
 def test_click_feedback_names_the_expiry_and_who_may_answer() -> None:
-    assert "36 hours" in str(click_feedback("expired", approver_only=False, expiry_hours=36))
-    assert click_feedback("not_allowed", approver_only=True, expiry_hours=24) == APPROVERS_ONLY
-    assert click_feedback("not_allowed", approver_only=False, expiry_hours=24) == CLICK_FEEDBACK["not_allowed"]
-    assert click_feedback("stale", approver_only=True, expiry_hours=24) == CLICK_FEEDBACK["stale"]
+    assert "for 36 hours after" in str(click_feedback("expired", approver_only=False, approvers=True, expiry_hours=36))
+    assert "for 1 hour after" in str(click_feedback("expired", approver_only=False, approvers=True, expiry_hours=1))
+    assert click_feedback("not_allowed", approver_only=True, approvers=False, expiry_hours=24) == NO_APPROVERS
+    assert click_feedback("not_allowed", approver_only=True, approvers=True, expiry_hours=24) == APPROVERS_ONLY
+    assert (
+        click_feedback("not_allowed", approver_only=False, approvers=True, expiry_hours=24)
+        == CLICK_FEEDBACK["not_allowed"]
+    )
+    assert click_feedback("stale", approver_only=True, approvers=True, expiry_hours=24) == CLICK_FEEDBACK["stale"]

@@ -53,8 +53,9 @@ address in turn and once more after an error, a body can drip, and a DNS lookup 
 POST_DEADLINE_SECONDS = 30.0
 """For a whole reply (DeadlinePoster). Well under LOCK_STALE_AFTER: the worker beats the lock right before
 it posts."""
-NOTE_DEADLINE_SECONDS = 10.0
-"""For a note to one user (DeadlinePoster.chat_postEphemeral). The worker beats the lock right before each."""
+NOTE_DEADLINE_SECONDS = 5.0
+"""For a note to one user (DeadlinePoster.chat_postEphemeral). The worker beats the lock right before each, and
+sends none for a while after one failed."""
 CATALOG_MARGIN_SECONDS = 30
 """A catalog read is cut off this long before the lock could go stale."""
 LLM_MARGIN_SECONDS = 30
@@ -128,6 +129,7 @@ class DeadlinePoster:
         self._client = client
         self._deadline = deadline
         self._note_deadline = note_deadline
+        self._note: _Call | None = None
         self._calls: dict[tuple[Any, Any], _Call] = {}
 
     def chat_postMessage(self, **kwargs: Any) -> Any:  # slack_sdk's name
@@ -149,9 +151,12 @@ class DeadlinePoster:
         return call.result
 
     def chat_postEphemeral(self, **kwargs: Any) -> Any:  # slack_sdk's name
-        """A note to one user, on its own helper thread. Not tracked: posting it twice does no harm, and a note
-        that runs out of time is left running and not tried again."""
-        call = _Call()
+        """A note to one user, on its own helper thread, apart from the replies. A note that runs out of time is
+        left running and not tried again; until it has ended no other note is sent, so stuck calls never pile
+        up."""
+        if self._note is not None and not self._note.done.is_set():
+            raise PosterBusy
+        call = self._note = _Call()
         threading.Thread(
             target=self._run, args=(call, self._client.chat_postEphemeral, kwargs), name="slack-note", daemon=True
         ).start()
@@ -413,7 +418,8 @@ def catch_up(
 
 
 def lock_stale_after(settings: Settings) -> timedelta:
-    """Longer than the worker can block between two beats: a reply (POST_DEADLINE_SECONDS), a catalog read,
+    """Longer than the worker can block between two beats: a reply (POST_DEADLINE_SECONDS) or a note to a
+    clicker (NOTE_DEADLINE_SECONDS) with the beat before it (worker.HEARTBEAT_SECONDS), a catalog read,
     which is cut off CATALOG_MARGIN_SECONDS before this, or a call to the LLM provider, which is cut off
     LLM_MARGIN_SECONDS before this."""
     llm = 0 if settings.llm is None else settings.llm.timeout_seconds + LLM_MARGIN_SECONDS

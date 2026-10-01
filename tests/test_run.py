@@ -641,6 +641,21 @@ def test_a_note_has_its_own_deadline_and_never_waits_for_a_reply() -> None:
         poster.chat_postEphemeral(**note)
 
 
+def test_only_one_note_is_in_flight_so_stuck_notes_never_pile_up() -> None:
+    client = SlowClient()
+    poster = run_module.DeadlinePoster(client, deadline=0.05, note_deadline=0.05)
+    note = {"channel": CHANNEL, "user": "U0SAM0001", "thread_ts": "1790000000.000100", "text": "noted"}
+    with pytest.raises(PostStillRunning):
+        poster.chat_postEphemeral(**note)
+    with pytest.raises(run_module.PosterBusy):
+        poster.chat_postEphemeral(**note)  # no second thread while the first is stuck
+    assert len(client.calls) == 1
+    client.release.set()
+    wait_until_idle()
+    assert poster.chat_postEphemeral(**note)["ok"]
+    assert len(client.calls) == 2
+
+
 def test_slack_tls_verifies_against_known_authorities_on_any_python_build() -> None:
     context = run_module.slack_tls()
     assert context.verify_mode is ssl.CERT_REQUIRED
