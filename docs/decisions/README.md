@@ -18,6 +18,7 @@ editing history.
 | [0010](0010-no-attribution.md) | No attribution of prior work or users | Accepted |
 | [0011](0011-llm-after-the-rules.md) | The model reads only what the rules decline, and only when configured | Accepted |
 | [0012](0012-first-confirmation-becomes-alias.md) | A whole-word match is confirmed once, and that confirmation becomes an alias | Accepted |
+| [0013](0013-http-serving-with-waitress.md) | HTTP mode is served by waitress, in the connector's own process | Accepted |
 
 ## Template
 

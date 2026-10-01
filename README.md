@@ -80,6 +80,28 @@ What to expect in this version:
   read late. Posts from before the very first start are left alone.
 - The database is one file, `stockthread.db`, next to the settings. It holds the raw Slack events.
 
+### Serving over HTTP instead of Socket Mode
+
+Socket Mode needs no public URL, and suits most teams. To receive Slack's Events API over HTTP
+instead, you need a public https URL that reaches the connector, usually a reverse proxy with TLS.
+
+1. Create the app from [`manifests/slack-http.json`](manifests/slack-http.json) instead, after
+   replacing both `https://stockthread.example.com/slack/events` with your URL. Slack checks the URL
+   at once and says it could not verify it: that is expected, the connector is not running yet.
+   Skip the app-level token, and install the app as above. *Basic Information* → *Signing Secret* is
+   `SLACK_SIGNING_SECRET`.
+2. In `stockthread.toml`, set `transport = "http"` under `[slack]`, and check `[slack.http]`: the
+   connector listens on `127.0.0.1:3000` at `/slack/events` by default. Point the proxy there; in a
+   container, set `host = "0.0.0.0"` and publish the port only to the proxy.
+3. Export `SLACK_SIGNING_SECRET` instead of `SLACK_APP_TOKEN`, then run `check-config` and `run`
+   as above.
+4. With the connector running, open *Event Subscriptions* and *Interactivity & Shortcuts* in the
+   app's settings and click *Retry* (or *Verify*) next to the request URL, then save.
+
+Keep the host's clock in sync (NTP): a request signed more than five minutes away from the
+connector's time is refused. If deliveries keep failing, Slack may pause the app's events until you
+turn them on again in *Event Subscriptions*; catch-up reads what was missed, within `catch_up_hours`.
+
 ## Project documents
 
 - [Design](docs/design.md): pipeline, architecture options, safety model

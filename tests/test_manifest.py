@@ -42,3 +42,27 @@ def test_the_quickstart_names_the_manifest_and_every_secret() -> None:
     for needed in ("manifests/slack-socket.json", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "INVENTREE_TOKEN"):
         assert needed in readme
     assert "connections:write" in readme  # the scope of the app-level token
+
+
+@pytest.fixture
+def http_manifest() -> dict[str, Any]:
+    loaded: dict[str, Any] = json.loads((ROOT / "manifests" / "slack-http.json").read_text(encoding="utf-8"))
+    return loaded
+
+
+def test_the_http_manifest_differs_from_the_socket_one_only_in_the_transport(
+    manifest: dict[str, Any], http_manifest: dict[str, Any]
+) -> None:
+    settings = http_manifest["settings"]
+    url = "https://stockthread.example.com/slack/events"  # a placeholder: the README says to replace it
+    assert settings["socket_mode_enabled"] is False
+    assert settings["event_subscriptions"].pop("request_url") == url
+    assert settings["interactivity"].pop("request_url") == url  # one path for events and clicks (slack.http.path)
+    settings["socket_mode_enabled"] = True
+    assert http_manifest == manifest
+
+
+def test_the_quickstart_names_the_http_manifest_and_its_secret() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for needed in ("manifests/slack-http.json", "SLACK_SIGNING_SECRET", 'transport = "http"', "/slack/events"):
+        assert needed in readme

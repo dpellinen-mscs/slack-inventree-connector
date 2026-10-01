@@ -55,7 +55,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 
 ## M1: read-only extraction and matching, dry-run in Slack
 
-- [ ] Slack ingest over Socket Mode and HTTP, with signature verification on HTTP (listener done: `slack/listener.py` checks, stores, then acknowledges; the worker is `worker.py`; `stockthread run` serves Socket Mode; HTTP serving is not built yet)
+- [x] Slack ingest over Socket Mode and HTTP, with signature verification on HTTP (listener `slack/listener.py` checks, stores, then acknowledges; the worker is `worker.py`; `stockthread run` serves Socket Mode, or HTTP through waitress (`slack/http_server.py`, ADR 0013), tested over a real socket with signed fixtures; HTTP not yet tried against Slack itself, which needs a public https URL)
 - [x] Workspace and app id checks, channel allowlist, subtype allowlist, bot filtering, deduplication (`slack/ingest.py`; in-memory dedup until the durable queue)
 - [x] Durable event queue (`slack_events`, migration 0002), and catch-up from channel history after downtime (`slack/catchup.py`, migration 0006; a deletion made during downtime is not seen)
 - [x] Grouping: photo with caption, sibling messages and threads become one post (`core/grouping.py`, migration 0003; the worker places each message)
@@ -65,7 +65,7 @@ can write stock yet: only the test suite has a raw HTTP helper.
 - [x] Validator: deterministic contradiction checks and text-level review reasons (`core/validate.py`)
 - [x] Matcher: exact, normalized, alias, then fuzzy candidates, for parts and locations (`core/matching.py`; the catalog snapshot is read from InvenTree by `catalog.py`; "my truck" resolves through the `[vehicles]` settings)
 - [x] Dry-run reply in the Slack thread: what would change, and every review reason (renderer `slack/replies.py`; `worker.py` posts it once the sibling window has passed; `stockthread run` serves it; tried in a dev workspace on 2026-09-30 for a post found by catch-up: one late dry run in the thread, no reply to chatter; a post delivered over Socket Mode while the connector runs is not yet tried there)
-- [ ] Slack app manifests and the quickstart (Socket Mode manifest `manifests/slack-socket.json` and the README quickstart done; install and `check-config` followed from scratch; the Socket Mode manifest, tokens and channel invite worked in a dev workspace on 2026-09-30, set up by the owner rather than by a newcomer following the quickstart; the HTTP manifest comes with HTTP serving)
+- [ ] Slack app manifests and the quickstart (Socket Mode manifest `manifests/slack-socket.json` and the README quickstart done; install and `check-config` followed from scratch; the Socket Mode manifest, tokens and channel invite worked in a dev workspace on 2026-09-30, set up by the owner rather than by a newcomer following the quickstart; HTTP manifest `manifests/slack-http.json` and its README section done)
 
 **DoD:** a post in an allowlisted channel gets a dry-run reply in its thread
 within 15 seconds. A post that is not a movement gets no reply. A post made
