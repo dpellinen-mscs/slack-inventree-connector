@@ -2065,6 +2065,38 @@ def test_an_edit_that_arrives_while_the_model_reads_the_post_withholds_it(
     assert worker._llm_read == {}
 
 
+class StampedEditMeanwhile(FakeLLM):
+    """While the model reads the post for the first time, its author makes a readable edit of it."""
+
+    def __init__(self, store: Store, *answers: Extraction | Exception) -> None:
+        super().__init__(*answers)
+        self.store = store
+
+    def extract(self, messages: Sequence[MessageInput]) -> Extraction:
+        if not self.calls:
+            enqueue(self.store, edit_of(ROOT, "1790000029.000100", GAVE, GAVE.replace("two", "three")))
+        return super().extract(messages)
+
+
+def test_a_readable_edit_that_arrives_while_the_model_reads_the_post_is_read_again(
+    store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    llm = StampedEditMeanwhile(store, read(), read(quantity=3))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    due(worker, clock)
+    worker.step()
+    worker.step()
+    # The timestamps are the same before and after the edit: only the text tells the two readings apart.
+    assert llm.calls == [[GAVE], [GAVE.replace("two", "three")]]
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.outcome is DryRunOutcome.REPLIED
+    assert quantities(record) == ["3"]
+    assert len(slack.posted) == 1
+    assert worker._llm_read == {}
+
+
 def test_a_finished_post_keeps_nothing_of_what_the_model_read(store: Store, slack: FakeSlack, clock: Clock) -> None:
     llm = FakeLLM(Extraction(MODEL, (), declined=True))
     worker = worker_with(llm, store, slack, clock)
