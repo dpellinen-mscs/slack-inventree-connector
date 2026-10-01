@@ -156,6 +156,10 @@ class NewQuestion:
     approver_only: bool
     buttons: Sequence[tuple[str, Mapping[str, Any]]]
     """One (button id, choice) per button, in order. A question answered by a thread reply has none."""
+    poster: str
+    """The Slack user id of the post's author, as the dry run read the post."""
+    expires_from: str
+    """The Slack time the plan's expiry counts from."""
 
 
 class QuestionStatus(StrEnum):
@@ -177,6 +181,19 @@ class ReviewItem:
     message_ts: str | None
     """The reply the question was asked in. None: Slack gave no usable timestamp, and no click fits it."""
     status: QuestionStatus
+    poster_id: str | None = None
+    """Who wrote the post when the question was asked. None for a question from before migration 0011."""
+    expires_from: str | None = None
+    """The Slack time the plan's expiry counts from. None for a question from before migration 0011."""
+
+
+class Answered(StrEnum):
+    ANSWERED = "answered"
+    NOT_OPEN = "already_answered"
+    """Answered, or gone stale, since it was checked."""
+    POST_CHANGED = "post_changed"
+    """The post changed after the dry run that asked the question, or a later dry run read it otherwise: the
+    question may no longer be about what the post says."""
 
 
 @dataclass(frozen=True)
@@ -217,7 +234,7 @@ def _json(value: Mapping[str, Any]) -> str:
 
 
 def _review_item(post: PostKey, row: Sequence[Any]) -> ReviewItem:
-    item_id, revision, question, approver_only, channel_id, message_ts, status = row
+    item_id, revision, question, approver_only, channel_id, message_ts, status, poster_id, expires_from = row
     return ReviewItem(
         int(item_id),
         post,
@@ -227,6 +244,8 @@ def _review_item(post: PostKey, row: Sequence[Any]) -> ReviewItem:
         channel_id,
         message_ts,
         QuestionStatus(status),
+        poster_id,
+        expires_from,
     )
 
 
@@ -725,8 +744,18 @@ class Store:
     ) -> None:
         item = self._db.execute(
             "INSERT INTO review_items (post_id, revision, question, approver_only, channel_id, message_ts, status,"
-            " created_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?)",
-            (post_id, revision, _json(question.question), int(question.approver_only), key.channel_id, reply_ts, now),
+            " created_at, poster_id, expires_from) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)",
+            (
+                post_id,
+                revision,
+                _json(question.question),
+                int(question.approver_only),
+                key.channel_id,
+                reply_ts,
+                now,
+                question.poster,
+                question.expires_from,
+            ),
         ).lastrowid
         self._db.executemany(
             "INSERT INTO interactions (id, review_item_id, position, choice) VALUES (?, ?, ?, ?)",
@@ -740,24 +769,73 @@ class Store:
         if post_id is None:
             raise KeyError("no such post")
         rows = self._db.execute(
-            "SELECT id, revision, question, approver_only, channel_id, message_ts, status FROM review_items"
-            " WHERE post_id = ? ORDER BY id",
+            "SELECT id, revision, question, approver_only, channel_id, message_ts, status, poster_id, expires_from"
+            " FROM review_items WHERE post_id = ? ORDER BY id",
             (post_id,),
         ).fetchall()
         return [_review_item(key, row) for row in rows]
+
+    def answer_question(self, owner: str, button: Button, user: str) -> Answered:
+        """Record `user`'s answer by `button`: its question is answered with the button's choice, once. The caller
+        checks who may answer, and the click's channel and message, first.
+
+        Refused, and nothing changes, when the question is no longer open, or when the post has moved on from the
+        dry run that asked it: a message joined it or one was edited or deleted since its newest dry run, or a
+        dry run after the one that asked read it otherwise (only `unchanged` revisions keep a question).
+        """
+        answer = _json({"button": button.position, **button.choice})
+        with self._transaction():
+            self._check_lock(owner)
+            row = self._db.execute(
+                "SELECT i.post_id, i.revision FROM review_items i JOIN interactions b ON b.review_item_id = i.id"
+                " WHERE i.id = ? AND b.id = ? AND i.status = 'open'",
+                (button.item.id, button.id),
+            ).fetchone()
+            if row is None:
+                return Answered.NOT_OPEN
+            post_id, revision = int(row[0]), int(row[1])
+            if self._moved_on(post_id, revision):
+                return Answered.POST_CHANGED
+            self._db.execute(
+                "UPDATE review_items SET status = 'answered', answer = ?, answered_by = ?, closed_at = ?"
+                " WHERE id = ? AND status = 'open'",
+                (answer, user, self._now(), button.item.id),
+            )
+            self._audit(Actor.HUMAN, "question_answered", post_id=post_id)
+            return Answered.ANSWERED
+
+    def _moved_on(self, post_id: int, revision: int) -> bool:
+        records = self._db.execute(
+            "SELECT 1, read_through, changes_through, outcome FROM dry_runs WHERE post_id = ?1 UNION ALL"
+            " SELECT revision, read_through, changes_through, outcome FROM dry_run_revisions WHERE post_id = ?1"
+            " ORDER BY 1",
+            (post_id,),
+        ).fetchall()
+        if not records or any(rev > revision and outcome != "unchanged" for rev, _, _, outcome in records):
+            return True
+        _, through, changes, _ = records[-1]
+        newest = self._db.execute("SELECT max(id) FROM post_messages WHERE post_id = ?", (post_id,)).fetchone()[0]
+        return bool(newest > through or self._changes_through(post_id) > changes)
+
+    def answer(self, item_id: int) -> tuple[Mapping[str, Any], str] | None:
+        """The answer of a question and who gave it, or None while it has none."""
+        row = self._db.execute(
+            "SELECT answer, answered_by FROM review_items WHERE id = ? AND status = 'answered'", (item_id,)
+        ).fetchone()
+        return None if row is None else (json.loads(row[0]), str(row[1]))
 
     def button(self, button_id: str) -> Button | None:
         """The stored button with this id, with its question, or None when there is none. A click carries only
         the id: the caller checks the channel, the message and the user against what is stored."""
         row = self._db.execute(
             "SELECT b.position, b.choice, i.id, i.revision, i.question, i.approver_only, i.channel_id, i.message_ts,"
-            " i.status, p.workspace_id, p.channel_id, p.ts FROM interactions b"
+            " i.status, i.poster_id, i.expires_from, p.workspace_id, p.channel_id, p.ts FROM interactions b"
             " JOIN review_items i ON i.id = b.review_item_id JOIN posts p ON p.id = i.post_id WHERE b.id = ?",
             (button_id,),
         ).fetchone()
         if row is None:
             return None
-        item = _review_item(PostKey(*row[9:12]), row[2:9])
+        item = _review_item(PostKey(*row[11:14]), row[2:11])
         return Button(button_id, item, int(row[0]), json.loads(row[1]))
 
     def _read_through(self, post_id: int, read: Sequence[str] | None) -> int:

@@ -1,0 +1,59 @@
+{
+  "description": "Someone who is neither the poster nor an approver clicks a question's button. Ingest accepts it: only the stored row knows the poster, so review refuses it.",
+  "kind": "interactive",
+  "transport": "http",
+  "headers": {},
+  "body": {
+    "type": "block_actions",
+    "api_app_id": "A0ACME001",
+    "token": "synthetic-verification-token",
+    "team": {
+      "id": "T0ACME001",
+      "domain": "acmefiber"
+    },
+    "user": {
+      "id": "U0MIKE0002",
+      "username": "u0mike0002",
+      "name": "u0mike0002",
+      "team_id": "T0ACME001"
+    },
+    "channel": {
+      "id": "C0ACME001",
+      "name": "inventory"
+    },
+    "container": {
+      "type": "message",
+      "message_ts": "1790000020.000200",
+      "channel_id": "C0ACME001",
+      "is_ephemeral": false
+    },
+    "message": {
+      "type": "message",
+      "user": "U0STOCKBOT",
+      "bot_id": "B0STOCKBOT",
+      "text": "Dry run: 1 movement, nothing changed.",
+      "ts": "1790000020.000200",
+      "thread_ts": "1790000000.000100"
+    },
+    "trigger_id": "1790000300.0001.synthetic",
+    "response_url": "https://hooks.slack.com/actions/T0ACME001/0000/synthetic",
+    "actions": [
+      {
+        "type": "button",
+        "block_id": "q1",
+        "action_id": "answer-1",
+        "value": "q4Lm8Tz2Rk7Vn3Wx9Pb6Yc",
+        "text": {
+          "type": "plain_text",
+          "text": "Disc 40 Lite"
+        },
+        "action_ts": "1790000300.000600"
+      }
+    ]
+  },
+  "expected": {
+    "action": "process",
+    "button": "q4Lm8Tz2Rk7Vn3Wx9Pb6Yc",
+    "user": "U0MIKE0002"
+  }
+}

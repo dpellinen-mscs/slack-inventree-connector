@@ -74,16 +74,19 @@ from stockthread.core.validate import validate
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.catchup import is_catch_up
 from stockthread.slack.ingest import (
+    Click,
     Decision,
     Deleted,
     Drop,
     Edited,
     NewMessage,
     Revised,
+    ingest_action,
     ingest_event,
     revised_message,
 )
 from stockthread.slack.replies import (
+    ANSWER_ACTION,
     MovementView,
     dry_run_reply,
     gate_reasons,
@@ -91,7 +94,18 @@ from stockthread.slack.replies import (
     retraction_notice,
     with_question,
 )
-from stockthread.store import DryRunOutcome, EventStatus, LockLost, NewQuestion, Store, WaitingPost, new_button_id
+from stockthread.store import (
+    Answered,
+    Button,
+    DryRunOutcome,
+    EventStatus,
+    LockLost,
+    NewQuestion,
+    QuestionStatus,
+    Store,
+    WaitingPost,
+    new_button_id,
+)
 
 log = logging.getLogger(__name__)
 
@@ -258,14 +272,14 @@ class Worker:
         return done, False
 
     def _handle_event(self, event_id: int, kind: str, body: str | None) -> tuple[EventStatus, str]:
-        if kind != "event":
-            return EventStatus.DROPPED, "clicks_not_handled_yet"
         if body is None:
             return EventStatus.FAILED, "body_expired"
         try:
             payload = json.loads(body)
         except ValueError:
             return EventStatus.FAILED, "body_not_json"
+        if kind == "interactive":
+            return self._handle_click(payload)
         # Noted by message key: the message itself may arrive after its edit. Read leniently, from the raw
         # event: the ingest checks drop some edits (a deleted root becomes a tombstone). The post is read again
         # when it is due: its first dry run reads the edit, and an answered post is due for a revision.
@@ -300,6 +314,53 @@ class Worker:
         except ValueError:
             return EventStatus.FAILED, "bad_message"  # a timestamp not in Slack's form, or no user
         return EventStatus.DONE, ""
+
+    def _handle_click(self, payload: object) -> tuple[EventStatus, str]:
+        """Record the answer a click on a question's button gives, after the ingest checks again and the checks
+        against the stored button: the same channel and message, a question still open and not expired, a post
+        that has not moved on from the dry run that asked it, and a user who may answer it (design section 4,
+        "Authorization"). Every refusal is finished as dropped, with its reason as the outcome."""
+        click = ingest_action(payload, self.settings.slack)
+        if isinstance(click, Drop):
+            return EventStatus.DROPPED, click.reason.value
+        if not isinstance(click, Click):
+            return EventStatus.DROPPED, "not_a_click"
+        if click.action_id != ANSWER_ACTION:
+            return EventStatus.DROPPED, "action_not_handled_yet"
+        button = self.store.button(click.value)
+        if button is None:
+            return EventStatus.DROPPED, "unknown_button"  # never stored, or the reply was posted again
+        refused = self._refuse_answer(click, button)
+        if refused:
+            return EventStatus.DROPPED, refused
+        answered = self.store.answer_question(self.owner, button, click.user)
+        if answered is not Answered.ANSWERED:
+            return EventStatus.DROPPED, answered.value
+        log.info("post %s: question answered", button.item.post.ts)
+        return EventStatus.DONE, answered.value
+
+    def _refuse_answer(self, click: Click, button: Button) -> str:
+        """Why the click cannot answer, or "" when it can."""
+        item = button.item
+        if (
+            item.post.workspace_id != self.settings.slack.workspace_id
+            or item.channel_id != click.channel
+            or item.message_ts is None
+            or item.message_ts != click.message_ts
+        ):
+            return "other_message"
+        if item.status is QuestionStatus.STALE:
+            return "stale"
+        if item.status is QuestionStatus.ANSWERED:
+            return "already_answered"
+        # From the same time as the revisions of the post (`_reply`): its plan expires as one.
+        if self._now() - seconds(item.expires_from or item.post.ts) > self.settings.slack.plan_expiry_hours * 3600:
+            return "expired"
+        if click.user in self.settings.slack.approvers:
+            return ""
+        if item.approver_only or item.poster_id is None or click.user != item.poster_id:
+            return "not_allowed"
+        return ""
 
     def reply_due(self) -> int:
         now = self._now()
@@ -447,6 +508,8 @@ class Worker:
                     question_json(question),
                     question.approver_only,
                     [(button_id, choice_json(choice)) for button_id, choice in zip(ids, buttons, strict=True)],
+                    poster=poster,
+                    expires_from=post.key.ts if post.revision > 1 else post.newest_ts,  # as `since` above
                 )
         except Exception as error:
             _log_failure("question", key.ts, error)
