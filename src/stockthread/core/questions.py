@@ -12,10 +12,10 @@ Pure: the question is data. Wording and buttons belong to the Slack adapter.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from stockthread.core.model import CandidateMovement, Match, MatchStatus, MovementType, ReasonCode, ReviewReason
 from stockthread.core.validate import TYPE_UNCLEAR
@@ -246,3 +246,70 @@ def choices(question: Question) -> tuple[Choice, ...]:
     if question.ask in (Ask.CHOOSE_PART, Ask.CHOOSE_LOCATION):
         return (*(Choice("record", record=pk) for pk in question.candidates), Choice("none"))
     return ()
+
+
+def question_json(question: Question) -> dict[str, Any]:
+    """The question as stored with its reply: codes, indexes and primary keys, never words of the post."""
+    return {
+        "ask": question.ask.value,
+        "reason": question.reason.value,
+        "movement": question.movement,
+        "line": question.line,
+        "side": question.side,
+        "candidates": list(question.candidates),
+        "approver_only": question.approver_only,
+    }
+
+
+def question_from_json(stored: Mapping[str, Any]) -> Question:
+    """The stored question. Raises ValueError for anything `question_json` does not make."""
+    try:
+        side, line, approver_only = stored["side"], stored["line"], stored["approver_only"]
+        ask, reason, movement, candidates = stored["ask"], stored["reason"], stored["movement"], stored["candidates"]
+    except KeyError as error:
+        raise ValueError("not a stored question") from error
+    if side not in (None, "source", "destination"):
+        raise ValueError("not a side")
+    if not isinstance(approver_only, bool) or not isinstance(candidates, list):
+        raise ValueError("not a stored question")
+    return Question(
+        Ask(ask),
+        ReasonCode(reason),
+        _index(movement),
+        None if line is None else _index(line),
+        side,
+        tuple(_index(pk) for pk in candidates),
+        approver_only,
+    )
+
+
+def choice_json(choice: Choice) -> dict[str, Any]:
+    """What one button stands for, as stored with its row."""
+    return {
+        "kind": choice.kind,
+        "record": choice.record,
+        "movement_type": None if choice.movement_type is None else choice.movement_type.value,
+    }
+
+
+def choice_from_json(stored: Mapping[str, Any]) -> Choice:
+    """The stored choice. Raises ValueError for anything `choice_json` does not make."""
+    try:
+        kind, record, kind_of = stored["kind"], stored["record"], stored["movement_type"]
+    except KeyError as error:
+        raise ValueError("not a choice") from error
+    if kind not in ("yes", "no", "record", "none", "type"):
+        raise ValueError("not a choice")
+    record = None if record is None else _index(record)
+    kind_of = None if kind_of is None else MovementType(kind_of)
+    if (record is not None) != (kind == "record") or (kind_of is not None) != (kind == "type"):
+        raise ValueError("a choice carries a record or a type only when it is one")
+    if kind_of is MovementType.UNCLEAR:
+        raise ValueError("not a choice: no button offers an unclear type")
+    return Choice(kind, record, kind_of)
+
+
+def _index(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError("not an index or a primary key")
+    return value

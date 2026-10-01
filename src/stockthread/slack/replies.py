@@ -23,6 +23,8 @@ MAX_LABEL = 75
 """Slack allows 75 characters in a button label."""
 MAX_MOVEMENTS = 20
 """How many movements a reply shows. Slack refuses more than 50 blocks; each movement takes 2."""
+MAX_BLOCKS = 50
+"""Slack's limit of blocks in one message. A reply takes at most 42, and its question 3 more."""
 
 TYPE_LABELS = {
     MovementType.TAKE_TO_VEHICLE: "Take to a vehicle",
@@ -321,6 +323,16 @@ def question_message(
             }
         )
     return {"text": plain, "blocks": blocks}
+
+
+def with_question(reply: Mapping[str, Any], question: Mapping[str, Any]) -> dict[str, Any]:
+    """The dry-run reply with its question below it, so the reply and its buttons are one message: the buttons are
+    stored with the reply's record, and no question is posted without the reply it belongs to. The notification
+    text stays the reply's own."""
+    blocks = [*reply["blocks"], {"type": "divider"}, *question["blocks"]]
+    if len(blocks) > MAX_BLOCKS:
+        raise ValueError("a reply with its question has more blocks than Slack allows")
+    return {"text": reply["text"], "blocks": blocks}
 
 
 def _labels(buttons: Sequence[Choice], names: Mapping[int, str], *, cut_left: bool) -> list[str]:

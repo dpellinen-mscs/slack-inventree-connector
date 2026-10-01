@@ -69,6 +69,7 @@ from stockthread.core.model import (
     ReasonSource,
     ReviewReason,
 )
+from stockthread.core.questions import choice_json, choices, pick_question, question_json
 from stockthread.core.validate import validate
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.catchup import is_catch_up
@@ -82,8 +83,15 @@ from stockthread.slack.ingest import (
     ingest_event,
     revised_message,
 )
-from stockthread.slack.replies import MovementView, dry_run_reply, gate_reasons, retraction_notice
-from stockthread.store import DryRunOutcome, EventStatus, LockLost, Store, WaitingPost
+from stockthread.slack.replies import (
+    MovementView,
+    dry_run_reply,
+    gate_reasons,
+    question_message,
+    retraction_notice,
+    with_question,
+)
+from stockthread.store import DryRunOutcome, EventStatus, LockLost, NewQuestion, Store, WaitingPost, new_button_id
 
 log = logging.getLogger(__name__)
 
@@ -184,6 +192,8 @@ class _Sent:
     """REPLIED, or RETRACTED for a notice that the reply above no longer stands."""
     checks: int = 0
     next_check: Decimal = Decimal(0)
+    question: NewQuestion | None = None
+    """The question the reply asks, stored with its buttons once the reply is posted."""
 
 
 @dataclass
@@ -418,15 +428,28 @@ class Worker:
         try:
             views = self._views(extraction, messages, poster, catalog, late)
             decided = record(views, late)
-            body = dry_run_reply(
-                views,
-                {part.pk: part.name for part in catalog.parts},
-                {location.pk: location.path for location in catalog.locations},
-                revised=standing is not None,
-            )
+            parts = {part.pk: part.name for part in catalog.parts}
+            locations = {location.pk: location.path for location in catalog.locations}
+            body = dry_run_reply(views, parts, locations, revised=standing is not None)
         except Exception as error:
             self._broken(post, now, error, extraction.extractor, read=seen, changes=changes)
             return True
+        # The one question the post needs goes in the reply, with buttons whose ids are stored with it. A
+        # question that cannot be put is left out: the reply still says what needs a human.
+        asked = None
+        try:
+            question = pick_question(views)
+            if question is not None:
+                buttons = choices(question)
+                ids = [new_button_id() for _ in buttons]
+                body = with_question(body, question_message(question, views, parts, locations, ids))
+                asked = NewQuestion(
+                    question_json(question),
+                    question.approver_only,
+                    [(button_id, choice_json(choice)) for button_id, choice in zip(ids, buttons, strict=True)],
+                )
+        except Exception as error:
+            _log_failure("question", key.ts, error)
         if standing is not None and _same_reading(standing, decided):
             log.info("post %s: revision %d reads as the reply that stands", key.ts, post.revision)
             self._finish(key, DryRunOutcome.UNCHANGED, extraction.extractor, decided, post.revision, seen, changes)
@@ -434,7 +457,7 @@ class Worker:
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
         # before the outcome is recorded posts the reply again at restart; a duplicate beats a silent drop.
         self.store.close_siblings(self.owner, key)
-        self._post(key, now, _Sent(extraction.extractor, decided, body, post.revision, seen, changes))
+        self._post(key, now, _Sent(extraction.extractor, decided, body, post.revision, seen, changes, question=asked))
         return True
 
     def _standing(self, post: WaitingPost) -> Mapping[str, Any] | None:
@@ -575,6 +598,7 @@ class Worker:
             revision=sent.revision,
             read=sent.read,
             changes=sent.changes,
+            question=sent.question,
         )
         if sent.outcome is DryRunOutcome.RETRACTED:
             log.info("post %s: revision %d notice posted", key.ts, sent.revision)
