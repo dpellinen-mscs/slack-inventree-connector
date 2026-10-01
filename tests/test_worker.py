@@ -2767,13 +2767,19 @@ def test_with_no_approvers_the_poster_still_answers_and_nobody_answers_for_appro
 
 
 @pytest.mark.parametrize(
-    ("name", "outcome"), [("block_actions_answer", "answered"), ("block_actions_answer_other_user", "not_allowed")]
+    ("name", "outcome"),
+    [
+        ("block_actions_answer", "answered"),
+        ("block_actions_answer_other_user", "not_allowed"),
+        ("block_actions_answer_other_message", "other_message"),
+        ("block_actions_answer_other_channel", "channel_not_allowed"),
+    ],
 )
 def test_recorded_answer_clicks_are_checked_against_the_stored_button(
     store: Store, clock: Clock, path: Path, name: str, outcome: str
 ) -> None:
     fixture = json.loads((Path(__file__).parent / "fixtures" / "slack" / "events" / f"{name}.json").read_text())
-    button = fixture["expected"]["button"]
+    button = fixture["body"]["actions"][0]["value"]
     store.place_message(OWNER, PostKey(WORKSPACE, CHANNEL, ROOT), user_id=SAM, thread_ts=None, window_seconds=5)
     buttons: list[tuple[str, dict[str, Any]]] = [
         ("p" * 22, {"kind": "record", "record": 1}),
