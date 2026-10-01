@@ -250,13 +250,13 @@ needs.
     the rest of the channel is stored and the mark stays, so the next
     sweep reads that thread again.
   - **Edits and deletions.** A message found already edited is read as it
-    is now. If a message is in a post that still waits for its dry run and
-    the history shows another edit than the stored event (or a tombstone),
-    the edit is stored as an event and the worker withholds the post. The
-    worker does the same when a history copy that shows an edit arrives
-    for a message already placed from its original event. A deletion made
-    during downtime is not seen: the message is just absent from the
-    history. Plan revisions (M2) re-read a post before a write.
+    is now. If the history shows another edit than the stored event (or a
+    tombstone), the edit is stored as an event and noted like one Slack
+    delivered. The worker does the same when a history copy that shows an
+    edit arrives for a message already placed from its original event. A
+    post read with an edit found this way carries `late_ingest`. A
+    deletion made during downtime is not seen: the message is just absent
+    from the history. Plan revisions (M2) re-read a post before a write.
   - **Known limits.** A message that joins a post after its dry run (a
     thread root found by catch-up after its reply was answered alone, or
     a reply posted within seconds of the point a sweep ends at, when its
@@ -328,20 +328,32 @@ needs.
     its post it was decided with (`changes_through`, a
     `revised_messages.id`, 0 for none; migration 0008), taken before the
     post is read. A change noted later makes the post due at once: an edit
-    is no sibling, so there is no window to wait for. A post that holds an
-    edited or deleted message is never read from its original text, and
-    the edited text is not read yet, so the revision is withheld as
-    `changed`: a standing reply is taken back with a notice that a
-    message was edited or deleted, and without one nothing is posted.
-    Each message is noted once, so a second edit of it starts nothing
-    more. An edit that arrives while a reply's Slack call is still running
-    does not change what that reply recorded; it starts the next revision,
-    which takes the reply back. Catch-up notes an edit it finds in the
-    history for any post, not only one waiting for its first dry run.
-    Posts answered before migration 0008 take every change noted until
-    then, so an upgrade never answers an old edit. Known limit: a message
-    is noted once, so one edited before the upgrade starts no revision
-    when it is edited again after it.
+    is no sibling, so there is no window to wait for. Every edit and
+    deletion event is noted (migration 0009; before it, only the first of
+    each message), so each later edit starts a revision too.
+  - **Reading edits.** A post is read as its messages are now, as of the
+    newest change it was decided with: each message as the edit with the
+    newest edit timestamp shows it (Slack does not keep event order, so an
+    older edit delivered late changes nothing), and a deleted message left
+    out (it is still counted as read, so it starts nothing more). This
+    holds for the first dry run as well as for revisions: an edit before
+    the dry run is read in it. A post is never read from a message's
+    original text once a change of it is noted. When a change cannot be
+    read (a tombstone, an edit without a stamp or by another user, two
+    edits with one stamp that disagree, a body retention expired, a note
+    from before migration 0009, which may not be the newest edit, or an
+    edit of a thread root the post does not hold), or every message was
+    deleted, the post is withheld as `changed`: a standing reply is taken
+    back with a notice, and without one nothing is posted. A deleted
+    message is never read again, whatever edit comes after it. An edit
+    that reads as the same movement is `unchanged` and posts nothing. An
+    edit that arrives while a reply's Slack call is still running does
+    not change what that reply recorded; it starts the next revision.
+    Catch-up notes an edit it finds in the history for any post, not
+    only one waiting for its first dry run, unless the stored event or a
+    noted edit already shows that stamp. Posts answered before
+    migration 0008 take every change noted until then, so an upgrade
+    never answers an old edit.
     Known limits: posts waiting for their first dry run are answered
     before revisions, so a backlog delays revisions. A first dry run that
     ended `gave_up` may still have reached Slack (the call can fail after
@@ -367,17 +379,17 @@ needs.
     message carries `late_ingest`, and so does a post with a message that
     catch-up found in the channel history.
   - `silent`: declined, or not a movement. No reply by design.
-  - `withheld`: a message cannot be read again (its body expired), was
-    edited or deleted before the dry run, or the post is older than
-    `plan_expiry_hours`. A post is never read with a message left out.
-    Every edit and deletion is noted by message key (`revised_messages`),
-    so one that Slack delivers before the message it changes still
-    withholds the post when that message arrives. The note is read from
-    the raw event, so it also covers a root that never arrives and the
-    edits the strict checks cannot read in full (a deleted thread root
-    becomes a tombstone; an edit without a stamp or a user). The listener
-    stores those too, as `Revised`, after the same workspace, app, channel
-    and bot checks.
+  - `withheld`: a message cannot be read again (its body expired), has a
+    change that cannot be read or every message was deleted (`changed`,
+    see "Reading edits"), or the post is older than `plan_expiry_hours`.
+    A post is never read with a message left out. Every edit and deletion
+    is noted by message key (`revised_messages`), so one that Slack
+    delivers before the message it changes still counts when that message
+    arrives. The note is read from the raw event, so it also covers a root
+    that never arrives and the edits the strict checks cannot read in full
+    (a deleted thread root becomes a tombstone; an edit without a stamp or
+    a user). The listener stores those too, as `Revised`, after the same
+    workspace, app, channel and bot checks.
     A link preview or a new thread reply changes neither text nor files
     and is not an edit.
   - `failed`: the pure pipeline raised on this post. It is logged by error
@@ -389,8 +401,8 @@ needs.
 
   A reply whose Slack call has not returned within its deadline is not a
   failure yet: the call may still send. Its post keeps the decision that
-  was handed to Slack and stays open (not decided again, not given up on,
-  not withheld by an edit) until the call has ended, and nothing else is
+  was handed to Slack and stays open (not decided again, not given up on)
+  until the call has ended, and nothing else is
   posted meanwhile. The record is then what the reply shows.
 
   The outcome is stored with what was decided and why (`dry_runs`, in the
@@ -401,9 +413,9 @@ needs.
   so it is never logged, and retention can expire it.
 
   A crash between posting and recording posts the reply again: a
-  duplicate dry run beats a silent drop. Until M2, edits and deletions
-  after the dry run, clicks, and thread replies after the dry run are
-  recorded and not acted on.
+  duplicate dry run beats a silent drop. Clicks are recorded and not
+  acted on until M2 review; edits, deletions and thread replies after
+  the dry run make revisions (above).
 - **Replies.** The dry-run reply (`slack/replies.py`) lists each movement
   with the matched part and location names next to the words as written,
   then every review reason in plain words. Text from the post and from the

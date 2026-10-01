@@ -320,47 +320,149 @@ def test_a_thread_root_found_after_its_reply_was_answered_alone_makes_a_revision
     assert revisions(path) == [(2, "retracted", True)]
 
 
-@pytest.mark.parametrize("kind", ["edit", "deletion"])
-def test_an_edit_or_deletion_alone_after_the_dry_run_takes_the_reply_back(
-    kind: str, worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+def quantities(record: Any) -> list[str]:
+    """The quantity of every line item a dry-run record decided."""
+    assert record is not None
+    assert record.result is not None
+    return [item["quantity"] for movement in record.result["movements"] for item in movement["items"]]
+
+
+def test_an_edit_alone_after_the_dry_run_is_read_and_posts_a_revised_dry_run(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:
+    key = PostKey(WORKSPACE, CHANNEL, ROOT)
     enqueue(store, message(ROOT, TAKE))
     due(worker, clock)
-    after = "took 3 Disc 40 from main stock to truck 1"
-    change = (
-        edit_of(ROOT, "1790000040.000100", TAKE, after) if kind == "edit" else deletion_of(ROOT, "1790000040.000100")
-    )
-    enqueue(store, change)
+    assert quantities(store.dry_run(key)) == ["2"]
+    three = "took 3 Disc 40 from main stock to truck 1"
+    enqueue(store, edit_of(ROOT, "1790000040.000100", TAKE, three))
     worker.step()  # at once: the post's window has long passed, and an edit is not a sibling that may follow
     assert len(slack.posted) == 2
     assert slack.posted[1]["thread_ts"] == ROOT
-    assert "edited or deleted" in json.dumps(slack.posted[1]["blocks"])
+    assert slack.posted[1]["text"] == "Revised dry run: 1 movement, nothing changed."
+    record = store.dry_run(key)
+    assert record is not None
+    assert (record.revision, record.outcome) == (2, DryRunOutcome.REPLIED)
+    assert quantities(record) == ["3"]  # the edited text, not the original
+    assert statuses(path) == [("done", None), ("done", "revision_noted")]
+
+    # A second edit of the same message is noted and read too.
+    enqueue(store, edit_of(ROOT, "1790000041.000100", three, "took 4 Disc 40 from main stock to truck 1"))
+    worker.step()
+    assert len(slack.posted) == 3
+    assert quantities(store.dry_run(key)) == ["4"]
+
+    # Slack does not keep event order: an edit from before the newest one, delivered after it, is noted (it
+    # makes a revision) and the post still reads as its newest edit shows it.
+    stale = edit_of(ROOT, "1790000042.000100", TAKE, three)
+    stale["event"]["message"]["edited"]["ts"] = "1790000040.000100"
+    enqueue(store, stale)
+    worker.step()
+    assert len(slack.posted) == 3
+    assert revisions(path) == [(2, "replied", True), (3, "replied", True), (4, "unchanged", False)]
+    assert quantities(store.dry_run(key)) == ["4"]
+
+
+def test_a_stored_edit_stamp_not_in_slacks_form_withholds_rather_than_stalls(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    odd = message(ROOT, TAKE)
+    odd["event"]["edited"] = {"user": SAM, "ts": "yesterday"}
+    enqueue(store, odd)
+    enqueue(store, edit_of(ROOT, "1790000002.000100", TAKE, "took 3 Disc 40 from main stock to truck 1"))
+    enqueue(store, message("1790000003.000100", TAKE, user=LUIS))  # another post, behind it
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert record is not None
+    assert record.result == {"withheld": "changed"}
+    assert len(slack.posted) == 1  # the other post is answered
+
+
+def test_only_the_edit_that_is_read_can_make_a_post_late(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    from_history = edit_of(ROOT, "1790000001.000100", TAKE, "took 3 Disc 40 from main stock to truck 1")
+    from_history["event_id"] = f"history:{CHANNEL}:{ROOT}:changed:1790000001.000100"
+    enqueue(store, from_history)
+    enqueue(store, edit_of(ROOT, "1790000002.000100", TAKE, "took 4 Disc 40 from main stock to truck 1"))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert quantities(record) == ["4"]
+    assert record is not None
+    assert record.result is not None
+    assert record.result["late"] is False  # the history's edit was superseded by one Slack delivered
+
+
+def test_an_edit_that_reads_the_same_posts_nothing(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    enqueue(store, edit_of(ROOT, "1790000040.000100", TAKE, "took 2 Disc 40 from main stock to truck 1 "))
+    worker.step()
+    assert len(slack.posted) == 1  # a typo fixed, a space added: the same movement
+    assert revisions(path) == [(2, "unchanged", False)]
+
+
+def test_a_deletion_alone_after_the_dry_run_takes_the_reply_back(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    enqueue(store, deletion_of(ROOT, "1790000040.000100"))
+    worker.step()
+    assert len(slack.posted) == 2
+    assert slack.posted[1]["thread_ts"] == ROOT
+    assert "was deleted" in json.dumps(slack.posted[1]["blocks"])
     record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
     assert record is not None
     assert (record.revision, record.outcome) == (2, DryRunOutcome.RETRACTED)
     assert record.result == {"withheld": "changed", "retracted": "changed", "instead_of": "withheld"}
     assert statuses(path) == [("done", None), ("done", "revision_noted")]
 
-    # Nothing stands any more. A second edit is not noted again, and a reply after it is read as changed.
-    enqueue(store, edit_of(ROOT, "1790000041.000100", after, "took 4 Disc 40 from main stock to truck 1"))
+    # Nothing stands any more, and a deleted message is never read again, whatever comes after it.
+    enqueue(store, edit_of(ROOT, "1790000041.000100", TAKE, "took 4 Disc 40 from main stock to truck 1"))
     worker.step()
-    enqueue(store, message("1790000042.000100", "fixed the count", thread_ts=ROOT))
-    due(worker, clock, 1790000070)
     assert len(slack.posted) == 2
     assert revisions(path) == [(2, "retracted", True), (3, "withheld", False)]
 
 
-def test_an_edit_of_a_post_without_a_standing_reply_is_recorded_and_says_nothing(
+def test_a_deleted_thread_reply_leaves_the_rest_of_the_post_to_read(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    reply = "1790000040.000100"
+    enqueue(store, message(reply, "on my way", thread_ts=ROOT))
+    due(worker, clock, 1790000070)
+    assert revisions(path) == [(2, "retracted", True)]  # the rules decline a thread of two messages
+    enqueue(store, deletion_of(reply, "1790000080.000100"))
+    worker.step()
+    # Without the deleted reply the post is the root alone again, and nothing stood above to compare with.
+    assert revisions(path) == [(2, "retracted", True), (3, "replied", True)]
+    assert slack.posted[2]["text"] == "Dry run: 1 movement, nothing changed."
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert record is not None
+    assert record.result is not None
+    assert record.result["messages"] == [ROOT, reply]  # read through the reply, which reads as deleted
+
+
+def test_an_edit_of_a_post_without_a_standing_reply_reads_the_edited_text(
     worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:
     enqueue(store, message(ROOT, "lunch anyone"))
     due(worker, clock)
     enqueue(store, edit_of(ROOT, "1790000040.000100", "lunch anyone", TAKE))
     worker.step()
-    assert slack.posted == []  # never read from the edited text yet: the post is withheld as changed
-    assert revisions(path) == [(2, "withheld", False)]
+    assert [reply["text"] for reply in slack.posted] == ["Dry run: 1 movement, nothing changed."]
+    assert revisions(path) == [(2, "replied", True)]
     worker.step()
-    assert revisions(path) == [(2, "withheld", False)]  # once
+    assert revisions(path) == [(2, "replied", True)]  # once
 
 
 def test_an_edit_of_a_thread_reply_after_its_revision_starts_the_next_one(
@@ -374,7 +476,8 @@ def test_an_edit_of_a_thread_reply_after_its_revision_starts_the_next_one(
     assert revisions(path) == [(2, "retracted", True)]
     enqueue(store, edit_of(reply, "1790000080.000100", "on my way", "took 5 Disc 40 from main stock to truck 1"))
     worker.step()
-    assert revisions(path) == [(2, "retracted", True), (3, "withheld", False)]  # nothing stands to take back
+    # Read again with the edited reply: still a thread of two the rules decline, and nothing stands.
+    assert revisions(path) == [(2, "retracted", True), (3, "silent", False)]
     assert len(slack.posted) == 2
 
 
@@ -419,10 +522,11 @@ def test_an_edit_that_arrives_while_the_reply_is_on_its_way_makes_the_next_revis
     assert len(slack.posted) == 1
     history = store.dry_run_history(PostKey(WORKSPACE, CHANNEL, ROOT))
     assert [(record.revision, record.outcome) for record in history] == [(1, DryRunOutcome.REPLIED)]
-    worker.step()  # the reply it sent was decided before the edit: it no longer stands
+    worker.step()  # the reply it sent was decided before the edit: the edited text is read now
     assert len(slack.posted) == 2
-    assert "edited or deleted" in json.dumps(slack.posted[1]["blocks"])
-    assert revisions(path) == [(2, "retracted", True)]
+    assert slack.posted[1]["text"] == "Revised dry run: 1 movement, nothing changed."
+    assert revisions(path) == [(2, "replied", True)]
+    assert quantities(store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))) == ["3"]
 
 
 def test_a_message_that_joins_an_expired_post_starts_no_revision(
@@ -734,6 +838,46 @@ def test_posts_answered_before_changes_were_tracked_wait_only_for_new_changes(
     upgraded.close()
 
 
+def test_an_upgrade_keeps_every_noted_change_and_notes_a_second_edit_of_a_message(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = store_db._migrations()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real[:8])
+    old = Store.open(path)
+    old.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
+    key = PostKey(WORKSPACE, CHANNEL, ROOT)
+    old.place_message(OWNER, key, user_id=SAM, thread_ts=None, window_seconds=5)
+    old.note_revision(OWNER, PostKey(WORKSPACE, CHANNEL, "1790000099.000100"))  # a message of no post here
+    enqueue(old, edit_of(ROOT, "1790000030.000100", TAKE, "took 3 Disc 40 from main stock to truck 1"))
+    old.note_revision(OWNER, key, 1)  # its first edit; a second one would not have been noted then
+    old.finish_dry_run(OWNER, key, DryRunOutcome.WITHHELD, result={"withheld": "changed"})
+    old.close()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real)
+    upgraded = Store.open(path)
+    upgraded.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
+    with sqlite3.connect(path) as raw:
+        assert raw.execute("SELECT id, ts FROM revised_messages ORDER BY id").fetchall() == [
+            (1, "1790000099.000100"),
+            (2, ROOT),
+        ]
+        assert raw.execute("SELECT changes_through FROM dry_runs").fetchall() == [(2,)]
+        with pytest.raises(sqlite3.IntegrityError, match="knows which changes"):  # the triggers were made again
+            raw.execute(
+                "INSERT INTO dry_runs (post_id, outcome, read_through, changes_through, created_at)"
+                " VALUES (2, 'silent', 1, 99, 'now')"
+            )
+    assert upgraded.posts_waiting_for_dry_run() == []
+    enqueue(upgraded, edit_of(ROOT, "1790000040.000100", TAKE, "took 4 Disc 40 from main stock to truck 1"))
+    upgraded.note_revision(OWNER, key, 2)  # the next edit of the message: noted, after every earlier one
+    assert [(post.key, post.revision) for post in upgraded.posts_waiting_for_dry_run()] == [(key, 2)]
+    assert upgraded.post_changes_through(key) == 3
+    # A note from before the upgrade may not be the newest edit: it is never read, so the post is withheld.
+    bodies = upgraded.post_change_bodies(key, 3)[ROOT]
+    assert bodies[0] is None
+    assert bodies[1] is not None
+    upgraded.close()
+
+
 def test_posts_answered_before_revisions_existed_wait_only_for_new_messages(
     path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -865,7 +1009,7 @@ def test_the_clock_must_be_aware(store: Store, slack: FakeSlack) -> None:
         worker.reply_due()
 
 
-def test_an_edit_before_the_dry_run_withholds_the_post(
+def test_an_edit_before_the_dry_run_is_read_in_it(
     worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:
     enqueue(store, message("1790000000.000100", "took 2 Disc 40 from main stock to truck 1"))
@@ -881,9 +1025,10 @@ def test_an_edit_before_the_dry_run_withholds_the_post(
     worker.step()
     clock.at("1790000030.000000")
     worker.step()
-    assert statuses(path) == [("done", None), ("done", "withheld_changed_post")]
-    assert audit(path) == ["dry_run_withheld"]
-    assert slack.posted == []
+    assert statuses(path) == [("done", None), ("done", "revision_noted")]
+    assert audit(path) == ["dry_run_replied"]
+    assert len(slack.posted) == 1
+    assert quantities(store.dry_run(PostKey(WORKSPACE, CHANNEL, "1790000000.000100"))) == ["3"]
 
 
 def test_a_step_answers_a_bounded_number_of_posts_and_stops_when_asked(
@@ -924,7 +1069,7 @@ def deletion_of(ts: str, at: str) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize("kind", ["edit", "deletion"])
-def test_an_edit_or_deletion_that_arrives_before_its_message_still_withholds_the_post(
+def test_an_edit_or_deletion_that_arrives_before_its_message_still_counts(
     kind: str, worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:
     after = "took 3 Disc 40 from main stock to truck 1"
@@ -939,17 +1084,23 @@ def test_an_edit_or_deletion_that_arrives_before_its_message_still_withholds_the
     worker.step()
     clock.at("1790000030.000000")
     worker.step()
-    assert slack.posted == []  # never a dry run for 2 when the post now says 3, or is gone
-    assert audit(path) == ["dry_run_withheld"]
     record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
     assert record is not None
-    assert (record.outcome, record.result) == (DryRunOutcome.WITHHELD, {"withheld": "changed"})
+    if kind == "edit":  # never a dry run for 2 when the post now says 3
+        assert audit(path) == ["dry_run_replied"]
+        assert quantities(record) == ["3"]
+    else:  # or is gone
+        assert slack.posted == []
+        assert audit(path) == ["dry_run_withheld"]
+        assert (record.outcome, record.result) == (DryRunOutcome.WITHHELD, {"withheld": "changed"})
 
 
-def test_an_early_edit_of_a_sibling_withholds_the_whole_post(
+def test_an_early_edit_of_a_sibling_that_cannot_be_read_withholds_the_whole_post(
     worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:
-    enqueue(store, edit_of("1790000001.000100", "1790000002.000100", "and 1 ONT 100", "and 4 ONT 100"))
+    unstamped = edit_of("1790000001.000100", "1790000002.000100", "and 1 ONT 100", "and 4 ONT 100")
+    del unstamped["event"]["message"]["edited"]  # the strict checks cannot read it: kept as Revised
+    enqueue(store, unstamped)
     enqueue(store, message(ROOT, TAKE))
     enqueue(store, message("1790000001.000100", "and 1 ONT 100"))
     worker.step()
@@ -957,6 +1108,23 @@ def test_an_early_edit_of_a_sibling_withholds_the_whole_post(
     worker.step()
     assert slack.posted == []
     assert audit(path) == ["dry_run_withheld"]
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert record is not None
+    assert record.result == {"withheld": "changed"}
+
+
+def test_a_deleted_sibling_is_left_out_of_the_reading(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    enqueue(store, message(ROOT, TAKE))
+    enqueue(store, message("1790000001.000100", "and 1 ONT 100"))
+    enqueue(store, deletion_of("1790000001.000100", "1790000002.000100"))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    # The rules decline a post of two messages; with the sibling deleted, the root alone is read.
+    assert audit(path) == ["dry_run_replied"]
+    assert quantities(store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))) == ["2"]
 
 
 def test_a_revision_is_noted_once_and_only_by_the_lock_holder(store: Store, path: Path) -> None:
@@ -969,6 +1137,25 @@ def test_a_revision_is_noted_once_and_only_by_the_lock_holder(store: Store, path
             raw.execute("DELETE FROM revised_messages")
     with pytest.raises(LockLost):
         store.note_revision("someone-else", key)
+
+
+def test_every_change_event_is_noted_once(store: Store, path: Path) -> None:
+    key = PostKey(WORKSPACE, CHANNEL, ROOT)
+    enqueue(store, edit_of(ROOT, "1790000001.000100", TAKE, "took 3 Disc 40 from main stock to truck 1"))
+    enqueue(store, edit_of(ROOT, "1790000002.000100", TAKE, "took 4 Disc 40 from main stock to truck 1"))
+    store.note_revision(OWNER, key, 1)
+    store.note_revision(OWNER, key, 2)
+    store.note_revision(OWNER, key, 1)  # a requeued event
+    with sqlite3.connect(path) as raw:
+        assert raw.execute("SELECT id, slack_event_id FROM revised_messages").fetchall() == [(1, 1), (2, 2)]
+        with pytest.raises(sqlite3.IntegrityError, match="once per event"):
+            raw.execute(
+                "INSERT INTO revised_messages (workspace_id, channel_id, ts, slack_event_id, noted_at)"
+                " VALUES (?, ?, ?, 2, 'now')",
+                (WORKSPACE, CHANNEL, "1790000009.000100"),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="never"):
+            raw.execute("UPDATE revised_messages SET ts = '1790000009.000100'")
 
 
 def test_a_reply_keeps_what_was_decided_and_why(
@@ -1875,6 +2062,38 @@ def test_an_edit_that_arrives_while_the_model_reads_the_post_withholds_it(
     assert record is not None
     assert record.result is not None
     assert (record.outcome, record.result["withheld"]) == (DryRunOutcome.WITHHELD, "changed")
+    assert worker._llm_read == {}
+
+
+class StampedEditMeanwhile(FakeLLM):
+    """While the model reads the post for the first time, its author makes a readable edit of it."""
+
+    def __init__(self, store: Store, *answers: Extraction | Exception) -> None:
+        super().__init__(*answers)
+        self.store = store
+
+    def extract(self, messages: Sequence[MessageInput]) -> Extraction:
+        if not self.calls:
+            enqueue(self.store, edit_of(ROOT, "1790000029.000100", GAVE, GAVE.replace("two", "three")))
+        return super().extract(messages)
+
+
+def test_a_readable_edit_that_arrives_while_the_model_reads_the_post_is_read_again(
+    store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    llm = StampedEditMeanwhile(store, read(), read(quantity=3))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, GAVE))
+    due(worker, clock)
+    worker.step()
+    worker.step()
+    # The timestamps are the same before and after the edit: only the text tells the two readings apart.
+    assert llm.calls == [[GAVE], [GAVE.replace("two", "three")]]
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.outcome is DryRunOutcome.REPLIED
+    assert quantities(record) == ["3"]
+    assert len(slack.posted) == 1
     assert worker._llm_read == {}
 
 

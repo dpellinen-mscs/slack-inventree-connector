@@ -18,20 +18,21 @@ of the post (a refusal, a cut-off answer) is not an outage: that post alone is f
 once. A step makes at most one model call, and makes it last: after every reply that needs no call, and to
 the waiting post asked least recently, so neither one slow call nor one post whose calls fail holds the
 others back. The reading is kept and its reply is posted in the next step, after the queue has been drained:
-an edit that came during the call withholds the post.
+an edit that came during the call makes the post read again.
 
 Nothing here writes to InvenTree. Message text is read from the stored raw events and never logged. Clicks
 are M2 (review). Every edit and deletion is noted by message key, in whatever order Slack delivers it, and a
-post that holds a noted message is never read from its original text: before its dry run it is withheld.
+post is read as its messages are now: each one as its newest edit shows it (by the edit's own timestamp, not
+by arrival), and a deleted one left out. A post with a change that cannot be read (a tombstone, an edit
+without a stamp, a body that expired) is never read from its original text: it is withheld as `changed`.
 
 A message that joins a post after its dry run (a thread reply, or a root that catch-up found later), or an
 edit or deletion of one of its messages noted after it was decided, makes the post due again, as revision 2,
-3, ... It is read whole, as before, and:
+3, ... It is read whole, as it is now, and:
 - reads as the reply that stands: recorded as `unchanged`, nothing posted;
 - reads as a different movement: a revised dry run is posted in the thread;
 - can no longer be read as a movement (declined, withheld, failed) while a reply stands: a notice that the
   reply above no longer stands is posted (`retracted`). Without a standing reply, nothing is posted.
-  An edited or deleted message is not read again yet, so an edit or a deletion always takes the reply back.
 A revision is measured for expiry from the post's first message, not the new one: the movement is that old.
 
 Every finished post keeps a record of what was decided and why (`Store.dry_run`): the extractor, the
@@ -71,7 +72,16 @@ from stockthread.core.model import (
 from stockthread.core.validate import validate
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.catchup import is_catch_up
-from stockthread.slack.ingest import Deleted, Drop, Edited, NewMessage, Revised, ingest_event, revised_message
+from stockthread.slack.ingest import (
+    Decision,
+    Deleted,
+    Drop,
+    Edited,
+    NewMessage,
+    Revised,
+    ingest_event,
+    revised_message,
+)
 from stockthread.slack.replies import MovementView, dry_run_reply, gate_reasons, retraction_notice
 from stockthread.store import DryRunOutcome, EventStatus, LockLost, Store, WaitingPost
 
@@ -191,9 +201,9 @@ class Worker:
     """Checked between posts, so a stop request does not wait for a whole backlog."""
     llm: PostExtractor | None = None
     """Reads the posts the rule-based extractor declines. None: those posts get no reply."""
-    _llm_read: dict[PostKey, tuple[tuple[str, ...], Extraction]] = field(default_factory=dict)
-    """What the model read, and of which messages, kept until the post is finished: a reply that is tried
-    again is not read again. A post that has gained a message since is."""
+    _llm_read: dict[PostKey, tuple[tuple[MessageInput, ...], Extraction]] = field(default_factory=dict)
+    """What the model read, and the messages as it read them, kept until the post is finished: a reply that is
+    tried again is not read again. A post that has gained, lost or changed a message since is."""
     _llm_quiet_until: Decimal = Decimal(0)
     """The provider gave no answer: it is not asked again, for any post, before this time."""
     _llm_failed: int = 0
@@ -246,27 +256,28 @@ class Worker:
             payload = json.loads(body)
         except ValueError:
             return EventStatus.FAILED, "body_not_json"
-        # Noted first, and by message key: the message itself may arrive after its edit. Read leniently, from
-        # the raw event: the ingest checks drop some edits (a deleted root becomes a tombstone).
+        # Noted by message key: the message itself may arrive after its edit. Read leniently, from the raw
+        # event: the ingest checks drop some edits (a deleted root becomes a tombstone). The post is read again
+        # when it is due: its first dry run reads the edit, and an answered post is due for a revision.
+        workspace = self.settings.slack.workspace_id
         found = revised_message(payload, self.settings.slack)
-        if found is not None and self._note_change(PostKey(self.settings.slack.workspace_id, *found), event_id):
-            return EventStatus.DONE, "withheld_changed_post"
+        if found is not None:
+            self.store.note_revision(self.owner, PostKey(workspace, *found), event_id)
+            return EventStatus.DONE, "revision_noted"
         decision = ingest_event(payload, self.settings.slack, _AlreadyStored())
         if isinstance(decision, Drop):
             return EventStatus.DROPPED, decision.reason.value
-        workspace = self.settings.slack.workspace_id
         if isinstance(decision, Edited | Deleted | Revised):
-            # Noted above: an answered post that holds the message is due for a revision (reply_due).
-            return (EventStatus.DONE, "revision_noted") if found else (EventStatus.DROPPED, "not_a_revision")
+            return EventStatus.DROPPED, "not_a_revision"
         if not isinstance(decision, NewMessage):
             return EventStatus.DROPPED, "not_a_message"
         message = decision.message
         key = PostKey(workspace, message.channel, message.ts)
         # The history shows the message edited, and it is in a post already, from the event Slack sent when it
-        # was made: that event has the text from before the edit.
-        edited_since = is_catch_up(decision.event_id) and message.edited_ts is not None
-        if edited_since and self.store.message_placed(key) and self._note_change(key, event_id):
-            return EventStatus.DONE, "withheld_changed_post"
+        # was made: that event has the text from before the edit, and this one is noted as its edit.
+        if is_catch_up(decision.event_id) and message.edited_ts is not None and self.store.message_placed(key):
+            self.store.note_revision(self.owner, key, event_id)
+            return EventStatus.DONE, "revision_noted"
         try:
             self.store.place_message(
                 self.owner,
@@ -279,16 +290,6 @@ class Worker:
         except ValueError:
             return EventStatus.FAILED, "bad_message"  # a timestamp not in Slack's form, or no user
         return EventStatus.DONE, ""
-
-    def _note_change(self, changed: PostKey, event_id: int) -> bool:
-        """Note that a message was edited or deleted. True when that withheld the post it is in."""
-        self.store.note_revision(self.owner, changed, event_id)
-        post = self.store.waiting_post_of(changed)
-        if post is None or post in self._running:  # a reply on its way is settled by its call
-            return False
-        # Changed before its dry run: reading the original text would be wrong. After it, reply_due revises.
-        self._finish(post, DryRunOutcome.WITHHELD, result={"withheld": "changed"})
-        return True
 
     def reply_due(self) -> int:
         now = self._now()
@@ -351,22 +352,18 @@ class Worker:
         """Decide the post and post its reply. False: nothing was done, the post waits for a model call, which
         is only made with `ask`."""
         key = post.key
-        # Before anything is read: an edit noted from here on makes the next revision.
+        # Before anything is read: what is read is the post as of this change, and one noted from here on makes
+        # the next revision.
         changes = self.store.post_changes_through(key)
         age = now - seconds(post.newest_ts)
         # A revision's movement is as old as the post: a new reply does not make a week-old movement current.
         since = seconds(post.key.ts) if post.revision > 1 else seconds(post.newest_ts)
-        read = None
-        too_old = now - since > self.settings.slack.plan_expiry_hours * 3600
-        if too_old and post.revision > 1:
-            why = "too_old"  # first: the reply above has expired, so there is nothing to take back
-        elif changes:
-            why = "changed"  # an edit or a deletion, even one that arrived before the message it changes
-        elif too_old:
-            why = "too_old"
+        read: tuple[Sequence[MessageInput], str, bool] | None = None
+        if now - since > self.settings.slack.plan_expiry_hours * 3600:
+            why = "too_old"  # for a revision, the reply above has expired: there is nothing to take back
         else:
-            read = self._messages(key)
-            why = "unreadable"
+            found = self._messages(key, changes)
+            read, why = (None, found) if isinstance(found, str) else (found, "")
         if read is None:
             log.info("post %s: withheld (%s)", key.ts, why)
             # Unread, but decided on the messages the post holds now: one that joins later makes a revision.
@@ -492,7 +489,7 @@ class Worker:
         if self.llm is None or not by_rule.declined:
             self._llm_waiting.pop(key, None)
             return by_rule, ""
-        sent = tuple(message.ts for message in messages)
+        sent = tuple(messages)
         earlier = self._llm_read.get(key)
         if earlier is not None and earlier[0] == sent:
             return earlier[1], ""
@@ -594,7 +591,7 @@ class Worker:
         catalog: Catalog,
         late: bool,
     ) -> list[MovementView]:
-        text = "\n".join(message.text for message in messages)
+        text = "\n".join(message.text for message in messages if not message.deleted)
         lateness = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if late else ()
         return [
             MovementView(
@@ -669,37 +666,83 @@ class Worker:
             changes=changes,
         )
 
-    def _messages(self, key: PostKey) -> tuple[Sequence[MessageInput], str, bool] | None:
-        """The post's messages as the extractor takes them, the author of the first one, and whether any of
-        them was not delivered by Slack but found in the channel history (slack/catchup.py).
+    def _messages(self, key: PostKey, changes: int) -> tuple[Sequence[MessageInput], str, bool] | str:
+        """The post's messages as the extractor takes them, each as it is after the noted changes up to
+        `changes`, the author of the first one, and whether any of them was not delivered by Slack but found in
+        the channel history (slack/catchup.py), or edited as the history showed. A deleted message is kept,
+        marked deleted, with no text.
 
-        None when any message cannot be read again (its body expired, it was grouped before the worker kept
-        the link, or the ingest checks now drop it): a post is never read with a message left out.
+        A post is never read with a message left out or read from its original text. "unreadable" when a
+        message cannot be read again (its body expired, it was grouped before the worker kept the link, or the
+        ingest checks now drop it); "changed" when a change of it cannot be read, or every message was deleted.
         """
+        noted = self.store.post_change_bodies(key, changes) if changes else {}
         messages: list[MessageInput] = []
         authors: list[str] = []
         caught_up = False
         for ts, body in self.store.post_bodies(key):
-            try:
-                payload = json.loads(body) if body else None
-            except ValueError:
-                return None
-            decision = ingest_event(payload, self.settings.slack, _AlreadyStored()) if payload else None
+            decision = self._decision(body)
             if not isinstance(decision, NewMessage) or decision.message.ts != ts:
-                return None
-            message = decision.message
-            caught_up = caught_up or is_catch_up(decision.event_id)
-            authors.append(message.user)
-            messages.append(MessageInput(message.ts, message.text, message.edited_ts, message.file_ids))
+                return "unreadable"
+            changed = _as_changed(decision, [self._decision(edit) for edit in noted.pop(ts, ())])
+            if changed is None:
+                return "changed"
+            message, source = changed
+            # Late too when the text read is an edit found in the history rather than delivered.
+            caught_up = caught_up or is_catch_up(decision.event_id) or is_catch_up(source)
+            authors.append(decision.message.user)
+            messages.append(message)
         if not messages:
-            return None
+            return "unreadable"
+        if noted or all(message.deleted for message in messages):
+            return "changed"  # an edit of a thread root that is not in the post, or nothing left to read
         return messages, authors[0], caught_up
+
+    def _decision(self, body: str | None) -> Decision | None:
+        """A stored event, through the ingest checks with the current settings. None when it cannot be read."""
+        try:
+            payload = json.loads(body) if body else None
+        except ValueError:
+            return None
+        return ingest_event(payload, self.settings.slack, _AlreadyStored()) if payload else None
 
     def _now(self) -> Decimal:
         now = self.clock()
         if now.tzinfo is None:
             raise ValueError("the worker clock must return an aware datetime")
         return Decimal(str(now.timestamp()))
+
+
+def _as_changed(stored: NewMessage, changes: Sequence[Decision | None]) -> tuple[MessageInput, str] | None:
+    """A message as its noted changes leave it, and the id of the event its text comes from: deleted when any
+    change deletes it, else as the edit with the newest edit timestamp shows it (Slack does not keep event
+    order). None when a change cannot be read: it is not an edit or deletion of this message by its author,
+    a stamp is not in Slack's form, or two edits with one timestamp disagree."""
+    original = stored.message
+    if changes and original.edited_ts is not None and not _SLACK_TS.fullmatch(original.edited_ts):
+        return None
+    newest, source, deleted = original, stored.event_id, False
+    for change in changes:
+        if isinstance(change, Deleted) and (change.channel, change.ts) == (original.channel, original.ts):
+            deleted = True
+            continue
+        if not isinstance(change, Edited | NewMessage):
+            return None  # Revised (a tombstone, an edit without a stamp or a user), a drop, or an expired body
+        edit = change.message
+        stamp = edit.edited_ts
+        same = (edit.channel, edit.ts, edit.user) == (original.channel, original.ts, original.user)
+        if not same or stamp is None or not _SLACK_TS.fullmatch(stamp):
+            return None
+        if newest.edited_ts is None or seconds(stamp) > seconds(newest.edited_ts):
+            newest, source = edit, change.event_id
+        elif seconds(stamp) == seconds(newest.edited_ts) and (edit.text, edit.file_ids) != (
+            newest.text,
+            newest.file_ids,
+        ):
+            return None
+    if deleted:
+        return MessageInput(original.ts, "", newest.edited_ts, deleted=True), source
+    return MessageInput(newest.ts, newest.text, newest.edited_ts, newest.file_ids), source
 
 
 def _part(text: str | None, catalog: Catalog, poster: str) -> Match:

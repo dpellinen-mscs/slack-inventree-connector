@@ -211,9 +211,9 @@ def dry_run_reply(
 
 
 RETRACTION_REASONS = {
-    "changed": "A message of this post was edited or deleted.",
+    "changed": "A message of this post was deleted, or edited in a way I cannot read.",
     "unreadable": "A message of this post can no longer be read.",
-    "silent": "With the new message, I can no longer read this thread as a movement.",
+    "silent": "As it reads now, I can no longer read this thread as a movement.",
     "failed": "Reading this thread again failed.",
     "unread": "I could not read this thread again: the language model gave no answer.",
 }

@@ -435,7 +435,7 @@ class Store:
             ") SELECT p.workspace_id, p.channel_id, p.ts, m.ts, last.next FROM last"
             " JOIN posts p ON p.id = last.post_id JOIN post_messages m ON m.post_id = p.id"
             " WHERE EXISTS (SELECT 1 FROM post_messages n WHERE n.post_id = p.id AND n.id > last.through)"
-            # A change noted since: looked up by message key (its unique index), never by scanning every change.
+            # A change noted since: looked up by message key (its index), never by scanning every change.
             " OR EXISTS (SELECT 1 FROM revised_messages r WHERE r.workspace_id = p.workspace_id"
             " AND r.channel_id = p.channel_id AND r.ts = p.ts AND r.id > last.changes)"
             " OR EXISTS (SELECT 1 FROM post_messages n JOIN revised_messages r ON r.workspace_id = n.workspace_id"
@@ -457,15 +457,6 @@ class Store:
         ).fetchone()
         return None if row is None else PostKey(row[0], row[1], row[2])
 
-    def waiting_post_of(self, message: PostKey) -> PostKey | None:
-        """The post that holds this message, if that post has no dry-run outcome yet."""
-        row = self._db.execute(
-            "SELECT p.workspace_id, p.channel_id, p.ts FROM post_messages m JOIN posts p ON p.id = m.post_id"
-            " WHERE m.workspace_id = ? AND m.channel_id = ? AND m.ts = ? AND p.dry_run_at IS NULL",
-            (message.workspace_id, message.channel_id, message.ts),
-        ).fetchone()
-        return None if row is None else PostKey(row[0], row[1], row[2])
-
     def post_bodies(self, key: PostKey) -> list[tuple[str, str | None]]:
         """Each message of a post, oldest first: its timestamp, and the raw body of the event it came from.
 
@@ -482,13 +473,25 @@ class Store:
         return sorted(((row[0], row[1]) for row in rows), key=lambda row: seconds(row[0]))
 
     def note_revision(self, owner: str, message: PostKey, slack_event_id: int | None = None) -> None:
-        """Remember that a message was edited or deleted, whether or not the message itself has arrived. Idempotent."""
+        """Remember that a message was edited or deleted, whether or not the message itself has arrived.
+
+        Every event is noted, so each later edit of a message makes its post due again. Idempotent: once per
+        event, and once per message for a note without an event.
+        """
         with self._transaction():
             self._check_lock(owner)
             key = (message.workspace_id, message.channel_id, message.ts)
-            if self._db.execute(
-                "SELECT 1 FROM revised_messages WHERE workspace_id = ? AND channel_id = ? AND ts = ?", key
-            ).fetchone():
+            if slack_event_id is None:
+                noted = self._db.execute(
+                    "SELECT 1 FROM revised_messages WHERE workspace_id = ? AND channel_id = ? AND ts = ?"
+                    " AND slack_event_id IS NULL",
+                    key,
+                ).fetchone()
+            else:
+                noted = self._db.execute(
+                    "SELECT 1 FROM revised_messages WHERE slack_event_id = ?", (slack_event_id,)
+                ).fetchone()
+            if noted:
                 return
             self._db.execute(
                 "INSERT INTO revised_messages (workspace_id, channel_id, ts, slack_event_id, noted_at)"
@@ -496,6 +499,32 @@ class Store:
                 (*key, slack_event_id, self._now()),
             )
             self._audit("ingest", "revision_noted", slack_event_id=slack_event_id)
+
+    def post_change_bodies(self, key: PostKey, through: int) -> dict[str, list[str | None]]:
+        """Each noted edit or deletion of a message of the post, or of the message it is keyed on, up to the
+        change `through` (a `revised_messages.id`): by message timestamp, the raw bodies of the events, in the
+        order they were noted. A body is None when retention expired it, when the note has no event, or when
+        it was noted before migration 0009 (then a later edit of the message may not have been noted).
+        """
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        rows = self._db.execute(
+            "SELECT r.ts, CASE WHEN r.id > (SELECT through FROM revised_messages_before) THEN e.body END"
+            " FROM revised_messages r LEFT JOIN slack_events e ON e.id = r.slack_event_id"
+            " WHERE r.id <= ?2 AND (EXISTS ("
+            " SELECT 1 FROM post_messages m WHERE m.post_id = ?1"
+            " AND m.workspace_id = r.workspace_id AND m.channel_id = r.channel_id AND m.ts = r.ts"
+            ") OR EXISTS ("
+            " SELECT 1 FROM posts p WHERE p.id = ?1"
+            " AND p.workspace_id = r.workspace_id AND p.channel_id = r.channel_id AND p.ts = r.ts"
+            ")) ORDER BY r.id",
+            (post_id, through),
+        ).fetchall()
+        found: dict[str, list[str | None]] = {}
+        for ts, body in rows:
+            found.setdefault(ts, []).append(body)
+        return found
 
     def post_has_revision(self, key: PostKey) -> bool:
         """Whether any message of the post, or the message it is keyed on, was edited or deleted, in whatever

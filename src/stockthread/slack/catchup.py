@@ -233,31 +233,36 @@ class CatchUp:
         ingest_event(payload, self.settings, _Accepted(accepted, dump(payload)))
 
     def _change(self, key: PostKey, message: Mapping[str, Any]) -> dict[str, Any] | None:
-        """The message is known. If the history shows another edit than the stored event does (or a tombstone:
-        a deleted thread root), that edit as an event: the worker notes it as it does an edit Slack delivers,
-        and withholds the post if it waits for its dry run, or its next revision (a post that had its dry run
-        is read again when a message joins it)."""
+        """The message is known. If the history shows another edit than the stored event and the noted edits
+        do (or a tombstone: a deleted thread root), that edit as an event: the worker notes it as it does an
+        edit Slack delivers, and reads the post as edited, in its dry run or its next revision."""
         post = self.store.post_of(key)
         if post is None:
             return None
         now = _edit_stamp(message)
         tombstone = message.get("subtype") == "tombstone"
-        if not tombstone and (now is None or now == self._stored_stamp(post, key.ts)):
+        if not tombstone and (now is None or now in self._known_stamps(post, key.ts)):
             return None
         return changed_event(self.settings, key.channel_id, message, "tombstone" if tombstone else str(now))
 
-    def _stored_stamp(self, post: PostKey, ts: str) -> str | None:
-        """The edit stamp of the message in the event it was stored from."""
-        for stored_ts, body in self.store.post_bodies(post):
-            if stored_ts != ts:
-                continue
+    def _known_stamps(self, post: PostKey, ts: str) -> set[str]:
+        """The edit stamps of the message in the event it was stored from and in its noted edits: an edit
+        Slack delivered is not noted a second time from the history."""
+        bodies = [body for stored_ts, body in self.store.post_bodies(post) if stored_ts == ts]
+        bodies += self.store.post_change_bodies(post, self.store.post_changes_through(post)).get(ts, [])
+        stamps: set[str] = set()
+        for body in bodies:
             try:
                 payload = json.loads(body) if body else None
             except ValueError:
-                return None
+                continue
             event = payload.get("event") if isinstance(payload, Mapping) else None
-            return _edit_stamp(event) if isinstance(event, Mapping) else None
-        return None
+            if isinstance(event, Mapping) and event.get("subtype") == "message_changed":
+                event = event.get("message")
+            stamp = _edit_stamp(event) if isinstance(event, Mapping) else None
+            if stamp is not None:
+                stamps.add(stamp)
+        return stamps
 
 
 def _ts(value: Decimal) -> str:
