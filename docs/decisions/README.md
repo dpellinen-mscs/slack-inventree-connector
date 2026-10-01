@@ -19,6 +19,7 @@ editing history.
 | [0011](0011-llm-after-the-rules.md) | The model reads only what the rules decline, and only when configured | Accepted |
 | [0012](0012-first-confirmation-becomes-alias.md) | A whole-word match is confirmed once, and that confirmation becomes an alias | Accepted |
 | [0013](0013-http-serving-with-waitress.md) | HTTP mode is served by waitress, in the connector's own process | Accepted |
+| [0014](0014-dev-workspace-capture-fixtures.md) | Two Slack fixtures may come from the dev workspace capture | Accepted |
 
 ## Template
 
