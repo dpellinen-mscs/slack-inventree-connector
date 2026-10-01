@@ -609,7 +609,73 @@ needs.
       was clicked. A confirmed match becomes an alias only after the plan
       is applied and verified ([0012](decisions/0012-first-confirmation-becomes-alias.md)).
       Answers given as thread replies follow the same rules once they are
-      read (a later slice).
+      read (below).
+  - **Answers by thread reply (designed, not built).** Four questions have
+    no buttons: which part (`name_part`), which place (`name_location`),
+    how many (`quantity`) and which serials (`serials`). The person
+    answers them by writing in the thread.
+    - *What counts as an answer.* A thread message counts as the answer to
+      the open question only when all of these hold. It is in the post's
+      thread and is not from a bot. It was posted after the reply that
+      asked (its `ts` is greater than the question's `message_ts`). Its
+      author may answer that question, the same rule as for a button. It
+      is the first such message: one message answers one question, and a
+      question gets one answer. And it *reads cleanly as an answer* to
+      that ask:
+      - `quantity`: the whole message is one number, as digits or as a
+        word the rules already read ("3", "three", "3 pcs"), greater than
+        zero (zero only for a count). "3 or 4", "a few" and "3, and 2 to truck 2" do not read
+        cleanly.
+      - `name_part`: the matcher, run on the whole message as the line's
+        item text, gives a part matched by a rule that may authorize
+        (exact, normalized or alias), or a short list of candidates
+        (at most `MAX_CHOICES`). A loose single match also counts; the
+        next question then confirms it, as for any loose match.
+      - `name_location`: the same, with the location matcher and the side
+        the question named.
+      - `serials`: the message holds only serial-shaped tokens (no spaces
+        inside one, separated by spaces, commas or new lines), as many as
+        the line's quantity, no token twice.
+    - *Anything else is a thread message, as today.* A message that does
+      not read cleanly ("ok thanks", "actually it was truck 2") is read
+      with the whole post, so a correction is never lost to a parser that
+      took it for an answer. A message that does read cleanly, but whose
+      author may not answer, is a thread message too.
+    - *Effect.* An answer message is a fact about the reading that asked,
+      like a click, so it is kept out of what the extractor reads: the
+      reading that stands does not change, the answers given about it
+      still replay, and a model never reads "the 48-port one" as a new
+      item. Validation still sees its text (an item or a place named in
+      the answer is in the post). On replay, a `quantity` answer replaces
+      the line's quantity, a `name_part` answer replaces the line's item
+      text before matching, a `name_location` answer replaces the side's
+      place text before matching, and a `serials` answer replaces the
+      line's serials. Validation and the matcher then run as for any
+      reading. The serials, typed by a person in the thread, count as
+      confirmed (the brief: serials are confirmed by barcode, OCR or a
+      person). The question's own reason (code and detail) is cleared, as
+      for a "yes", because some reasons are about the text and would come
+      back ("container word in the text" after "12 pcs").
+    - *Stored.* The answer row keeps the message's `ts` and the kind of
+      answer, never the text: on replay the message is read as it is now.
+      An edit of an answer message is a change of the post like any other
+      and makes a revision. If it still reads cleanly, the new value is
+      the answer. If it no longer does, it is a thread message from then
+      on: it is read with the post, the reading differs, and the answers
+      start over, the safe side for an edit that may be a correction. A
+      deleted answer message is no answer, and the question it answered
+      is asked again.
+    - *Then.* As for a click: the post is due at once, the revised dry run
+      shows the result and asks the next question, and the question's
+      reply loses nothing (it has no buttons to take down). The answer
+      message gets no ephemeral note when it counts; a message that reads
+      cleanly but comes from someone who may not answer gets the same note
+      a click would ("poster or approver only").
+    - *Limits.* As for buttons: an answer never authorizes a write, and a
+      confirmed part becomes an alias only after the plan is applied and
+      verified (ADR 0012). A typed name matched by the `exact` rule is an
+      exact match, not an `answer` match: the person named it, the
+      matcher found it.
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can
   approve. Display names are never trusted. Only the poster or an approver
