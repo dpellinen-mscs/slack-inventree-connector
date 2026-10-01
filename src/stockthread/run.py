@@ -28,13 +28,15 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import Settings
 from stockthread.core.matching import Catalog
-from stockthread.inventree import InvenTreeError, InvenTreeReader, check_version
+from stockthread.inventree import InvenTreeError, InvenTreeReader, VersionCheck, check_version
 from stockthread.llm.extract import LLMExtractor, WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
+from stockthread.setup_check import Finding, Level, check_posters, check_roles, check_vehicles
 from stockthread.slack.catchup import SWEEP_SECONDS, CatchUp, HistoryClient
 from stockthread.slack.http_server import HttpServer, ServeError
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
+from stockthread.store.db import posters_seen
 from stockthread.worker import PosterBusy, PostStillRunning, Worker
 
 log = logging.getLogger(__name__)
@@ -235,6 +237,23 @@ def check_inventree(settings: Settings) -> str:
             return check_version(await reader.server_info()).message
 
     return asyncio.run(read())
+
+
+def check_setup(settings: Settings) -> list[Finding]:
+    """The setup check's findings (setup_check.py). Raises InvenTreeError when the server cannot be read."""
+
+    async def read() -> tuple[VersionCheck, dict[str, Any], Catalog]:
+        async with InvenTreeReader(settings.inventree, settings.secrets.inventree_token) as reader:
+            version = check_version(await reader.server_info())
+            return version, await reader.user_roles(), await load_catalog(reader)
+
+    version, roles, catalog = asyncio.run(read())
+    return [
+        Finding(Level.OK if version.writes_allowed else Level.WARN, f"inventree: {version.message}"),
+        *check_roles(roles),
+        *check_vehicles(catalog, settings.vehicles),
+        *check_posters(posters_seen(settings.storage.database), settings.vehicles),
+    ]
 
 
 def llm_provider(settings: Settings) -> OpenAICompatible | None:

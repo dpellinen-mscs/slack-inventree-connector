@@ -162,6 +162,13 @@ class InvenTreeReader:
                 return results
         raise InvenTreeError(f"GET {path} returned more than {MAX_PAGES} pages")
 
+    async def user_roles(self) -> dict[str, Any]:
+        """The roles of the token's user (`roles`: role name -> permissions or null, `is_staff`, `is_superuser`)."""
+        data = await self.get("/api/user/roles/")
+        if not isinstance(data, dict):
+            raise InvenTreeError("GET /api/user/roles/ did not return an object")
+        return data
+
     async def locations(self) -> list[dict[str, Any]]:
         return await self.list_all("/api/stock/location/")
 

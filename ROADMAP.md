@@ -94,7 +94,7 @@ The quickstart reaches the first dry-run in about 15 minutes.
   - [x] A revision reads an edited message's new text (and so does the first dry run; a deleted message drops out)
 - [ ] Source selection: choose concrete stock items for each line, serials included
 - [ ] Plan expiry
-- [ ] Setup check: users without a vehicle, token roles, locations that are missing
+- [x] Setup check: users without a vehicle, token roles, locations that are missing (`stockthread check-setup`; users are those who have posted, from the local database, so no new Slack scope)
 - [x] Admin guidance: how to model vehicles and sites as stock locations (`docs/locations.md`)
 
 **DoD:** every corpus case with a review reason produces the expected
