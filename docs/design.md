@@ -494,16 +494,27 @@ needs.
   - **Answered by button (built).** The worker reads a click with the
     ingest checks again, then against the stored button: the click's
     channel and message must be the ones stored with it, its question
-    open (not stale, not answered), and its plan not expired (the post is
-    no older than `plan_expiry_hours`, the same bound as revisions). The
-    user must be an approver, or for a question that is not for approvers
-    only, the poster (the author of the post's oldest message). The answer
-    (the button's position and choice) and who gave it are recorded once,
-    as a compare-and-set on the open question, with an audit row by
-    `human`. Every refusal finishes the click as dropped, with its reason
-    (`unknown_button`, `other_message`, `stale`, `already_answered`,
-    `expired`, `not_allowed`). Telling the clicker why, and acting on the
-    answer (validation again, the next question), come next.
+    open (not stale, not answered), and its plan not expired. Who may
+    answer and when the plan expires are stored with the question when it
+    is asked (migration 0011), because both could move later: the poster
+    is the author of the oldest message the dry run read, and expiry
+    counts from the same time as the post's revisions (the newest message
+    for a first dry run, the post's own time for a revision), so a click
+    and a revision agree on when a plan has expired. The user must be an
+    approver, or for a question that is not for approvers only, that
+    poster. The answer (the button's position and choice) and who gave it
+    are recorded once, as a compare-and-set on the open question, with an
+    audit row by `human`. In the same transaction the post must not have
+    moved on from the dry run that asked: no message joined it and none
+    was edited or deleted since its newest dry run, and every dry run
+    after the one that asked was `unchanged`. A click that comes while a
+    revision is pending answers nothing. Every refusal finishes the click
+    as dropped, with its reason (`unknown_button`, `other_message`,
+    `stale`, `already_answered`, `expired`, `not_allowed`,
+    `post_changed`). Expiry is judged when the click is handled, so a
+    click that waited out an outage in the queue fails closed. Telling the
+    clicker why, and acting on the answer (validation again, the next
+    question), come next.
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can
   approve. Display names are never trusted. Only the poster or an approver
@@ -948,7 +959,7 @@ and needs no extra service.
 | `extractions` | Extractor name and version, prompt version, raw output |
 | `candidates` | Candidate movements and line items |
 | `matches` | Match results with candidates and the rule that matched |
-| `review_items` | One question per dry run that asked one: the question as ids and codes, approvers only or not, the message it was asked in, open, answered or stale, the answer and who answered (migration 0010) |
+| `review_items` | One question per dry run that asked one: the question as ids and codes, approvers only or not, the message it was asked in, open, answered or stale, the answer and who answered (migration 0010); the poster and when its plan expires (0011) |
 | `requests` | The state machine of section 7, unique on the request key, with the marker id |
 | `request_attempts` | One row per apply or undo attempt: marker, snapshot, request body, outcome |
 | `interactions` | One row per button: its random id, its question and the answer it stands for (migration 0010) |

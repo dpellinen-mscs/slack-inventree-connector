@@ -2519,14 +2519,72 @@ def test_a_click_on_a_stale_question_answers_nothing(store: Store, clock: Clock,
     assert last_status(path) == ("dropped", "stale")
 
 
-def test_a_click_after_the_plan_expired_answers_nothing(store: Store, clock: Clock, path: Path) -> None:
+@pytest.mark.parametrize(("past", "outcome"), [(".000100", "answered"), (".000101", "expired")])
+def test_a_click_after_the_plan_expired_answers_nothing(
+    store: Store, clock: Clock, path: Path, past: str, outcome: str
+) -> None:
     worker = asked(store, clock)
     reply, ts = posted(worker)
-    clock.at(f"{1790000000 + worker.settings.slack.plan_expiry_hours * 3600}.000101")  # a microsecond past
+    clock.at(f"{1790000000 + worker.settings.slack.plan_expiry_hours * 3600}{past}")  # the post is at .000100
     clicked(store, click_on(reply, ts, 0, SAM), "1")
     worker.step()
-    assert last_status(path) == ("dropped", "expired")
+    assert last_status(path) == ("done" if outcome == "answered" else "dropped", outcome)
+
+
+def test_the_plan_of_a_reply_answered_without_its_root_expires_from_the_reply(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    root, reply_ts = "1789990000.000100", "1790000000.000100"  # the root is older, and never arrives
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: TWO_DISCS, clock)
+    enqueue(store, message(reply_ts, TAKE, user=RIVER, thread_ts=root))
+    due(worker, clock)
+    reply, ts = posted(worker)
+    [item] = store.questions(PostKey(WORKSPACE, CHANNEL, root))
+    assert (item.poster_id, item.expires_from) == (RIVER, reply_ts)
+    clock.at("1790082800.000000")  # 23 hours after the reply, 25.8 after the root
+    clicked(store, click_on(reply, ts, 0, RIVER), "1")
+    worker.step()
+    assert last_status(path) == ("done", "answered")
+
+
+def test_a_click_while_the_post_waits_for_its_revision_answers_nothing(store: Store, clock: Clock, path: Path) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    enqueue(store, message("1790000040.000100", "the pro one", thread_ts=ROOT))
+    clicked(store, click_on(reply, ts, 0, SAM), "1")
+    clock.at("1790000041.000000")
+    worker.step()  # the message is placed, then the click is read; the revision is not due yet
+    assert last_status(path) == ("dropped", "post_changed")
     assert [item.status.value for item in store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))] == ["open"]
+
+
+def test_a_button_of_a_post_in_another_workspace_answers_nothing(store: Store, clock: Clock, path: Path) -> None:
+    other = PostKey("T0OTHER01", CHANNEL, ROOT)
+    store.place_message(OWNER, other, user_id=SAM, thread_ts=None, window_seconds=5)
+    question = NewQuestion({"ask": "confirm"}, False, [("y" * 22, {"kind": "yes"})], poster=SAM, expires_from=ROOT)
+    store.finish_dry_run(OWNER, other, DryRunOutcome.REPLIED, "1790009999.000001", question=question)
+    clock.at("1790000100.000000")
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: CATALOG, clock)
+    reply = {"channel": CHANNEL, "thread_ts": ROOT, "text": "", "blocks": [{"elements": [
+        {"action_id": "answer-0", "value": "y" * 22, "text": {"type": "plain_text", "text": "Yes"}}]}]}  # fmt: skip
+    clicked(store, click_on(reply, "1790009999.000001", 0, SAM), "1")
+    worker.step()
+    assert last_status(path) == ("dropped", "other_message")
+
+
+@pytest.mark.parametrize(
+    ("late", "user", "outcome"),
+    [(False, SAM, "answered"), (True, SAM, "not_allowed"), (True, LUIS, "not_allowed")],
+)
+def test_with_no_approvers_the_poster_still_answers_and_nobody_answers_for_approvers(
+    store: Store, clock: Clock, path: Path, late: bool, user: str, outcome: str
+) -> None:
+    worker = asked(store, clock, CATALOG if late else TWO_DISCS, late=late)
+    worker.settings = settings()  # no approvers
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 0, user, at="1790090000.000100"), "1")
+    worker.step()
+    assert last_status(path) == ("done" if outcome == "answered" else "dropped", outcome)
 
 
 @pytest.mark.parametrize(
@@ -2538,8 +2596,12 @@ def test_recorded_answer_clicks_are_checked_against_the_stored_button(
     fixture = json.loads((Path(__file__).parent / "fixtures" / "slack" / "events" / f"{name}.json").read_text())
     button = fixture["expected"]["button"]
     store.place_message(OWNER, PostKey(WORKSPACE, CHANNEL, ROOT), user_id=SAM, thread_ts=None, window_seconds=5)
-    choices = [("p" * 22, {"kind": "record", "record": 1}), (button, {"kind": "record", "record": 2})]
-    question = NewQuestion({"ask": "choose_part"}, False, [*choices, ("n" * 22, {"kind": "none"})])
+    buttons: list[tuple[str, dict[str, Any]]] = [
+        ("p" * 22, {"kind": "record", "record": 1}),
+        (button, {"kind": "record", "record": 2}),
+        ("n" * 22, {"kind": "none"}),
+    ]
+    question = NewQuestion({"ask": "choose_part"}, False, buttons, poster=SAM, expires_from=ROOT)
     store.finish_dry_run(OWNER, PostKey(WORKSPACE, CHANNEL, ROOT), DryRunOutcome.REPLIED, "1790000020.000200",
                          question=question)  # fmt: skip
     clock.at("1790000300.000000")

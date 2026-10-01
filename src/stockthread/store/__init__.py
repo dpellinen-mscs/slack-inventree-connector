@@ -1,6 +1,7 @@
 """The audit store: SQLite in one file (design section 8, ADR 0009)."""
 
 from stockthread.store.db import (
+    Answered,
     Attempt,
     Button,
     DryRunOutcome,
@@ -24,6 +25,7 @@ from stockthread.store.db import (
 )
 
 __all__ = [
+    "Answered",
     "Attempt",
     "Button",
     "DryRunOutcome",

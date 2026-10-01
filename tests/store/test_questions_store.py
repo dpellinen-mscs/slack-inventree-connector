@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from stockthread.core.model import PostKey
-from stockthread.store import DryRunOutcome, NewQuestion, QuestionStatus, Store, new_button_id
+from stockthread.store import Answered, DryRunOutcome, NewQuestion, QuestionStatus, Store, new_button_id
 
 OWNER = "instance-a"
 POST = PostKey("T0ACME0001", "C0STOCK001", "1790000000.000100")
@@ -37,6 +38,8 @@ def confirm(yes: str = YES, no: str = NO, *, approver_only: bool = False) -> New
         {"ask": "confirm", "reason": "late_ingest", "movement": 0},
         approver_only,
         [(yes, {"kind": "yes"}), (no, {"kind": "no"})],
+        poster="U0SAM0001",
+        expires_from=POST.ts,
     )
 
 
@@ -69,7 +72,11 @@ def test_a_reply_stores_its_question_and_buttons_with_its_record(store: Store, p
 
 def test_a_question_without_buttons_is_answered_in_the_thread(store: Store) -> None:
     store.finish_dry_run(
-        OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=NewQuestion({"ask": "quantity"}, False, [])
+        OWNER,
+        POST,
+        DryRunOutcome.REPLIED,
+        REPLY,
+        question=NewQuestion({"ask": "quantity"}, False, [], poster="U0SAM0001", expires_from=POST.ts),
     )
     [item] = store.questions(POST)
     assert item.question == {"ask": "quantity"}
@@ -172,8 +179,8 @@ def test_triggers_keep_questions_and_buttons(store: Store, path: Path, statement
 
 
 INSERT_ITEM = (
-    "INSERT {verb} INTO review_items (id, post_id, revision, question, approver_only, channel_id, status, created_at)"
-    " VALUES ({id}, 1, {revision}, '{{}}', 0, '{channel}', 'open', 'now')"
+    "INSERT {verb} INTO review_items (id, post_id, revision, question, approver_only, channel_id, status, created_at,"
+    " poster_id, expires_from) VALUES ({id}, 1, {revision}, '{{}}', 0, '{channel}', 'open', 'now', 'U0SAM0001', '1')"
 )
 
 
@@ -245,9 +252,9 @@ def test_an_answer_is_recorded_once_with_who_gave_it(store: Store, path: Path) -
     assert yes is not None
     assert no is not None
     assert store.answer(yes.item.id) is None
-    assert store.answer_question(OWNER, no, "U0SAM0001") is True
+    assert store.answer_question(OWNER, no, "U0SAM0001") is Answered.ANSWERED
     assert store.answer(no.item.id) == ({"button": 1, "kind": "no"}, "U0SAM0001")
-    assert store.answer_question(OWNER, yes, "U0LUIS0005") is False  # the first answer stands
+    assert store.answer_question(OWNER, yes, "U0LUIS0005") is Answered.NOT_OPEN  # the first answer stands
     assert store.answer(no.item.id) == ({"button": 1, "kind": "no"}, "U0SAM0001")
     [item] = store.questions(POST)
     assert item.status is QuestionStatus.ANSWERED
@@ -260,7 +267,7 @@ def test_a_stale_question_takes_no_answer(store: Store) -> None:
     yes = store.button(YES)
     assert yes is not None
     reply_again(store, "1790000100.000100", 2, DryRunOutcome.RETRACTED)
-    assert store.answer_question(OWNER, yes, "U0SAM0001") is False
+    assert store.answer_question(OWNER, yes, "U0SAM0001") is Answered.NOT_OPEN
     assert store.answer(yes.item.id) is None
 
 
@@ -273,9 +280,52 @@ def test_answering_needs_the_lock(store: Store) -> None:
         store.answer_question(OWNER, yes, "U0SAM0001")
 
 
-def test_the_poster_is_the_author_of_the_oldest_message(store: Store) -> None:
-    reply = PostKey(POST.workspace_id, POST.channel_id, "1790000003.000000")
-    store.place_message(OWNER, reply, user_id="U0LUIS0005", thread_ts=POST.ts, window_seconds=5)
-    assert store.post_poster(POST) == "U0SAM0001"
-    with pytest.raises(KeyError):
-        store.post_poster(PostKey(POST.workspace_id, POST.channel_id, "1790000999.000100"))
+def test_a_question_keeps_who_may_answer_it_and_when_its_plan_expires(store: Store, path: Path) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    [item] = store.questions(POST)
+    assert (item.poster_id, item.expires_from) == ("U0SAM0001", POST.ts)
+    with sqlite3.connect(path) as raw:
+        for change in ("poster_id = 'U0LUIS0005'", "expires_from = '1790009999.000100'"):
+            with pytest.raises(sqlite3.DatabaseError, match="a question never changes"):
+                raw.execute(f"UPDATE review_items SET {change}")  # noqa: S608
+    reply_again(store, "1790000100.000100", 2, DryRunOutcome.RETRACTED)
+    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.DatabaseError, match="knows its poster"):
+        raw.execute(
+            "INSERT INTO review_items (post_id, revision, question, approver_only, channel_id, status, created_at)"
+            " VALUES (1, 3, '{}', 0, 'C0STOCK001', 'open', 'now')"
+        )
+
+
+@pytest.mark.parametrize("change", ["message", "edit", "later_reply", "later_withheld"])
+def test_a_post_that_moved_on_from_its_question_takes_no_answer(store: Store, change: str) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    yes = store.button(YES)
+    assert yes is not None
+    later = PostKey(POST.workspace_id, POST.channel_id, "1790000100.000100")
+    if change == "message":
+        store.place_message(OWNER, later, user_id="U0SAM0001", thread_ts=POST.ts, window_seconds=5)
+    elif change == "edit":
+        store.note_revision(OWNER, POST)
+    elif change == "later_reply":
+        reply_again(store, later.ts, 2, DryRunOutcome.GAVE_UP)  # a revised reply that never reached Slack
+    else:
+        reply_again(store, later.ts, 2, DryRunOutcome.WITHHELD)
+    assert store.answer_question(OWNER, yes, "U0SAM0001") is Answered.POST_CHANGED
+    assert store.answer(yes.item.id) is None
+    assert store.questions(POST)[0].status is QuestionStatus.OPEN
+
+
+def test_an_unchanged_revision_keeps_the_question_answerable(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    reply_again(store, "1790000100.000100", 2, DryRunOutcome.UNCHANGED)
+    yes = store.button(YES)
+    assert yes is not None
+    assert store.answer_question(OWNER, yes, "U0SAM0001") is Answered.ANSWERED
+
+
+def test_a_button_of_another_question_answers_nothing(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    yes = store.button(YES)
+    assert yes is not None
+    forged = replace(yes, id="z" * 22)  # no such button of this question
+    assert store.answer_question(OWNER, forged, "U0SAM0001") is Answered.NOT_OPEN

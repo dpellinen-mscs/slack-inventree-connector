@@ -95,6 +95,8 @@ from stockthread.slack.replies import (
     with_question,
 )
 from stockthread.store import (
+    Answered,
+    Button,
     DryRunOutcome,
     EventStatus,
     LockLost,
@@ -315,9 +317,9 @@ class Worker:
 
     def _handle_click(self, payload: object) -> tuple[EventStatus, str]:
         """Record the answer a click on a question's button gives, after the ingest checks again and the checks
-        against the stored button: the same channel and message, a question still open and not expired, and a
-        user who may answer it (design section 4, "Authorization"). Every refusal is finished as dropped, with
-        its reason as the outcome."""
+        against the stored button: the same channel and message, a question still open and not expired, a post
+        that has not moved on from the dry run that asked it, and a user who may answer it (design section 4,
+        "Authorization"). Every refusal is finished as dropped, with its reason as the outcome."""
         click = ingest_action(payload, self.settings.slack)
         if isinstance(click, Drop):
             return EventStatus.DROPPED, click.reason.value
@@ -325,20 +327,20 @@ class Worker:
             return EventStatus.DROPPED, "not_a_click"
         if click.action_id != ANSWER_ACTION:
             return EventStatus.DROPPED, "action_not_handled_yet"
-        refused = self._refuse_answer(click)
-        if refused:
-            return EventStatus.DROPPED, refused
-        button = self.store.button(click.value)
-        if button is None or not self.store.answer_question(self.owner, button, click.user):
-            return EventStatus.DROPPED, "already_answered"  # answered, or gone stale, since it was checked
-        log.info("post %s: question answered", button.item.post.ts)
-        return EventStatus.DONE, "answered"
-
-    def _refuse_answer(self, click: Click) -> str:
-        """Why the click cannot answer, or "" when it can."""
         button = self.store.button(click.value)
         if button is None:
-            return "unknown_button"  # never stored, or the reply was posted again with new buttons
+            return EventStatus.DROPPED, "unknown_button"  # never stored, or the reply was posted again
+        refused = self._refuse_answer(click, button)
+        if refused:
+            return EventStatus.DROPPED, refused
+        answered = self.store.answer_question(self.owner, button, click.user)
+        if answered is not Answered.ANSWERED:
+            return EventStatus.DROPPED, answered.value
+        log.info("post %s: question answered", button.item.post.ts)
+        return EventStatus.DONE, answered.value
+
+    def _refuse_answer(self, click: Click, button: Button) -> str:
+        """Why the click cannot answer, or "" when it can."""
         item = button.item
         if (
             item.post.workspace_id != self.settings.slack.workspace_id
@@ -351,10 +353,12 @@ class Worker:
             return "stale"
         if item.status is QuestionStatus.ANSWERED:
             return "already_answered"
-        if self._now() - seconds(item.post.ts) > self.settings.slack.plan_expiry_hours * 3600:
+        # From the same time as the revisions of the post (`_reply`): its plan expires as one.
+        if self._now() - seconds(item.expires_from or item.post.ts) > self.settings.slack.plan_expiry_hours * 3600:
             return "expired"
-        approvers = self.settings.slack.approvers
-        if click.user not in approvers and (item.approver_only or click.user != self.store.post_poster(item.post)):
+        if click.user in self.settings.slack.approvers:
+            return ""
+        if item.approver_only or item.poster_id is None or click.user != item.poster_id:
             return "not_allowed"
         return ""
 
@@ -504,6 +508,8 @@ class Worker:
                     question_json(question),
                     question.approver_only,
                     [(button_id, choice_json(choice)) for button_id, choice in zip(ids, buttons, strict=True)],
+                    poster=poster,
+                    expires_from=post.key.ts if post.revision > 1 else post.newest_ts,  # as `since` above
                 )
         except Exception as error:
             _log_failure("question", key.ts, error)
