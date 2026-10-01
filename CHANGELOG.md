@@ -10,6 +10,9 @@ Nothing is released yet. The connector cannot write stock in this state.
 
 ### Added
 
+- Questions in the thread: an answer by button is acted on at once. A revised dry run applies every
+  answer about the same reading, validates again and asks the next question; a "no" to a doubt
+  about the reading says it was rejected and that nothing of it will be applied (migration 0013).
 - HTTP mode for `stockthread run` (`slack.transport = "http"`): waitress serves the signed Events API
   and button clicks at `[slack.http]` `host`, `port` and `path`, with `manifests/slack-http.json`.
 - Design, roadmap and architecture decisions (`docs/`).

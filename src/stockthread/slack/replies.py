@@ -182,12 +182,15 @@ def dry_run_reply(
     locations: Mapping[int, str],
     *,
     revised: bool = False,
+    answered: bool = False,
 ) -> dict[str, Any]:
     """The body of the dry-run reply: `text` for notifications, and `blocks`. Nothing was written. `revised`:
-    the post was read again because the thread changed, and this reply takes the place of the one above."""
+    the post was read again because the thread changed, and this reply takes the place of the one above.
+    `answered`: what changed is only that a question was answered."""
     if not views:
         raise ValueError("a dry-run reply shows at least one movement")
-    heading = "*Revised dry run* (the thread changed)." if revised else "*Dry run.*"
+    because = "a question was answered" if answered else "the thread changed"
+    heading = f"*Revised dry run* ({because})." if revised else "*Dry run.*"
     blocks: list[dict[str, Any]] = [_section(f"{heading} Nothing was changed in inventory.")]
     for number, view in enumerate(views[:MAX_MOVEMENTS], start=1):
         movement = view.movement
@@ -238,6 +241,19 @@ def retraction_notice(why: str) -> dict[str, Any]:
     }
 
 
+def rejection_notice() -> dict[str, Any]:
+    """The reply once a "no" in the thread rejected the reading: nothing of it will be applied."""
+    return {
+        "text": "The reading above was rejected. Nothing will be applied.",
+        "blocks": [
+            _section(
+                "*The reading above was rejected.* Nothing was changed in inventory, and nothing of this reading"
+                " will be applied. To record the movement, edit the post or reply in this thread with what happened."
+            )
+        ],
+    }
+
+
 ANSWER_ACTION = "answer"
 """The action id of every question button. Its value is the id of the stored button row."""
 
@@ -266,7 +282,10 @@ def question_message(
     ask = question.ask
     if ask is Ask.CONFIRM:
         about = f"About {written}: " if written else ""
-        text = f"{about}{REASONS[question.reason]} Is this reading of the post right?"
+        # Which doubt of its kind: a "yes" clears this one only. The line is already named by its item.
+        detail = re.sub(r"^line \d+:?\s*", "", question.detail)
+        doubt = f"{REASONS[question.reason].rstrip('.')} ({escape(detail)})." if detail else REASONS[question.reason]
+        text = f"{about}{doubt} Is this reading of the post right?"
     elif ask is Ask.MOVEMENT_TYPE:
         text = "What kind of movement is this?"
     elif ask is Ask.NAME_PART:

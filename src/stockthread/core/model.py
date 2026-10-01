@@ -243,7 +243,8 @@ class MatchStatus(StrEnum):
 
 
 class MatchRule(StrEnum):
-    """The rule that produced a match (design section 10). Only exact, normalized and alias can authorize a write."""
+    """The rule that produced a match (design section 10). Only exact, normalized, alias and answer can authorize a
+    write, and only as far as the write gate lets any match (design section 4, "Acting on an answer")."""
 
     EXACT = "exact"
     NORMALIZED = "normalized"
@@ -252,9 +253,11 @@ class MatchRule(StrEnum):
     """Every word of the text is one of the record's words, but the whole text names nothing exactly."""
     FUZZY = "fuzzy"
     """Like WORDS, but at least one word needed the typo allowance."""
+    ANSWER = "answer"
+    """A person picked the record from the question's candidates, or confirmed it, in the thread (core/answers.py)."""
 
 
-_AUTHORIZING_RULES = frozenset({MatchRule.EXACT, MatchRule.NORMALIZED, MatchRule.ALIAS})
+_AUTHORIZING_RULES = frozenset({MatchRule.EXACT, MatchRule.NORMALIZED, MatchRule.ALIAS, MatchRule.ANSWER})
 """An allowlist, so a rule added later cannot authorize a write by default."""
 
 
@@ -282,7 +285,7 @@ class Match:
 
     @property
     def can_authorize_a_write(self) -> bool:
-        """True only for one record found by an exact, normalized or alias rule."""
+        """True only for one record found by an exact, normalized or alias rule, or given by an answer."""
         return self.status is MatchStatus.MATCHED and self.rule in _AUTHORIZING_RULES
 
     def review_reason(self, *, kind: Literal["part", "location"]) -> ReviewReason | None:

@@ -43,13 +43,14 @@ given up on, not withheld) before the call has ended.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -57,19 +58,25 @@ from typing import Any, Protocol
 
 from stockthread.config import Settings
 from stockthread.core import extract_rules
+from stockthread.core.answers import Effects, Given, replay
 from stockthread.core.grouping import seconds
 from stockthread.core.matching import Catalog, match_location, match_part
 from stockthread.core.model import (
+    CandidateMovement,
     Extraction,
+    Flag,
+    LineItem,
     Match,
     MatchStatus,
     MessageInput,
+    MovementType,
+    PostFlag,
     PostKey,
     ReasonCode,
     ReasonSource,
     ReviewReason,
 )
-from stockthread.core.questions import choice_json, choices, pick_question, question_json
+from stockthread.core.questions import choice_json, choices, pick_question, question_json, reason_line
 from stockthread.core.validate import photo_not_read, validate
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.catchup import is_catch_up
@@ -94,6 +101,7 @@ from stockthread.slack.replies import (
     gate_reasons,
     question_closed,
     question_message,
+    rejection_notice,
     retraction_notice,
     with_question,
     without_question,
@@ -111,6 +119,7 @@ from stockthread.store import (
     WaitingPost,
     new_button_id,
 )
+from stockthread.store.db import DryRunRecord
 
 log = logging.getLogger(__name__)
 
@@ -239,6 +248,8 @@ class _Sent:
     """The timestamps of the messages the decision read (None: all the post holds when it is recorded)."""
     changes: int | None = None
     """The newest noted edit or deletion the decision knew of (None: the newest when it is recorded)."""
+    answers: int | None = None
+    """The newest answered question the decision knew of (None: the newest when it is recorded)."""
     outcome: DryRunOutcome = DryRunOutcome.REPLIED
     """REPLIED, or RETRACTED for a notice that the reply above no longer stands."""
     checks: int = 0
@@ -567,6 +578,7 @@ class Worker:
         # Before anything is read: what is read is the post as of this change, and one noted from here on makes
         # the next revision.
         changes = self.store.post_changes_through(key)
+        answers = self.store.post_answers_through(key)
         age = now - seconds(post.newest_ts)
         # A revision's movement is as old as the post: a new reply does not make a week-old movement current.
         since = seconds(post.key.ts) if post.revision > 1 else seconds(post.newest_ts)
@@ -581,17 +593,29 @@ class Worker:
             # Unread, but decided on the messages the post holds now: one that joins later makes a revision.
             held = tuple(self.store.post_messages(key))
             self._conclude(
-                post, now, DryRunOutcome.WITHHELD, None, {"withheld": why}, why=why, read=held, changes=changes
+                post,
+                now,
+                DryRunOutcome.WITHHELD,
+                None,
+                {"withheld": why},
+                why=why,
+                read=held,
+                changes=changes,
+                answers=answers,
             )
             return True
         messages, poster, caught_up = read
         seen = tuple(message.ts for message in messages)
+        history = self.store.dry_run_history(key) if post.revision > 1 else []
         try:
-            extraction, unheard = self._extract(key, messages, now, ask)
+            # Only answers are new: the post reads as it did, so the reading that stands is kept rather than
+            # asked for again (a model may read the same words otherwise, and the answers would no longer fit).
+            kept = _kept_reading(history, seen, changes)
+            extraction, unheard = (kept, "") if kept is not None else self._extract(key, messages, now, ask)
         except LockLost:
             raise
         except Exception as error:
-            self._broken(post, now, error, read=seen, changes=changes)
+            self._broken(post, now, error, read=seen, changes=changes, answers=answers)
             return True
         if extraction is None:
             return False  # waits for the LLM provider, or for the queue to be drained after its call
@@ -621,6 +645,7 @@ class Worker:
                 why=unread,
                 read=seen,
                 changes=changes,
+                answers=answers,
             )
             return True
         catalog = self.catalog()
@@ -629,18 +654,32 @@ class Worker:
         standing = self._standing(post)
         try:
             views = self._views(extraction, messages, poster, catalog, late)
-            decided = record(views, late)
+            reading = _digest(record(views, late))
+            effects = self._replay(key, history, reading, answers, views)
+            views = self._answered(views, effects, extraction, messages, late)
+            decided = {
+                **record(views, late),
+                "reading": reading,  # before the answers: what a later reading is compared with
+                "answers": effects.applied,
+                "ignored": effects.ignored,
+                "rejected": effects.rejected,
+                "extracted": [movement.movement_type.value for movement in extraction.movements],  # before answers
+            }
             parts = {part.pk: part.name for part in catalog.parts}
             locations = {location.pk: location.path for location in catalog.locations}
-            body = dry_run_reply(views, parts, locations, revised=standing is not None)
+            if effects.rejected is not None:
+                body = rejection_notice()
+            else:
+                body = dry_run_reply(views, parts, locations, revised=standing is not None, answered=kept is not None)
         except Exception as error:
-            self._broken(post, now, error, extraction.extractor, read=seen, changes=changes)
+            self._broken(post, now, error, extraction.extractor, read=seen, changes=changes, answers=answers)
             return True
         # The one question the post needs goes in the reply, with buttons whose ids are stored with it. A
-        # question that cannot be put is left out: the reply still says what needs a human.
+        # question that cannot be put is left out: the reply still says what needs a human. A rejected reading
+        # asks nothing: a corrected post or thread reply is read afresh.
         asked = None
         try:
-            question = pick_question(views)
+            question = pick_question(views) if effects.rejected is None else None
             if question is not None:
                 buttons = choices(question)
                 ids = [new_button_id() for _ in buttons]
@@ -656,13 +695,81 @@ class Worker:
             _log_failure("question", key.ts, error)
         if standing is not None and _same_reading(standing, decided):
             log.info("post %s: revision %d reads as the reply that stands", key.ts, post.revision)
-            self._finish(key, DryRunOutcome.UNCHANGED, extraction.extractor, decided, post.revision, seen, changes)
+            self._finish(
+                key, DryRunOutcome.UNCHANGED, extraction.extractor, decided, post.revision, seen, changes, answers
+            )
             return True
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
         # before the outcome is recorded posts the reply again at restart; a duplicate beats a silent drop.
         self.store.close_siblings(self.owner, key)
-        self._post(key, now, _Sent(extraction.extractor, decided, body, post.revision, seen, changes, question=asked))
+        self._post(
+            key,
+            now,
+            _Sent(extraction.extractor, decided, body, post.revision, seen, changes, answers, question=asked),
+        )
         return True
+
+    def _replay(
+        self,
+        key: PostKey,
+        history: Sequence[DryRunRecord],
+        reading: str,
+        through: int,
+        views: Sequence[MovementView],
+    ) -> Effects:
+        """The effects of the answers given about this reading: those to questions asked by the newest dry runs
+        in a row that read the post the same way, up to the newest answer known when the post was read. A dry run
+        that read it otherwise (or did not read it) ends the row: answers before it are kept, and not applied."""
+        same: set[int] = set()
+        for found in reversed(history):
+            if found.outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or not found.result:
+                break
+            if _digest(found.result) != reading:
+                break
+            same.add(found.revision)
+        given: list[Given] = []
+        unreadable: list[int] = []
+        for item, answer, by in self.store.answers(key, through) if same else ():
+            if item.revision not in same:
+                continue
+            try:
+                given.append(Given.stored(item.id, item.question, answer, by))
+            except ValueError:
+                unreadable.append(item.id)
+        effects = replay(given, [len(view.movement.line_items) for view in views], self.settings.slack.approvers)
+        effects.ignored = sorted([*effects.ignored, *unreadable])
+        return effects
+
+    def _answered(
+        self,
+        views: Sequence[MovementView],
+        effects: Effects,
+        extraction: Extraction,
+        messages: Sequence[MessageInput],
+        late: bool,
+    ) -> list[MovementView]:
+        """The views with the answers' effects: a picked type is validated again, a picked or confirmed record
+        replaces its match, and a cleared reason is left out."""
+        found = []
+        for n, view in enumerate(views):
+            movement, reasons = view.movement, view.reasons
+            if n in effects.types:
+                movement = replace(movement, movement_type=effects.types[n])
+                reasons = self._reasons(movement, extraction, messages, late)
+            found.append(
+                MovementView(
+                    movement=movement,
+                    items=[effects.parts.get((n, line), match) for line, match in enumerate(view.items)],
+                    source=effects.places.get((n, "source"), view.source),
+                    destination=effects.places.get((n, "destination"), view.destination),
+                    reasons=tuple(
+                        reason
+                        for reason in reasons
+                        if (n, reason_line(reason, movement), reason.code, reason.detail) not in effects.cleared
+                    ),
+                )
+            )
+        return found
 
     def _standing(self, post: WaitingPost) -> Mapping[str, Any] | None:
         """For a revision: what the reply that stands in the thread decided, or {} when its record expired.
@@ -688,19 +795,29 @@ class Worker:
         why: str | None = None,
         read: tuple[str, ...] | None = None,
         changes: int | None = None,
+        answers: int | None = None,
     ) -> None:
         """Finish a post that gets no dry-run reply. A revision whose post had a reply standing posts a notice
         that it no longer does, except when the post is too old: its reply has expired by then."""
         reason = why or ("silent" if outcome is DryRunOutcome.SILENT else "failed")
         if reason == "too_old" or self._standing(post) is None:
-            self._finish(post.key, outcome, extractor, result, post.revision, read, changes)
+            self._finish(post.key, outcome, extractor, result, post.revision, read, changes, answers)
             return
         log.info("post %s: revision %d takes the reply back (%s)", post.key.ts, post.revision, reason)
         decided = {**result, "retracted": reason, "instead_of": outcome.value}
         self._post(
             post.key,
             now,
-            _Sent(extractor, decided, retraction_notice(reason), post.revision, read, changes, DryRunOutcome.RETRACTED),
+            _Sent(
+                extractor,
+                decided,
+                retraction_notice(reason),
+                post.revision,
+                read,
+                changes,
+                answers,
+                DryRunOutcome.RETRACTED,
+            ),
         )
 
     def _extract(
@@ -802,6 +919,7 @@ class Worker:
             revision=sent.revision,
             read=sent.read,
             changes=sent.changes,
+            answers=sent.answers,
             question=sent.question,
         )
         if sent.outcome is DryRunOutcome.RETRACTED:
@@ -819,28 +937,30 @@ class Worker:
         catalog: Catalog,
         late: bool,
     ) -> list[MovementView]:
-        text = "\n".join(message.text for message in messages if not message.deleted)
-        lateness = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if late else ()
-        # No extractor sees a photo's pixels (design section 13): the photo may show other items, another
-        # quantity or serials, so a person checks the reading against it.
-        unread = (ReviewReason(ReasonCode.PHOTO_NOT_READ, ReasonSource.RULE),) if photo_not_read(messages) else ()
         return [
             MovementView(
                 movement=movement,
                 items=[_part(item.item_text, catalog, poster) for item in movement.line_items],
                 source=_location(movement.source_text, catalog, poster),
                 destination=_location(movement.destination_text, catalog, poster),
-                reasons=lateness
-                + unread
-                + validate(
-                    movement,
-                    text,
-                    max_quantity=self.settings.policy.max_quantity,
-                    post_flags=extraction.post_flags,
-                ),
+                reasons=self._reasons(movement, extraction, messages, late),
             )
             for movement in extraction.movements
         ]
+
+    def _reasons(
+        self, movement: CandidateMovement, extraction: Extraction, messages: Sequence[MessageInput], late: bool
+    ) -> tuple[ReviewReason, ...]:
+        text = "\n".join(message.text for message in messages if not message.deleted)
+        lateness = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if late else ()
+        # No extractor sees a photo's pixels (design section 13): the photo may show other items, another
+        # quantity or serials, so a person checks the reading against it.
+        unread = (ReviewReason(ReasonCode.PHOTO_NOT_READ, ReasonSource.RULE),) if photo_not_read(messages) else ()
+        return (
+            lateness
+            + unread
+            + validate(movement, text, max_quantity=self.settings.policy.max_quantity, post_flags=extraction.post_flags)
+        )
 
     def _post_failed(self, key: PostKey, now: Decimal, error: Exception, sent: _Sent) -> None:
         failures = self._failures.get(key) or _Failures(first=now, count=0, next_try=now)
@@ -856,7 +976,14 @@ class Worker:
         if now - failures.first >= RETRY_FOR_SECONDS:
             self._failures.pop(key)
             self._finish(
-                key, DryRunOutcome.GAVE_UP, sent.extractor, sent.decided, sent.revision, sent.read, sent.changes
+                key,
+                DryRunOutcome.GAVE_UP,
+                sent.extractor,
+                sent.decided,
+                sent.revision,
+                sent.read,
+                sent.changes,
+                sent.answers,
             )
 
     def _broken(
@@ -868,10 +995,12 @@ class Worker:
         *,
         read: tuple[str, ...] | None = None,
         changes: int | None = None,
+        answers: int | None = None,
     ) -> None:
         """The pure pipeline raised on this post: it gets no reply, so it cannot stop every later post."""
         _log_failure("post", post.key.ts, error)
-        self._conclude(post, now, DryRunOutcome.FAILED, extractor, {"error": _code(error)}, read=read, changes=changes)
+        result = {"error": _code(error)}
+        self._conclude(post, now, DryRunOutcome.FAILED, extractor, result, read=read, changes=changes, answers=answers)
 
     def _finish(
         self,
@@ -882,6 +1011,7 @@ class Worker:
         revision: int = 1,
         read: tuple[str, ...] | None = None,
         changes: int | None = None,
+        answers: int | None = None,
     ) -> None:
         self._llm_read.pop(key, None)
         self._llm_waiting.pop(key, None)
@@ -896,6 +1026,7 @@ class Worker:
             revision=revision,
             read=read,
             changes=changes,
+            answers=answers,
         )
 
     def _messages(self, key: PostKey, changes: int) -> tuple[Sequence[MessageInput], str, bool] | str:
@@ -1060,18 +1191,81 @@ def _record(
     }
 
 
+def _reading(result: Mapping[str, Any]) -> Any:
+    """The movements, matches and reasons a record decided. Lateness is left out: it depends on when the post was
+    read, not on what the thread says."""
+    movements = json.loads(json.dumps(result.get("movements")))
+    for movement in movements or ():
+        movement["reasons"] = [r for r in movement["reasons"] if r["code"] != ReasonCode.LATE_INGEST.value]
+        movement["gate"] = [g for g in movement["gate"] if g[0] != ReasonCode.LATE_INGEST.value]
+    return movements
+
+
+def _digest(result: Mapping[str, Any]) -> str:
+    """What a record read, before any answer: its `reading`, or for a record without one (none applied an answer
+    then) the digest of its movements."""
+    stored = result.get("reading")
+    if isinstance(stored, str):
+        return stored
+    canonical = json.dumps(_reading(result), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _same_reading(standing: Mapping[str, Any], decided: Mapping[str, Any]) -> bool:
-    """Whether a revision decided the same movements, matches and reasons as the reply that stands. Lateness is
-    left out: it depends on when each was read, not on what the thread says."""
+    """Whether a revision decided the same movements, matches and reasons as the reply that stands, with the same
+    answers. A new answer always posts a reply, even one that changes nothing: it asks the next question."""
 
-    def reading(result: Mapping[str, Any]) -> Any:
-        movements = json.loads(json.dumps(result.get("movements")))
-        for movement in movements or ():
-            movement["reasons"] = [r for r in movement["reasons"] if r["code"] != ReasonCode.LATE_INGEST.value]
-            movement["gate"] = [g for g in movement["gate"] if g[0] != ReasonCode.LATE_INGEST.value]
-        return movements
+    def answered(result: Mapping[str, Any]) -> tuple[Any, ...]:
+        return (result.get("answers") or [], result.get("ignored") or [], result.get("rejected"))
 
-    return bool(standing) and reading(standing) == reading(decided)
+    return bool(standing) and _reading(standing) == _reading(decided) and answered(standing) == answered(decided)
+
+
+def _kept_reading(history: Sequence[DryRunRecord], read: Sequence[str], changes: int) -> Extraction | None:
+    """The extraction of the newest dry run, when it read the same messages with the same changes as now: only
+    answers are new. None otherwise, or when it kept no reading (a notice, a silent or failed one, an expired
+    record)."""
+    if not history:
+        return None
+    last = history[-1]
+    result = last.result
+    if (
+        last.outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED)
+        or not result
+        or not last.extractor
+        or last.changes_through != changes
+        or result.get("messages") != list(read)
+        or not result.get("movements")
+    ):
+        return None
+    extracted = result.get("extracted") or [movement["type"] for movement in result["movements"]]
+    return Extraction(
+        last.extractor,
+        tuple(
+            CandidateMovement(
+                MovementType(kind),
+                tuple(
+                    LineItem(
+                        item["item_text"],
+                        _decimal(item["quantity"]),
+                        item["unit"],
+                        _decimal(item["pack_size"]),
+                        tuple(item["serials"]),
+                    )
+                    for item in movement["items"]
+                ),
+                movement["source_text"],
+                movement["destination_text"],
+                frozenset(Flag(flag) for flag in movement["flags"]),
+            )
+            for kind, movement in zip(extracted, result["movements"], strict=True)
+        ),
+        frozenset(PostFlag(flag) for flag in result["post_flags"]),
+    )
+
+
+def _decimal(value: str | None) -> Decimal | None:
+    return None if value is None else Decimal(value)
 
 
 def _retry_after(error: Exception) -> int:

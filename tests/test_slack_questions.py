@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from decimal import Decimal
 from typing import Any
 
@@ -36,6 +37,23 @@ PARTS = {1: "Norvane Disc 40 Access Point", 2: "Norvane Disc 60 Access Point", 3
 LOCATIONS = {10: "Warehouse/Main Stock", 11: "Vehicles/Truck 1", 12: "Vehicles/Truck 2", 13: "<!channel>", 14: "  "}
 LONG_PATH = "Region/" * 20 + "Shelf A"
 EXACT = Match(MatchStatus.MATCHED, MatchRule.EXACT, 1)
+_KINDS = "|".join(kind.value for kind in MovementType)
+_RULES = "|".join(rule.value for rule in MatchRule)
+_DETAILS = (
+    r"line \d+",
+    r"line \d+: (above policy\.max_quantity|serial count differs from the quantity|serial not in the text)",
+    r"line \d+: the unit is not the one in the text",
+    "no number|no text|type unclear|container word in the text|vague quantity word in the text",
+    "correction word in the text|someone else is named as the actor|a person is mentioned",
+    f"no word in the text supports ({_KINDS})",
+    "question or request|plan or condition|a time ahead|negation|hedge|source|destination",
+    "the text does not put the (source|destination) on that side",
+    f"a ({_KINDS}) whose destination is a vehicle|take_to_vehicle whose destination names no vehicle",
+    "a receive has no source location|zero quantity outside a count|source and destination are the same",
+    f"(part|location) found by the ({_RULES}) rule",
+)
+RULE_DETAIL = re.compile("|".join(f"({detail})" for detail in _DETAILS))
+"""Every detail the rules write (core/validate.py, Match.review_reason): fixed words, never words of the post."""
 
 
 def view(item: str | None = "Disc 40", **fields: Any) -> MovementView:
@@ -184,6 +202,14 @@ def test_a_confirmation_about_a_line_names_its_item() -> None:
     assert text_of(message(question)).startswith("About “Disc 40”: ")
 
 
+def test_a_confirmation_says_which_doubt_of_its_kind_it_asks_about() -> None:
+    same = Question(Ask.CONFIRM, ReasonCode.CONTRADICTION, 0, detail="source and destination are the same")
+    assert "contradicts itself (source and destination are the same). Is" in text_of(message(same))
+    limit = Question(Ask.CONFIRM, ReasonCode.ITEM_NOT_IN_TEXT, 0, 0, detail="line 1")
+    assert "()" not in text_of(message(limit))
+    assert "(line" not in text_of(message(limit))
+
+
 def test_the_notification_keeps_asterisks_of_the_post() -> None:
     question = Question(Ask.CONFIRM_PART, ReasonCode.FUZZY_MATCH, 0, 0, None, (1,))
     body = message(question, view("2*4 bracket"))
@@ -218,6 +244,8 @@ def test_every_corpus_question_is_stored_as_ids_and_read_back(case: dict[str, An
         assert choice_from_json(json.loads(json.dumps(choice_json(choice)))) == choice
     # Codes, indexes and keys only: no words of the post.
     codes = {ask.value for ask in Ask} | {code.value for code in ReasonCode} | {"source", "destination"}
+    detail = stored.pop("detail")
+    assert detail == "" or RULE_DETAIL.fullmatch(detail), detail
     for name, value in stored.items():
         for leaf in value if isinstance(value, list) else [value]:
             assert leaf is None or isinstance(leaf, int) or leaf in codes, name
@@ -258,6 +286,14 @@ def test_a_stored_question_with_a_bad_side_or_index_is_refused() -> None:
     without = {name: value for name, value in good.items() if name != "approver_only"}
     with pytest.raises(ValueError, match="stored question"):
         question_from_json(without)
+    with pytest.raises(ValueError, match="stored question"):
+        question_from_json({**good, "detail": None})
+
+
+def test_a_question_stored_before_details_were_kept_has_none() -> None:
+    stored = question_json(Question(Ask.CONFIRM, ReasonCode.CONTRADICTION, 0, detail="zero quantity outside a count"))
+    del stored["detail"]
+    assert question_from_json(stored).detail == ""  # so its "yes" clears no detailed reason: that one is asked again
 
 
 def test_the_question_goes_below_the_reply_in_one_message() -> None:
