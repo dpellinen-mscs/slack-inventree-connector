@@ -93,6 +93,9 @@ class FakeSlack:
         self.posted.append(kwargs)
         return {"ok": True, "ts": f"1790009999.{len(self.posted):06d}"}
 
+    def chat_postEphemeral(self, **kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("no clicks in these tests")
+
 
 class Clock:
     def __init__(self, ts: str) -> None:

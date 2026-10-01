@@ -53,6 +53,8 @@ address in turn and once more after an error, a body can drip, and a DNS lookup 
 POST_DEADLINE_SECONDS = 30.0
 """For a whole reply (DeadlinePoster). Well under LOCK_STALE_AFTER: the worker beats the lock right before
 it posts."""
+NOTE_DEADLINE_SECONDS = 10.0
+"""For a note to one user (DeadlinePoster.chat_postEphemeral). The worker beats the lock right before each."""
 CATALOG_MARGIN_SECONDS = 30
 """A catalog read is cut off this long before the lock could go stale."""
 LLM_MARGIN_SECONDS = 30
@@ -120,9 +122,12 @@ class DeadlinePoster:
     ended nothing else is posted.
     """
 
-    def __init__(self, client: Any, deadline: float = POST_DEADLINE_SECONDS) -> None:
+    def __init__(
+        self, client: Any, deadline: float = POST_DEADLINE_SECONDS, note_deadline: float = NOTE_DEADLINE_SECONDS
+    ) -> None:
         self._client = client
         self._deadline = deadline
+        self._note_deadline = note_deadline
         self._calls: dict[tuple[Any, Any], _Call] = {}
 
     def chat_postMessage(self, **kwargs: Any) -> Any:  # slack_sdk's name
@@ -132,7 +137,9 @@ class DeadlinePoster:
             if any(not other.done.is_set() for other in self._calls.values()):
                 raise PosterBusy
             call = self._calls[key] = _Call()
-            threading.Thread(target=self._post, args=(call, kwargs), name="slack-post", daemon=True).start()
+            threading.Thread(
+                target=self._run, args=(call, self._client.chat_postMessage, kwargs), name="slack-post", daemon=True
+            ).start()
             call.done.wait(self._deadline)
         if not call.done.is_set():
             raise PostStillRunning
@@ -141,9 +148,23 @@ class DeadlinePoster:
             raise call.error
         return call.result
 
-    def _post(self, call: _Call, kwargs: dict[str, Any]) -> None:
+    def chat_postEphemeral(self, **kwargs: Any) -> Any:  # slack_sdk's name
+        """A note to one user, on its own helper thread. Not tracked: posting it twice does no harm, and a note
+        that runs out of time is left running and not tried again."""
+        call = _Call()
+        threading.Thread(
+            target=self._run, args=(call, self._client.chat_postEphemeral, kwargs), name="slack-note", daemon=True
+        ).start()
+        if not call.done.wait(self._note_deadline):
+            raise PostStillRunning
+        if call.error is not None:
+            raise call.error
+        return call.result
+
+    @staticmethod
+    def _run(call: _Call, method: Callable[..., Any], kwargs: dict[str, Any]) -> None:
         try:
-            call.result = self._client.chat_postMessage(**kwargs)
+            call.result = method(**kwargs)
         except Exception as error:
             call.error = error
         finally:

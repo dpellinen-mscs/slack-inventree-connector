@@ -512,9 +512,19 @@ needs.
     as dropped, with its reason (`unknown_button`, `other_message`,
     `stale`, `already_answered`, `expired`, `not_allowed`,
     `post_changed`). Expiry is judged when the click is handled, so a
-    click that waited out an outage in the queue fails closed. Telling the
-    clicker why, and acting on the answer (validation again, the next
-    question), come next.
+    click that waited out an outage in the queue fails closed.
+  - **Told to the clicker (built).** Once a click is finished, the clicker
+    alone gets an ephemeral note in the thread (`chat.postEphemeral`,
+    covered by `chat:write`): that the answer is recorded, or why it is
+    not (out of date, replaced by a newer reply, already answered,
+    expired, approvers only, poster or approver only, the post changed).
+    The notes are fixed sentences that quote neither the post nor the
+    catalog (`replies.CLICK_FEEDBACK`). A payload the ingest checks drop,
+    and a button that does nothing yet, get no note. A note is best
+    effort: it is sent after the event is finished, with its own 10 second
+    deadline, and one that fails is logged by error class and not tried
+    again. A crash between the two loses the note, never the answer.
+    Acting on the answer (validation again, the next question) comes next.
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can
   approve. Display names are never trusted. Only the poster or an approver

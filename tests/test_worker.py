@@ -21,6 +21,7 @@ from stockthread.core.model import CandidateMovement, Extraction, LineItem, Mess
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.ingest import Drop, Revised
 from stockthread.slack.listener import Listener
+from stockthread.slack.replies import APPROVERS_ONLY, CLICK_FEEDBACK
 from stockthread.store import DryRunOutcome, LockLost, NewQuestion, StateConflict, Store
 from stockthread.store import db as store_db
 from stockthread.worker import (
@@ -57,6 +58,8 @@ class FakeSlack:
     def __init__(self) -> None:
         self.posted: list[dict[str, Any]] = []
         self.failures = 0
+        self.notes: list[dict[str, Any]] = []
+        self.note_failures = 0
 
     def chat_postMessage(self, **kwargs: Any) -> dict[str, Any]:
         if self.failures:
@@ -64,6 +67,13 @@ class FakeSlack:
             raise ConnectionError("synthetic outage")
         self.posted.append(kwargs)
         return {"ok": True, "ts": f"1790009999.{len(self.posted):06d}"}
+
+    def chat_postEphemeral(self, **kwargs: Any) -> dict[str, Any]:
+        if self.note_failures:
+            self.note_failures -= 1
+            raise ConnectionError("synthetic outage")
+        self.notes.append(kwargs)
+        return {"ok": True, "message_ts": f"1790008888.{len(self.notes):06d}"}
 
 
 class Clock:
@@ -2425,6 +2435,14 @@ def last_status(path: Path) -> tuple[str, str | None]:
     return statuses(path)[-1]
 
 
+def notes(worker: Worker, channel: str = CHANNEL) -> list[tuple[str, str]]:
+    """Who was told what about their clicks, each in the thread they clicked in."""
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    assert all((note["channel"], note["thread_ts"]) == (channel, ROOT) for note in slack.notes)
+    return [(note["user"], note["text"]) for note in slack.notes]
+
+
 def test_the_poster_answers_their_question_by_button(store: Store, clock: Clock, path: Path) -> None:
     worker = asked(store, clock)
     reply, ts = posted(worker)
@@ -2436,6 +2454,7 @@ def test_the_poster_answers_their_question_by_button(store: Store, clock: Clock,
     [item] = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
     assert item.status.value == "answered"
     assert store.answer(item.id) == ({"button": 1, "kind": "record", "record": 2, "movement_type": None}, SAM)
+    assert notes(worker) == [(SAM, CLICK_FEEDBACK["answered"])]
     with sqlite3.connect(path) as raw:
         assert raw.execute("SELECT actor FROM audit_log WHERE event = 'question_answered'").fetchall() == [("human",)]
 
@@ -2451,6 +2470,7 @@ def test_an_approver_may_answer_anyone_else_may_not(store: Store, clock: Clock, 
     assert last_status(path) == ("done", "answered")
     [item] = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
     assert store.answer(item.id) == ({"button": 0, "kind": "record", "record": 1, "movement_type": None}, LUIS)
+    assert notes(worker) == [(RIVER, CLICK_FEEDBACK["not_allowed"]), (LUIS, CLICK_FEEDBACK["answered"])]
 
 
 def test_only_an_approver_answers_a_question_for_approvers(store: Store, clock: Clock, path: Path) -> None:
@@ -2464,6 +2484,7 @@ def test_only_an_approver_answers_a_question_for_approvers(store: Store, clock: 
     clicked(store, click_on(reply, ts, 0, LUIS, at="1790090000.000200"), "2")
     worker.step()
     assert last_status(path) == ("done", "answered")
+    assert notes(worker) == [(SAM, APPROVERS_ONLY), (LUIS, CLICK_FEEDBACK["answered"])]
 
 
 def test_a_question_is_answered_once(store: Store, clock: Clock, path: Path) -> None:
@@ -2475,6 +2496,7 @@ def test_a_question_is_answered_once(store: Store, clock: Clock, path: Path) -> 
     assert statuses(path)[-2:] == [("done", "answered"), ("dropped", "already_answered")]
     [item] = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
     assert store.answer(item.id) == ({"button": 0, "kind": "record", "record": 1, "movement_type": None}, SAM)
+    assert notes(worker) == [(SAM, CLICK_FEEDBACK["answered"]), (LUIS, CLICK_FEEDBACK["already_answered"])]
 
 
 @pytest.mark.parametrize(
@@ -2486,7 +2508,8 @@ def test_a_question_is_answered_once(store: Store, clock: Clock, path: Path) -> 
         ({"action_id": "undo"}, "action_not_handled_yet"),
         ({"team": "T0OTHER01"}, "wrong_workspace"),
     ],
-)
+)  # the out-of-date note for the first three; nothing is said about a button that does nothing or a payload
+# the ingest checks drop
 def test_a_click_that_does_not_fit_its_stored_button_answers_nothing(
     store: Store, clock: Clock, path: Path, change: dict[str, str], outcome: str
 ) -> None:
@@ -2506,6 +2529,9 @@ def test_a_click_that_does_not_fit_its_stored_button_answers_nothing(
     worker.step()
     assert last_status(path) == ("dropped", outcome)
     assert [item.status.value for item in store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))] == ["open"]
+    told = outcome in ("unknown_button", "other_message")
+    said = notes(worker, change.get("channel", CHANNEL))
+    assert said == ([(SAM, CLICK_FEEDBACK[outcome])] if told else [])
 
 
 def test_a_click_on_a_stale_question_answers_nothing(store: Store, clock: Clock, path: Path) -> None:
@@ -2517,6 +2543,7 @@ def test_a_click_on_a_stale_question_answers_nothing(store: Store, clock: Clock,
     clicked(store, click_on(reply, ts, 0, SAM), "1")
     worker.step()
     assert last_status(path) == ("dropped", "stale")
+    assert notes(worker) == [(SAM, CLICK_FEEDBACK["stale"])]
 
 
 @pytest.mark.parametrize(("past", "outcome"), [(".000100", "answered"), (".000101", "expired")])
@@ -2529,6 +2556,8 @@ def test_a_click_after_the_plan_expired_answers_nothing(
     clicked(store, click_on(reply, ts, 0, SAM), "1")
     worker.step()
     assert last_status(path) == ("done" if outcome == "answered" else "dropped", outcome)
+    expected = "This question has expired: a post can be changed for 24 hours after it was made."
+    assert notes(worker) == [(SAM, CLICK_FEEDBACK["answered"] if outcome == "answered" else expected)]
 
 
 def test_the_plan_of_a_reply_answered_without_its_root_expires_from_the_reply(
@@ -2555,7 +2584,51 @@ def test_a_click_while_the_post_waits_for_its_revision_answers_nothing(store: St
     clock.at("1790000041.000000")
     worker.step()  # the message is placed, then the click is read; the revision is not due yet
     assert last_status(path) == ("dropped", "post_changed")
+    assert notes(worker) == [(SAM, CLICK_FEEDBACK["post_changed"])]
     assert [item.status.value for item in store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))] == ["open"]
+
+
+class CheckingSlack(FakeSlack):
+    """Notes what the click's event looks like in the store when its note is sent."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self.path = path
+        self.seen: list[tuple[str, str | None]] = []
+
+    def chat_postEphemeral(self, **kwargs: Any) -> dict[str, Any]:
+        self.seen.append(last_status(self.path))
+        return super().chat_postEphemeral(**kwargs)
+
+
+def test_the_note_is_sent_once_the_click_is_finished(store: Store, clock: Clock, path: Path) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    worker.slack = slack = CheckingSlack(path)
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    assert slack.seen == [("done", "answered")]
+
+
+def test_a_note_that_fails_is_logged_and_not_sent_again(
+    store: Store, clock: Clock, path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    slack.note_failures = 1
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    with caplog.at_level(logging.WARNING):
+        worker.step()
+    assert last_status(path) == ("done", "answered")
+    assert "click feedback" in caplog.text
+    assert "synthetic outage" not in caplog.text
+    worker.step()
+    assert notes(worker) == []
+    clicked(store, click_on(reply, ts, 1, SAM, at="1790000100.000200"), "2")
+    worker.step()
+    assert notes(worker) == [(SAM, CLICK_FEEDBACK["already_answered"])]
 
 
 def test_a_button_of_a_post_in_another_workspace_answers_nothing(store: Store, clock: Clock, path: Path) -> None:
