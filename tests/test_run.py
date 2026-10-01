@@ -560,10 +560,18 @@ class SlowClient:
             raise self.error
         return {"ok": True, "ts": "1790000099.000100"}
 
+    def chat_postEphemeral(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        if not self.release.wait(10):
+            raise AssertionError("never released")
+        if self.error is not None:
+            raise self.error
+        return {"ok": True, "message_ts": "1790000099.000200"}
+
 
 def wait_until_idle() -> None:
     for thread in threading.enumerate():
-        if thread.name == "slack-post":
+        if thread.name in ("slack-post", "slack-note"):
             thread.join(5)
 
 
@@ -612,6 +620,40 @@ def test_a_quick_post_passes_through_with_its_error() -> None:
     client.error = revoked()
     with pytest.raises(SlackApiError):
         poster.chat_postMessage(channel=CHANNEL, thread_ts="1790000000.000100", text="one")
+
+
+def test_a_note_has_its_own_deadline_and_never_waits_for_a_reply() -> None:
+    client = SlowClient()
+    poster = run_module.DeadlinePoster(client, deadline=0.05, note_deadline=0.05)
+    reply = {"channel": CHANNEL, "thread_ts": "1790000000.000100", "text": "one"}
+    note = {"channel": CHANNEL, "user": "U0SAM0001", "thread_ts": "1790000000.000100", "text": "noted"}
+    with pytest.raises(PostStillRunning):
+        poster.chat_postMessage(**reply)
+    with pytest.raises(PostStillRunning):
+        poster.chat_postEphemeral(**note)  # not PosterBusy: a note is not held back by a hung reply
+    client.release.set()
+    wait_until_idle()
+    assert poster.chat_postEphemeral(**note)["ok"]  # a note is not tracked: a new call sends it again
+    assert poster.chat_postMessage(**reply)["ts"] == "1790000099.000100"  # the reply's own result
+    assert [call["text"] for call in client.calls] == ["one", "noted", "noted"]
+    client.error = revoked()
+    with pytest.raises(SlackApiError):
+        poster.chat_postEphemeral(**note)
+
+
+def test_only_one_note_is_in_flight_so_stuck_notes_never_pile_up() -> None:
+    client = SlowClient()
+    poster = run_module.DeadlinePoster(client, deadline=0.05, note_deadline=0.05)
+    note = {"channel": CHANNEL, "user": "U0SAM0001", "thread_ts": "1790000000.000100", "text": "noted"}
+    with pytest.raises(PostStillRunning):
+        poster.chat_postEphemeral(**note)
+    with pytest.raises(run_module.PosterBusy):
+        poster.chat_postEphemeral(**note)  # no second thread while the first is stuck
+    assert len(client.calls) == 1
+    client.release.set()
+    wait_until_idle()
+    assert poster.chat_postEphemeral(**note)["ok"]
+    assert len(client.calls) == 2
 
 
 def test_slack_tls_verifies_against_known_authorities_on_any_python_build() -> None:

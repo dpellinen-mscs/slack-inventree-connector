@@ -360,3 +360,31 @@ def _label(choice: Choice, names: Mapping[int, str], *, cut_left: bool, suffix: 
     if len(label) > room:
         label = "…" + label[-(room - 1) :].lstrip() if cut_left else label[: room - 1].rstrip() + "…"
     return label + suffix
+
+
+_OUT_OF_DATE = "This button is out of date. Please use the newest reply in this thread."
+CLICK_FEEDBACK = {
+    "answered": "Thanks, your answer is recorded.",
+    "unknown_button": _OUT_OF_DATE,
+    "other_message": _OUT_OF_DATE,
+    "stale": "A newer reply in this thread replaced this question. Please answer that one.",
+    "already_answered": "This question was already answered, or a newer reply replaced it.",
+    "expired": "This question has expired: a post can be changed for {hours} after it was made.",
+    "not_allowed": "Only the person who posted this, or an approver, can answer this question.",
+    "post_changed": "The post changed after this question was asked, so your answer was not recorded. "
+    "Please try again in a moment, or answer the newer reply if one appears.",
+}
+"""What the clicker alone is told about each outcome of a click on a question's button. Plain text that
+quotes neither the post nor the catalog."""
+APPROVERS_ONLY = "Only an approver can answer this question."
+NO_APPROVERS = "Only an approver can answer this question, and no approvers are set up."
+
+
+def click_feedback(outcome: str, *, approver_only: bool, approvers: bool, expiry_hours: int) -> str | None:
+    """The ephemeral note for a click finished with `outcome`, or None when the clicker is told nothing (a
+    payload the ingest checks drop, or a button that does nothing yet)."""
+    if outcome == "not_allowed" and approver_only:
+        return APPROVERS_ONLY if approvers else NO_APPROVERS
+    text = CLICK_FEEDBACK.get(outcome)
+    hours = "1 hour" if expiry_hours == 1 else f"{expiry_hours} hours"
+    return None if text is None else text.format(hours=hours)

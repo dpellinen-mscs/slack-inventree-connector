@@ -88,6 +88,7 @@ from stockthread.slack.ingest import (
 from stockthread.slack.replies import (
     ANSWER_ACTION,
     MovementView,
+    click_feedback,
     dry_run_reply,
     gate_reasons,
     question_message,
@@ -122,6 +123,8 @@ RETRY_FOR_SECONDS = 15 * 60
 """How long posting a reply, or asking the LLM provider, is retried with backoff before the post is finished
 without a reply."""
 MAX_BACKOFF_SECONDS = 60
+NOTE_QUIET_SECONDS = 60
+"""After a note to a clicker fails, no note is sent for this long: a slow Slack never holds the queue up."""
 HEARTBEAT_SECONDS = 10.0
 """The worker beats the instance lock at most this often, before each batch and each post, so one long step
 (Slack or InvenTree slow to answer) never lets the lock look stale."""
@@ -137,7 +140,7 @@ _NO_READING = "no_reading"
 
 
 class SlackPoster(Protocol):
-    """The one Web API call the worker makes (slack_sdk's `WebClient`)."""
+    """The Web API calls the worker makes (slack_sdk's `WebClient`)."""
 
     def chat_postMessage(
         self,
@@ -149,6 +152,8 @@ class SlackPoster(Protocol):
         unfurl_links: bool,
         unfurl_media: bool,
     ) -> Any: ...
+
+    def chat_postEphemeral(self, *, channel: str, user: str, thread_ts: str, text: str) -> Any: ...
 
 
 class PostExtractor(Protocol):
@@ -175,6 +180,16 @@ class _Failures:
     first: Decimal
     count: int
     next_try: Decimal
+
+
+@dataclass(frozen=True)
+class _Feedback:
+    """A note for the clicker alone, sent once the click is finished."""
+
+    channel: str
+    user: str
+    thread_ts: str
+    text: str
 
 
 @dataclass
@@ -239,6 +254,10 @@ class Worker:
     _beat_at: float = float("-inf")
     _quiet_until: Decimal = Decimal(0)
     """Slack rate-limited a reply: nothing is posted before this time."""
+    _feedback: _Feedback | None = None
+    """What to tell the clicker about the event being handled."""
+    _notes_quiet_until: Decimal = Decimal(0)
+    """A note failed: no note is sent before this time."""
 
     def beat(self, *, now: bool = False) -> None:
         """Beat the instance lock's heartbeat, at most every HEARTBEAT_SECONDS unless `now`. Raises LockLost."""
@@ -258,6 +277,7 @@ class Worker:
             self.beat()
             events = self.store.claim_events(self.owner, limit=DRAIN_BATCH)
             for event in events:
+                self._feedback = None
                 try:
                     status, outcome = self._handle_event(event.id, event.kind, event.body)
                 except LockLost:
@@ -266,6 +286,8 @@ class Worker:
                     _log_failure("event", event.id, error)
                     status, outcome = EventStatus.FAILED, _code(error)
                 self.store.finish_event(self.owner, event.id, status, outcome)
+                if self._feedback is not None and not self.stopping():
+                    self._tell(event.id, self._feedback)
             done += len(events)
             if len(events) < DRAIN_BATCH:
                 return done, True
@@ -319,7 +341,8 @@ class Worker:
         """Record the answer a click on a question's button gives, after the ingest checks again and the checks
         against the stored button: the same channel and message, a question still open and not expired, a post
         that has not moved on from the dry run that asked it, and a user who may answer it (design section 4,
-        "Authorization"). Every refusal is finished as dropped, with its reason as the outcome."""
+        "Authorization"). Every refusal is finished as dropped, with its reason as the outcome. A click that
+        passes the ingest checks tells the clicker alone what came of it."""
         click = ingest_action(payload, self.settings.slack)
         if isinstance(click, Drop):
             return EventStatus.DROPPED, click.reason.value
@@ -328,6 +351,41 @@ class Worker:
         if click.action_id != ANSWER_ACTION:
             return EventStatus.DROPPED, "action_not_handled_yet"
         button = self.store.button(click.value)
+        status, outcome = self._answer(click, button)
+        told = outcome
+        if outcome == Answered.NOT_OPEN and button is not None:
+            # The click is handled again after a crash that came after its answer was recorded: the same user,
+            # and the same button. The same user's other button is a changed answer, and it was refused.
+            answer = self.store.answer(button.item.id)
+            replayed = answer is not None and (answer[0].get("button"), answer[1]) == (button.position, click.user)
+            told = Answered.ANSWERED if replayed else outcome
+        text = click_feedback(
+            told,
+            approver_only=button is not None and button.item.approver_only,
+            approvers=bool(self.settings.slack.approvers),
+            expiry_hours=self.settings.slack.plan_expiry_hours,
+        )
+        if text is not None:
+            self._feedback = _Feedback(click.channel, click.user, click.thread_ts or click.message_ts, text)
+        return status, outcome
+
+    def _tell(self, event_id: int, feedback: _Feedback) -> None:
+        """Send a note to the clicker. Best effort: the click is finished already. A note that fails is logged
+        and not tried again, and no note is sent for NOTE_QUIET_SECONDS after it."""
+        now = self._now()
+        if now < self._notes_quiet_until:
+            log.info("click feedback %s: not sent, a recent note failed", event_id)
+            return
+        self.beat()  # the note has its own deadline (run.NOTE_DEADLINE_SECONDS)
+        try:
+            self.slack.chat_postEphemeral(
+                channel=feedback.channel, user=feedback.user, thread_ts=feedback.thread_ts, text=feedback.text
+            )
+        except Exception as error:
+            _log_failure("click feedback", event_id, error)
+            self._notes_quiet_until = now + NOTE_QUIET_SECONDS
+
+    def _answer(self, click: Click, button: Button | None) -> tuple[EventStatus, str]:
         if button is None:
             return EventStatus.DROPPED, "unknown_button"  # never stored, or the reply was posted again
         refused = self._refuse_answer(click, button)
