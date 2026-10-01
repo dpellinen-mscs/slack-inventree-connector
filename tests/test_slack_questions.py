@@ -6,13 +6,15 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from corpus import cases, corpus_views, eval_catalog
 
 from stockthread.core.model import CandidateMovement, LineItem, Match, MatchRule, MatchStatus, MovementType, ReasonCode
-from stockthread.core.questions import Ask, Choice, Question, choices
+from stockthread.core.questions import Ask, Choice, Question, choices, pick_question
 from stockthread.slack.replies import MAX_LABEL, REASONS, MovementView, question_message
 
 PARTS = {1: "Norvane Disc 40 Access Point", 2: "Norvane Disc 60 Access Point", 3: "x" * 100}
-LOCATIONS = {10: "Warehouse/Main Stock", 11: "Vehicles/Truck 1", 12: "Vehicles/Truck 2"}
+LOCATIONS = {10: "Warehouse/Main Stock", 11: "Vehicles/Truck 1", 12: "Vehicles/Truck 2", 13: "<!channel>", 14: "  "}
+LONG_PATH = "Region/" * 20 + "Shelf A"
 EXACT = Match(MatchStatus.MATCHED, MatchRule.EXACT, 1)
 
 
@@ -127,3 +129,58 @@ def test_every_choice_needs_a_stored_button_id() -> None:
     for values in ([], ["a"], ["a", ""], ["a", "b", "c"]):
         with pytest.raises(ValueError, match="stored button id"):
             question_message(question, [view()], PARTS, LOCATIONS, values)
+
+
+def test_names_that_look_alike_get_their_key() -> None:
+    names = {**PARTS, 4: "Disc 40", 5: "Disc  40"}
+    question = Question(Ask.CHOOSE_PART, ReasonCode.PART_AMBIGUOUS, 0, 0, None, (4, 5))
+    body = question_message(question, [view()], names, LOCATIONS, ids(question))
+    assert [b["text"]["text"] for b in buttons(body)] == ["Disc 40 #4", "Disc 40 #5", "None of these"]
+
+
+def test_a_long_location_path_keeps_its_end() -> None:
+    question = Question(Ask.CHOOSE_LOCATION, ReasonCode.LOCATION_AMBIGUOUS, 0, None, "destination", (11, 15))
+    body = question_message(question, [view()], PARTS, {**LOCATIONS, 15: LONG_PATH}, ids(question))
+    label = buttons(body)[1]["text"]["text"]
+    assert len(label) == MAX_LABEL
+    assert label.startswith("…")
+    assert label.endswith("Shelf A")
+
+
+def test_an_empty_name_is_shown_by_its_key() -> None:
+    question = Question(Ask.CHOOSE_LOCATION, ReasonCode.LOCATION_AMBIGUOUS, 0, None, "destination", (11, 14))
+    assert buttons(message(question))[1]["text"]["text"] == "#14"
+
+
+def test_catalog_names_and_places_cannot_become_markup() -> None:
+    question = Question(Ask.CONFIRM_LOCATION, ReasonCode.FUZZY_MATCH, 0, None, "destination", (13,))
+    shown = text_of(message(question, view(destination_text="<@U0SAM0001> truck")))
+    assert "<" not in shown
+    assert ">" not in shown
+
+
+def test_a_confirmation_about_a_line_names_its_item() -> None:
+    question = Question(Ask.CONFIRM, ReasonCode.ITEM_NOT_IN_TEXT, 0, 0)
+    assert text_of(message(question)).startswith("About “Disc 40”: ")
+
+
+def test_the_notification_keeps_asterisks_of_the_post() -> None:
+    question = Question(Ask.CONFIRM_PART, ReasonCode.FUZZY_MATCH, 0, 0, None, (1,))
+    body = message(question, view("2*4 bracket"))
+    assert body["text"] == f"Is “2*4 bracket” {PARTS[1]}?"
+
+
+_, CORPUS_PARTS, CORPUS_LOCATIONS = eval_catalog()
+
+
+@pytest.mark.parametrize("case", cases(), ids=lambda case: case["id"])
+def test_every_corpus_question_can_be_shown(case: dict[str, Any]) -> None:
+    views = corpus_views(case)
+    question = pick_question(views)
+    if question is None:
+        return
+    body = question_message(question, views, CORPUS_PARTS, CORPUS_LOCATIONS, ids(question))
+    assert text_of(body)
+    labels = [b["text"]["text"] for b in buttons(body)]
+    assert all(0 < len(label) <= MAX_LABEL for label in labels)
+    assert len(set(labels)) == len(labels)

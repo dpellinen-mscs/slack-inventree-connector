@@ -7,8 +7,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from stockthread.core.matching import Alias, Catalog, LocationRecord, PartRecord
-from stockthread.core.model import CandidateMovement, LineItem, MovementType
+from stockthread.core.matching import Alias, Catalog, LocationRecord, PartRecord, match_location, match_part
+from stockthread.core.model import CandidateMovement, LineItem, Match, MatchStatus, MovementType
+from stockthread.core.validate import validate
+from stockthread.slack.replies import MovementView
 
 EVAL = Path(__file__).resolve().parents[2] / "eval"
 
@@ -62,3 +64,28 @@ def eval_catalog() -> tuple[Catalog, dict[int, str], dict[int, str]]:
         vehicles={u["id"]: location_pk[u["vehicle"]] for u in _load("users")["users"] if u["vehicle"]},
     )
     return catalog, {v: k for k, v in part_pk.items()}, {v: k for k, v in location_pk.items()}
+
+
+CATALOG = eval_catalog()[0]
+
+
+def corpus_views(case: dict[str, Any]) -> list[MovementView]:
+    """The expected movements of a case, matched against the eval catalog and validated by rule."""
+    text = "\n".join(message.get("text") or "" for message in case["post"]["messages"])
+    poster = case["post"]["user"]
+    views = []
+    for expected in case["expected"]["movements"]:
+        movement = candidate(expected)
+        views.append(
+            MovementView(
+                movement,
+                tuple(
+                    match_part(item.item_text, CATALOG, poster) if item.item_text else Match(MatchStatus.UNMATCHED)
+                    for item in movement.line_items
+                ),
+                match_location(movement.source_text, CATALOG, poster) if movement.source_text else None,
+                match_location(movement.destination_text, CATALOG, poster) if movement.destination_text else None,
+                validate(movement, text, max_quantity=100),
+            )
+        )
+    return views

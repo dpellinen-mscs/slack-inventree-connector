@@ -8,9 +8,8 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from corpus import candidate, cases, eval_catalog
+from corpus import cases, corpus_views
 
-from stockthread.core.matching import match_location, match_part
 from stockthread.core.model import (
     CandidateMovement,
     LineItem,
@@ -24,7 +23,7 @@ from stockthread.core.model import (
 )
 from stockthread.core.questions import _BY_REASON, MAX_CHOICES, Ask, Question, pick_question
 from stockthread.core.validate import validate
-from stockthread.slack.replies import MovementView, gate_reasons
+from stockthread.slack.replies import gate_reasons
 
 
 @dataclass(frozen=True)
@@ -164,7 +163,9 @@ def test_approval_reasons_come_last() -> None:
     question = pick_question([view(take(), ReasonCode.LATE_INGEST, ReasonCode.SERIAL_UNCONFIRMED)])
     assert question is not None
     assert question.ask is Ask.SERIALS
-    assert pick_question([view(take(), ReasonCode.LATE_INGEST)]) == Question(Ask.CONFIRM, ReasonCode.LATE_INGEST, 0)
+    assert pick_question([view(take(), ReasonCode.LATE_INGEST)]) == Question(
+        Ask.CONFIRM, ReasonCode.LATE_INGEST, 0, approver_only=True
+    )
 
 
 def test_a_tier_goes_across_movements_before_the_next_tier() -> None:
@@ -178,31 +179,6 @@ def test_a_match_reason_among_the_reasons_does_not_hide_the_match_question() -> 
     loose = Match(MatchStatus.MATCHED, MatchRule.WORDS, 7)
     question = pick_question([view(take(), ReasonCode.FUZZY_MATCH, items=(loose,))])
     assert question == Question(Ask.CONFIRM_PART, ReasonCode.FUZZY_MATCH, 0, 0, None, (7,))
-
-
-CATALOG = eval_catalog()[0]
-
-
-def corpus_views(case: dict[str, Any]) -> list[MovementView]:
-    """The expected movements of a case, matched against the eval catalog and validated by rule."""
-    text = "\n".join(message.get("text") or "" for message in case["post"]["messages"])
-    poster = case["post"]["user"]
-    views = []
-    for expected in case["expected"]["movements"]:
-        movement = candidate(expected)
-        views.append(
-            MovementView(
-                movement,
-                tuple(
-                    match_part(item.item_text, CATALOG, poster) if item.item_text else Match(MatchStatus.UNMATCHED)
-                    for item in movement.line_items
-                ),
-                match_location(movement.source_text, CATALOG, poster) if movement.source_text else None,
-                match_location(movement.destination_text, CATALOG, poster) if movement.destination_text else None,
-                validate(movement, text, max_quantity=100),
-            )
-        )
-    return views
 
 
 @pytest.mark.parametrize("case", cases(), ids=lambda case: case["id"])
@@ -271,3 +247,10 @@ def test_a_whole_movement_reason_comes_before_a_line_in_its_tier() -> None:
     question = pick_question([view(take(), ReasonCode.ITEMS_MISSING, items=(ambiguous,))])
     assert question is not None
     assert question.reason is ReasonCode.ITEMS_MISSING
+
+
+def test_approval_questions_are_for_approvers_only() -> None:
+    for code in (ReasonCode.LATE_INGEST, ReasonCode.QUANTITY_ABOVE_LIMIT, ReasonCode.ACTOR_NOT_POSTER):
+        assert pick_question([view(take(), code)]).approver_only  # type: ignore[union-attr]
+    assert not pick_question([view(take(), ReasonCode.CONTRADICTION)]).approver_only  # type: ignore[union-attr]
+    assert not pick_question([view(take(), ReasonCode.IMPLIED_SOURCE)]).approver_only  # type: ignore[union-attr]

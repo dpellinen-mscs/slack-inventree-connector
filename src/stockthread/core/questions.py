@@ -140,6 +140,8 @@ class Question:
     side: Side | None = None
     candidates: tuple[int, ...] = ()
     """InvenTree primary keys to choose from (CHOOSE_*), or the one loosely matched record (CONFIRM_*)."""
+    approver_only: bool = False
+    """Only an approver may answer: the poster cannot clear these reasons (design section 4, "Authorization")."""
 
 
 def pick_question(views: Sequence[Reviewed]) -> Question | None:
@@ -164,7 +166,8 @@ def _from_reasons(index: int, view: Reviewed) -> list[tuple[Tier, int, Question]
             tier, ask = Tier.READING, Ask.CONFIRM  # items were read from the photo: is that reading right
         line = _line(reason, movement)
         order = _LAST if reason.code in _FROM_MATCHES else -1 if line is None else line
-        found.append((tier, order, Question(ask, reason.code, index, line, side)))
+        question = Question(ask, reason.code, index, line, side, approver_only=tier is Tier.APPROVAL)
+        found.append((tier, order, question))
     return found
 
 

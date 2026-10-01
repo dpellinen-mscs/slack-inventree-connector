@@ -345,6 +345,8 @@ def test_enterprise_org_ids_are_refused_in_settings() -> None:
         (lambda body: body["actions"][0].update(action_id="answer-01"), DropReason.UNKNOWN_ACTION),
         (lambda body: body["actions"][0].update(action_id="answer-100"), DropReason.UNKNOWN_ACTION),
         (lambda body: body["actions"][0].update(action_id="answer-"), DropReason.UNKNOWN_ACTION),
+        (lambda body: body["actions"][0].update(action_id="answer-1\n"), DropReason.UNKNOWN_ACTION),
+        (lambda body: body["actions"][0].update(action_id="answer-\u0663"), DropReason.UNKNOWN_ACTION),
         (lambda body: body["actions"][0].update(type="static_select"), DropReason.UNKNOWN_ACTION),
         (lambda body: body["container"].update(type="view"), DropReason.MALFORMED),
         (lambda body: body["container"].update(channel_id="C0OTHER999"), DropReason.MALFORMED),

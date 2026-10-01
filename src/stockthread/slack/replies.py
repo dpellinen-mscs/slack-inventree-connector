@@ -261,7 +261,8 @@ def question_message(
     record = escape(names.get(question.candidates[0], f"#{question.candidates[0]}")) if question.candidates else ""
     ask = question.ask
     if ask is Ask.CONFIRM:
-        text = f"{REASONS[question.reason]} Is this reading of the post right?"
+        about = f"About {written}: " if written else ""
+        text = f"{about}{REASONS[question.reason]} Is this reading of the post right?"
     elif ask is Ask.MOVEMENT_TYPE:
         text = "What kind of movement is this?"
     elif ask is Ask.NAME_PART:
@@ -301,7 +302,9 @@ def question_message(
         )
     if len(views) > 1:
         text = f"Movement {question.movement + 1}: {text}"
+    plain = text.replace(f"*{record}*", record) if record else text
     blocks: list[dict[str, Any]] = [_section(text)]
+    labels = _labels(buttons, names, cut_left=question.side is not None)
     if buttons:
         blocks.append(
             {
@@ -310,26 +313,38 @@ def question_message(
                     {
                         "type": "button",
                         "action_id": f"{ANSWER_ACTION}-{n}",
-                        "text": {"type": "plain_text", "text": _label(choice, names), "emoji": False},
+                        "text": {"type": "plain_text", "text": label, "emoji": False},
                         "value": value,
                     }
-                    for n, (choice, value) in enumerate(zip(buttons, values, strict=True))
+                    for n, (label, value) in enumerate(zip(labels, values, strict=True))
                 ],
             }
         )
-    return {"text": _plain(text), "blocks": blocks}
+    return {"text": plain, "blocks": blocks}
 
 
-def _label(choice: Choice, names: Mapping[int, str]) -> str:
+def _labels(buttons: Sequence[Choice], names: Mapping[int, str], *, cut_left: bool) -> list[str]:
+    """Button labels. Records that would look alike get their primary key, so no two buttons read the same.
+    A location path is cut from the left, since its last part names the place."""
+    labels = [_label(choice, names, cut_left=cut_left) for choice in buttons]
+    if len(set(labels)) < len(labels):
+        labels = [
+            _label(choice, names, cut_left=cut_left, suffix=f" #{choice.record}")
+            if choice.record is not None
+            else label
+            for choice, label in zip(buttons, labels, strict=True)
+        ]
+    return labels
+
+
+def _label(choice: Choice, names: Mapping[int, str], *, cut_left: bool, suffix: str = "") -> str:
     if choice.kind == "record" and choice.record is not None:
-        label = " ".join(names.get(choice.record, f"#{choice.record}").split())
+        label = " ".join(names.get(choice.record, "").split()) or f"#{choice.record}"
     elif choice.kind == "type" and choice.movement_type is not None:
         label = TYPE_LABELS[choice.movement_type]
     else:
         label = {"yes": "Yes", "no": "No", "none": "None of these"}[choice.kind]
-    return label if len(label) <= MAX_LABEL else label[: MAX_LABEL - 1].rstrip() + "…"
-
-
-def _plain(text: str) -> str:
-    """The notification text: the question without its bold marks."""
-    return text.replace("*", "")
+    room = MAX_LABEL - len(suffix)
+    if len(label) > room:
+        label = "…" + label[-(room - 1) :].lstrip() if cut_left else label[: room - 1].rstrip() + "…"
+    return label + suffix
