@@ -10,9 +10,11 @@ from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from slack_sdk.errors import SlackApiError
 
 from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules
@@ -34,7 +36,9 @@ from stockthread.worker import (
     RETRY_FOR_SECONDS,
     ROOT_WAIT_SECONDS,
     TAKE_DOWN_BACKOFF_SECONDS,
+    TAKE_DOWN_SPACING_SECONDS,
     TAKE_DOWN_TRIES,
+    PosterBusy,
     PostStillRunning,
     Worker,
 )
@@ -2895,7 +2899,7 @@ def test_a_reply_that_is_gone_or_not_ours_or_has_no_question_is_left_alone(
 
 def test_the_connectors_own_edit_of_a_reply_is_not_a_revision(store: Store, clock: Clock, path: Path) -> None:
     worker = asked(store, clock)
-    reply, ts = posted(worker)
+    _, ts = posted(worker)
     edit = {
         "type": "event_callback",
         "team_id": WORKSPACE,
@@ -2906,10 +2910,71 @@ def test_the_connectors_own_edit_of_a_reply_is_not_a_revision(store: Store, cloc
             "subtype": "message_changed",
             "channel": CHANNEL,
             "ts": "1790000200.000100",
-            "message": {"type": "message", "bot_id": "B0STOCKBOT", "text": "edited", "ts": ts, "thread_ts": ROOT},
-            "previous_message": {"type": "message", "bot_id": "B0STOCKBOT", "text": reply["text"], "ts": ts},
+            "message": {"type": "message", "bot_id": "B0STOCKBOT", "app_id": APP, "text": "edited", "ts": ts},
+            "previous_message": {"type": "message", "bot_id": "B0STOCKBOT", "app_id": APP, "text": "", "ts": ts},
         },
     }
     enqueue(store, edit)
     worker.step()
     assert last_status(path) == ("dropped", "bot")
+
+
+class BusySlack(FakeSlack):
+    """Another side call is still on its way (run.DeadlinePoster), then Slack rate-limits."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.busy = 1
+        self.limited = 0
+
+    def conversations_replies(self, **kwargs: Any) -> dict[str, Any]:
+        if self.busy:
+            self.busy -= 1
+            raise PosterBusy
+        if self.limited:
+            self.limited -= 1
+            limited = SimpleNamespace(headers={"Retry-After": "300"}, data={})
+            raise SlackApiError("ratelimited", limited)  # type: ignore[no-untyped-call]
+        return super().conversations_replies(**kwargs)
+
+
+def test_a_busy_slot_costs_no_try_and_a_rate_limit_waits_as_long_as_slack_asks(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    busy = BusySlack()
+    busy.posted = worker.slack.posted  # type: ignore[attr-defined]
+    worker.slack = busy
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    assert buttons(path) == [("answered", "shown", 0)]  # nothing was tried
+    busy.limited = 1
+    clock.at(f"{1790000030 + TAKE_DOWN_SPACING_SECONDS}.000000")
+    worker.step()
+    assert buttons(path) == [("answered", "shown", 1)]
+    clock.at(f"{1790000030 + TAKE_DOWN_SPACING_SECONDS + 299}.000000")
+    worker.step()
+    assert busy.updates == []  # Retry-After (300 s) is longer than the backoff (60 s)
+    clock.at(f"{1790000030 + TAKE_DOWN_SPACING_SECONDS + 300}.000000")
+    worker.step()
+    assert buttons(path) == [("answered", "removed", 1)]
+
+
+def test_one_reply_is_edited_per_spacing(store: Store, clock: Clock, path: Path) -> None:
+    slack = FakeSlack()
+    worker = Worker(approving(), store, OWNER, slack, lambda: TWO_DISCS, clock)
+    enqueue(store, message(ROOT, TAKE))
+    enqueue(store, message("1790000010.000100", TAKE))  # a second post, past the sibling window
+    due(worker, clock, 1790000040)
+    first, second = slack.posted
+    clicked(store, click_on(first, "1790009999.000001", 1, SAM), "1")
+    clicked(store, click_on(second, "1790009999.000002", 1, SAM, at="1790000100.000200"), "2")
+    worker.step()
+    assert [status for status, _, _ in buttons(path)] == ["answered", "answered"]
+    assert len(slack.updates) == 1
+    worker.step()
+    assert len(slack.updates) == 1  # within the spacing
+    clock.at(f"{1790000040 + TAKE_DOWN_SPACING_SECONDS}.000000")
+    worker.step()
+    assert [update["ts"] for update in slack.updates] == ["1790009999.000001", "1790009999.000002"]

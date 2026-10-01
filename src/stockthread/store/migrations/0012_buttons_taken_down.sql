@@ -3,6 +3,8 @@
 -- reply. `buttons` says where that stands: `shown` (the reply has not been edited), `removed` (the question was
 -- taken out of the reply), or `left` (the connector gave up: the reply could not be read or edited, carried no
 -- question it could find, or the question closed before this migration). `buttons_tries` counts failed attempts.
+-- A question still open at this migration was asked in a reply without the marked divider: once it closes, its
+-- reply is read once and left.
 
 ALTER TABLE review_items ADD COLUMN buttons TEXT NOT NULL DEFAULT 'shown'
     CHECK (buttons IN ('shown', 'removed', 'left'));

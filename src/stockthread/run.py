@@ -35,7 +35,7 @@ from stockthread.slack.catchup import SWEEP_SECONDS, CatchUp, HistoryClient
 from stockthread.slack.http_server import HttpServer, ServeError
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
-from stockthread.worker import PostStillRunning, Worker
+from stockthread.worker import PosterBusy, PostStillRunning, Worker
 
 log = logging.getLogger(__name__)
 
@@ -103,10 +103,6 @@ class CatalogCache:
         return self._catalog
 
 
-class PosterBusy(Exception):
-    """Another thread's call is still running, and this one was not sent. An ordinary failure: try again."""
-
-
 class _Call:
     def __init__(self) -> None:
         self.done = threading.Event()
@@ -169,7 +165,7 @@ class DeadlinePoster:
         if self._side is not None and not self._side.done.is_set():
             raise PosterBusy
         call = self._side = _Call()
-        threading.Thread(target=self._run, args=(call, method, kwargs), name="slack-note", daemon=True).start()
+        threading.Thread(target=self._run, args=(call, method, kwargs), name="slack-side", daemon=True).start()
         if not call.done.wait(self._note_deadline):
             raise PostStillRunning
         if call.error is not None:

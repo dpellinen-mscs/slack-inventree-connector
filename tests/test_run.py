@@ -39,7 +39,7 @@ from stockthread.llm.extract import WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
 from stockthread.run import CatalogCache, run, with_vehicles
 from stockthread.store import DryRunOutcome, Store, new_lock_owner
-from stockthread.worker import RETRY_FOR_SECONDS, PostStillRunning, Worker
+from stockthread.worker import RETRY_FOR_SECONDS, PosterBusy, PostStillRunning, Worker
 
 WORKSPACE, APP, CHANNEL = "T0ACME001", "A0ACME001", "C0ACME001"
 CATALOG = Catalog(
@@ -574,7 +574,7 @@ class SlowClient:
 
 def wait_until_idle() -> None:
     for thread in threading.enumerate():
-        if thread.name in ("slack-post", "slack-note"):
+        if thread.name in ("slack-post", "slack-side"):
             thread.join(5)
 
 
@@ -587,7 +587,7 @@ def test_a_hung_post_gives_control_back_and_is_never_sent_twice() -> None:
         poster.chat_postMessage(**first)  # back after the deadline: the worker keeps its heartbeat going
     with pytest.raises(PostStillRunning):
         poster.chat_postMessage(**first)  # still running: not sent again
-    with pytest.raises(run_module.PosterBusy):
+    with pytest.raises(PosterBusy):
         poster.chat_postMessage(**other)  # and nothing else is sent meanwhile: a failure, not a call on its way
     assert len(client.calls) == 1
 
@@ -650,9 +650,9 @@ def test_only_one_side_call_is_in_flight_so_stuck_calls_never_pile_up() -> None:
     note = {"channel": CHANNEL, "user": "U0SAM0001", "thread_ts": "1790000000.000100", "text": "noted"}
     with pytest.raises(PostStillRunning):
         poster.chat_postEphemeral(**note)
-    with pytest.raises(run_module.PosterBusy):
+    with pytest.raises(PosterBusy):
         poster.chat_postEphemeral(**note)  # no second thread while the first is stuck
-    with pytest.raises(run_module.PosterBusy):
+    with pytest.raises(PosterBusy):
         poster.chat_update(channel=CHANNEL, ts="1790000099.000100", text="edit", blocks=[])  # nor another side call
     assert len(client.calls) == 1
     client.release.set()
