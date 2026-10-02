@@ -491,3 +491,25 @@ def test_a_question_is_asked_unexpired(store: Store, path: Path) -> None:
             " created_at, poster_id, expires_from, expired_at) SELECT post_id, 2, question, approver_only,"
             " channel_id, message_ts, 'open', created_at, poster_id, expires_from, created_at FROM review_items"
         )
+
+
+def test_closed_questions_are_taken_down_before_expired_ones(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    store.expire_questions(OWNER, EXPIRES + 1)
+    other = PostKey(POST.workspace_id, POST.channel_id, "1790000500.000100")
+    store.place_message(OWNER, other, user_id="U0SAM0001", thread_ts=None, window_seconds=5)
+    store.finish_dry_run(OWNER, other, DryRunOutcome.REPLIED, "1790000520.000100", question=confirm("c" * 22, "d" * 22))
+    answered = store.button("c" * 22)
+    assert answered is not None
+    assert store.answer_question(OWNER, answered, "U0SAM0001") is Answered.ANSWERED
+    assert [i.status for i, _ in store.closed_with_buttons(limit=10)] == [QuestionStatus.ANSWERED, QuestionStatus.OPEN]
+
+
+def test_an_expired_question_can_still_go_stale_and_a_new_one_be_asked(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    store.expire_questions(OWNER, EXPIRES + 1)
+    reply_again(store, "1790000100.000100", 2, DryRunOutcome.REPLIED, question=confirm("s" * 22, "t" * 22))
+    first, second = store.questions(POST)
+    assert (first.status, second.status) == (QuestionStatus.STALE, QuestionStatus.OPEN)
+    [(item, by)] = [(i, by) for i, by in store.closed_with_buttons(limit=10)]
+    assert (item.id, item.status, by) == (first.id, QuestionStatus.STALE, None)  # says "replaced", not "expired"

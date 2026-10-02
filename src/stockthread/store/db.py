@@ -900,13 +900,14 @@ class Store:
 
     def closed_with_buttons(self, limit: int) -> list[tuple[ReviewItem, str | None]]:
         """Questions answered, gone stale or expired (still `open`, migration 0014) whose reply still shows them
-        (migration 0012), with who answered (None for the others): fewest failed tries first, then oldest first."""
+        (migration 0012), with who answered (None for the others): closed before expired (an upgrade may expire many at
+        once), then fewest failed tries, then oldest first."""
         rows = self._db.execute(
             "SELECT i.id, i.revision, i.question, i.approver_only, i.channel_id, i.message_ts, i.status, i.poster_id,"
             " i.expires_from, p.workspace_id, p.channel_id, p.ts, i.answered_by"
             " FROM review_items i JOIN posts p ON p.id = i.post_id"
             " WHERE (i.status <> 'open' OR i.expired_at IS NOT NULL) AND i.buttons = 'shown'"
-            " AND i.message_ts IS NOT NULL ORDER BY i.buttons_tries, i.id LIMIT ?",
+            " AND i.message_ts IS NOT NULL ORDER BY i.status = 'open', i.buttons_tries, i.id LIMIT ?",
             (limit,),
         ).fetchall()
         return [(_review_item(PostKey(*row[9:12]), row[:9]), row[12]) for row in rows]
