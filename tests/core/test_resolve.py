@@ -10,6 +10,7 @@ import pytest
 from stockthread.core.model import Operation, ReasonCode
 from stockthread.core.resolve import (
     DETAIL_BATCH,
+    DETAIL_COUNTED,
     DETAIL_MIXED,
     DETAIL_NO_STOCK,
     DETAIL_NO_TARGET,
@@ -18,12 +19,15 @@ from stockthread.core.resolve import (
     DETAIL_SERIALIZED_TARGET,
     DETAIL_SERIALS_NEEDED,
     DETAIL_SEVERAL_TARGETS,
+    DETAIL_SHARED,
     DETAIL_SUPPLIER_PART,
     DETAIL_TOO_FEW,
+    LineStock,
     StockItem,
     Take,
     pick_source,
     resolve_line,
+    resolve_lines,
     stock_items,
     target_item,
 )
@@ -213,3 +217,78 @@ def test_an_add_or_a_count_acts_on_its_one_item_by_the_quantity(operation: Opera
     assert (several.takes, [r.detail for r in several.reasons]) == ((), [DETAIL_SEVERAL_TARGETS])
     none = resolve_line(operation, Decimal(4), [])
     assert (none.takes, [r.detail for r in none.reasons]) == ((), [DETAIL_NO_TARGET])
+
+
+# The lines of one post share the stock (resolve_lines).
+
+TRANSFER, REMOVE, ADD, COUNT = Operation.TRANSFER, Operation.REMOVE, Operation.ADD, Operation.COUNT
+
+
+def test_two_lines_of_one_part_never_take_the_same_units() -> None:
+    stock = [item(57, "3")]
+    first, second = resolve_lines([LineStock(TRANSFER, Decimal(2), stock), LineStock(TRANSFER, Decimal(3), stock)])
+    assert (first.takes, first.decided) == (takes((57, "2")), True)
+    assert second.takes == ()
+    assert codes(second) == [(ReasonCode.QUANTITY_ABOVE_STOCK, DETAIL_SHARED)]
+
+
+def test_a_later_line_picks_from_what_the_earlier_lines_left() -> None:
+    stock = [item(57, "3"), item(60, "5")]
+    picks = resolve_lines([LineStock(REMOVE, Decimal(2), stock), LineStock(TRANSFER, Decimal(3), stock)])
+    assert [pick.takes for pick in picks] == [takes((57, "2")), takes((60, "3"))]  # 57 alone would have covered 3
+    assert all(pick.decided for pick in picks)
+    split = resolve_lines([LineStock(TRANSFER, Decimal(2), stock), LineStock(TRANSFER, Decimal(6), stock)])
+    assert [pick.takes for pick in split] == [takes((57, "2")), takes((57, "1"), (60, "5"))]
+    assert all(pick.decided for pick in split)
+
+
+def test_lines_that_together_fit_the_stock_need_no_human() -> None:
+    stock = [item(57, "5")]
+    picks = resolve_lines([LineStock(TRANSFER, Decimal(2), stock), LineStock(TRANSFER, Decimal(3), stock)])
+    assert [pick.takes for pick in picks] == [takes((57, "2")), takes((57, "3"))]
+    assert all(pick.decided for pick in picks)
+
+
+def test_a_serial_number_taken_by_one_line_is_not_there_for_the_next() -> None:
+    stock = [item(3, "1", serial="A1"), item(4, "1", serial="A2")]
+    first, second = resolve_lines(
+        [LineStock(TRANSFER, Decimal(1), stock, ["A2"]), LineStock(REMOVE, Decimal(1), stock, ["A2"])]
+    )
+    assert (first.takes, first.decided) == (takes((4, "1")), True)
+    assert second.takes == ()
+    assert DETAIL_SHARED in [detail for _, detail in codes(second)]
+    rest = resolve_lines([LineStock(TRANSFER, Decimal(1), stock, ["A1"]), LineStock(TRANSFER, Decimal(1), stock)])
+    assert [pick.takes for pick in rest] == [takes((3, "1")), takes((4, "1"))]  # every one that is left: decided
+    assert all(pick.decided for pick in rest)
+
+
+def test_a_line_that_fails_on_the_stock_as_read_says_why_and_that_others_share_it() -> None:
+    stock = [item(57, "1")]
+    picks = resolve_lines([LineStock(TRANSFER, Decimal(1), stock), LineStock(TRANSFER, Decimal(4), stock)])
+    assert codes(picks[1]) == [  # 4 never fitted; "no stock item" (what is left) is the other line's doing
+        (ReasonCode.QUANTITY_ABOVE_STOCK, DETAIL_TOO_FEW),
+        (ReasonCode.QUANTITY_ABOVE_STOCK, DETAIL_SHARED),
+    ]
+    batches = [item(57, "3", batch="B1"), item(60, "3", batch="B2")]
+    picks = resolve_lines([LineStock(TRANSFER, Decimal(2), batches), LineStock(TRANSFER, Decimal(2), batches)])
+    assert picks[1].takes == takes((60, "2"))  # a proposal: its takes still count for the lines after it
+    assert codes(picks[1]) == [
+        (ReasonCode.STOCK_CHOICE, DETAIL_BATCH),
+        (ReasonCode.QUANTITY_ABOVE_STOCK, DETAIL_SHARED),
+    ]
+
+
+def test_an_add_takes_nothing_from_the_stock_the_other_lines_share() -> None:
+    stock = [item(57, "3")]
+    picks = resolve_lines([LineStock(ADD, Decimal(5), stock), LineStock(TRANSFER, Decimal(3), stock)])
+    assert [pick.takes for pick in picks] == [takes((57, "5")), takes((57, "3"))]
+    assert all(pick.decided for pick in picks)  # the transfer reads the stock as it was before the receipt
+
+
+def test_a_counted_item_another_line_acts_on_is_for_a_human_on_both_lines() -> None:
+    stock = [item(57, "3")]
+    count, transfer = resolve_lines([LineStock(COUNT, Decimal(4), stock), LineStock(TRANSFER, Decimal(1), stock)])
+    assert codes(count) == [(ReasonCode.STOCK_CHOICE, DETAIL_COUNTED)]
+    assert codes(transfer) == [(ReasonCode.STOCK_CHOICE, DETAIL_COUNTED)]
+    alone = resolve_lines([LineStock(COUNT, Decimal(4), stock), LineStock(TRANSFER, Decimal(1), [item(60, "3")])])
+    assert all(pick.decided for pick in alone)

@@ -797,7 +797,15 @@ needs.
   nothing. Serialized stock moves by serial number; without serials only a
   pick of every serialized item is decided. Stock of one part that is
   partly serialized is for a human. An add or a count needs exactly one
-  stock item of the part at its location.
+  stock item of the part at its location. The lines of one post, across
+  all its movements and in the post's order, share the stock that was
+  read: a transfer or a remove picks from what the lines before it left,
+  so "took 2 and 3" from an item holding 3 is a review reason ("other
+  lines of the post take the same stock"), never two picks from one
+  item. An add does not add to what later lines may take (the stock
+  read is the stock before the post). A count sets an item as it is, so a
+  counted item that another line also acts on is a review reason on each
+  of those lines: the result would depend on the order.
   In the dry run (built), the worker reads stock last: after the answers
   are applied, so a part picked by button is the part whose stock is
   read, and outside the reading that answers are kept for, so a change

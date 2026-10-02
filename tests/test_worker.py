@@ -61,6 +61,7 @@ from stockthread.worker import (
     Worker,
     _digest,
     _stock_lines,
+    _with_stock,
 )
 
 OWNER = "instance-a"
@@ -3530,6 +3531,24 @@ def test_stock_that_does_not_settle_the_pick_is_a_reason_and_asks_the_stock_ques
     assert (item.question["ask"], item.question["reason"], item.question["line"]) == ("confirm", code, 0)
 
 
+@pytest.mark.parametrize(("held", "could"), [(3, False), (5, True)])
+def test_two_lines_of_one_part_share_its_stock(store: Store, clock: Clock, held: int, could: bool) -> None:
+    text = "took 2 Disc 40 and 3 Disc 40 from main stock to truck 1"
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(57, held)]}), text=text)
+    reply, _ = posted(worker)
+    assert ("this could apply" in reply_text(reply)) is could
+    movement = first_movement(store)
+    assert movement["items"][0]["stock"] == [{"item": 57, "quantity": "2"}]
+    if could:
+        assert movement["items"][1]["stock"] == [{"item": 57, "quantity": "3"}]
+        assert movement["reasons"] == []
+    else:  # 5 promised from 3
+        assert movement["items"][1]["stock"] == []
+        shared = ["quantity_above_stock", "line 2: other lines of the post take the same stock"]
+        assert movement["reasons"] == [{"code": shared[0], "source": "rule", "detail": shared[1]}]
+        assert shared in movement["gate"]
+
+
 @pytest.mark.parametrize(
     ("text", "shown"),
     [
@@ -3647,6 +3666,22 @@ def test_only_lines_whose_quantity_is_settled_read_stock() -> None:
     assert len(_stock_lines(stock_view(reasons=[_rule(ReasonCode.LATE_INGEST)]))) == 2
 
 
+def test_the_movements_of_a_post_share_the_stock_in_the_post_s_order() -> None:
+    views = [stock_view(quantities=(Decimal(2),)), stock_view(MovementType.CONSUME, quantities=(Decimal(2),))]
+    [first, second] = _with_stock(views, {(1, 10): [ok(57, 3)]})
+    assert first.stock is not None
+    assert second.stock is not None
+    [first_pick], [second_pick] = first.stock, second.stock
+    assert first_pick is not None
+    assert first_pick.decided
+    assert second_pick is not None
+    assert second_pick.takes == ()
+    assert [reason.detail for reason in second.reasons] == ["line 1: other lines of the post take the same stock"]
+    assert first.reasons == ()
+    unread = stock_view(MovementType.CONSUME, quantities=(None,))
+    assert _with_stock([unread, views[0]], {(1, 10): [ok(57, 3)]})[0] is unread
+
+
 def test_a_count_of_zero_reads_stock_and_the_place_depends_on_the_operation() -> None:
     assert [line for line, *_ in _stock_lines(stock_view(MovementType.COUNT, (Decimal(0),)))] == [0]
     fuzzy = Match(MatchStatus.MATCHED, MatchRule.FUZZY, 10)
@@ -3681,15 +3716,15 @@ def test_a_pick_that_breaks_fails_its_post_alone(
     store: Store, clock: Clock, path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[int] = []
-    real = resolve.resolve_line
+    real = resolve.resolve_lines
 
-    def resolve_line(*args: Any) -> Any:
+    def resolve_lines(*args: Any) -> Any:
         calls.append(1)
         if len(calls) == 1:
             raise ValueError("a bug in the pick")
         return real(*args)
 
-    monkeypatch.setattr(worker_module, "resolve_line", resolve_line)
+    monkeypatch.setattr(worker_module, "resolve_lines", resolve_lines)
     stock = FakeStock({(1, 10): [ok(57, 5)], (2, 10): [ok(60, 5)]})
     worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock)
     enqueue(store, message("1790000000.000100", TAKE))

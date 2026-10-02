@@ -11,6 +11,9 @@ quantity taken from each, by one documented rule:
   serialized item is decided; anything else is for a human.
 - When the items it could pick from differ in batch or supplier part, the pick is a proposal and a review reason
   says the choice matters.
+- The lines of one post share the stock (`resolve_lines`): a line picks from what the lines before it left, so two
+  lines never take the same unit. A count acts on an item as it is, so a counted item that another line also acts
+  on is for a human: the result depends on the order.
 
 An add or a count needs a single existing stock item of the part at its location (`target_item`): v1.0 never
 creates stock items.
@@ -20,8 +23,9 @@ Pure: no I/O. The rows are InvenTree's JSON and are checked here, so a malformed
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -42,6 +46,8 @@ DETAIL_MIXED = "serialized and unserialized stock of the part at the source"
 DETAIL_NO_TARGET = "no stock item of the part at the location"
 DETAIL_SEVERAL_TARGETS = "several stock items of the part at the location"
 DETAIL_SERIALIZED_TARGET = "serialized stock: an add or a count does not change it"
+DETAIL_SHARED = "other lines of the post take the same stock"
+DETAIL_COUNTED = "another line of the post acts on a counted stock item"
 
 
 @dataclass(frozen=True)
@@ -136,6 +142,62 @@ def resolve_line(
         return pick_source(quantity, items, serials)
     pk, reasons = target_item(items)
     return SourcePick(() if pk is None else (Take(pk, quantity),), reasons)
+
+
+@dataclass(frozen=True)
+class LineStock:
+    """One line of a post as `resolve_lines` reads it."""
+
+    operation: Operation
+    quantity: Decimal
+    items: Sequence[StockItem]
+    """The stock items of the line's part at its place, as read: before any line of the post."""
+    serials: Sequence[str] = ()
+
+
+def resolve_lines(lines: Sequence[LineStock]) -> list[SourcePick]:
+    """What each line of a post acts on, in the post's order, the lines sharing the stock they read. A transfer or a
+    remove picks from what the lines before it left; when that does not settle its pick, its reasons are those of the
+    stock as read and of what is left, and DETAIL_SHARED. A line that acts on an item a count acts on, together
+    with another line, gets DETAIL_COUNTED."""
+    taken: dict[int, Decimal] = {}
+    picks = []
+    for line in lines:
+        if line.operation in (Operation.TRANSFER, Operation.REMOVE):
+            left = [
+                replace(item, quantity=max(item.quantity - taken.get(item.pk, Decimal(0)), Decimal(0)))
+                for item in line.items
+            ]
+            pick = pick_source(line.quantity, left, line.serials)
+            if not pick.decided and left != list(line.items):
+                pick = _shared(pick, pick_source(line.quantity, line.items, line.serials))
+            for take in pick.takes:
+                taken[take.item] = taken.get(take.item, Decimal(0)) + take.quantity
+        else:
+            pick = resolve_line(line.operation, line.quantity, line.items, line.serials)
+        picks.append(pick)
+    counted = {
+        take.item
+        for line, pick in zip(lines, picks, strict=True)
+        if line.operation is Operation.COUNT
+        for take in pick.takes
+    }
+    lines_on = Counter(item for pick in picks for item in {take.item for take in pick.takes})
+    return [
+        replace(pick, reasons=(*pick.reasons, _reason(ReasonCode.STOCK_CHOICE, DETAIL_COUNTED)))
+        if any(take.item in counted and lines_on[take.item] > 1 for take in pick.takes)
+        else pick
+        for pick in picks
+    ]
+
+
+def _shared(left: SourcePick, as_read: SourcePick) -> SourcePick:
+    """A pick from what other lines left that is not decided: the reasons the stock as read gives, what is left
+    beyond a shortage (the shortage is the other lines'), and DETAIL_SHARED."""
+    shortage = (DETAIL_NO_STOCK, DETAIL_TOO_FEW)
+    reasons = [*as_read.reasons, *(reason for reason in left.reasons if reason.detail not in shortage)]
+    reasons.append(_reason(ReasonCode.QUANTITY_ABOVE_STOCK, DETAIL_SHARED))
+    return SourcePick(left.takes, tuple(dict.fromkeys(reasons)))
 
 
 def _pick_serialized(quantity: Decimal, pool: Sequence[StockItem], serials: Sequence[str]) -> SourcePick:
