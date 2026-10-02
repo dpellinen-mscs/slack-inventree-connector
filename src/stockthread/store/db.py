@@ -132,6 +132,8 @@ class WaitingPost:
     """Whether the message the post is keyed on (the thread root) is in it yet."""
     revision: int = 1
     """1 for the first dry run. More: the post has had its dry run and a message joined it since."""
+    plan_from: str | None = None
+    """For a revision: the Slack time the post's plan expires from, fixed by its first dry run (migration 0015)."""
 
 
 @dataclass(frozen=True)
@@ -512,18 +514,20 @@ class Store:
         """Posts without a dry-run outcome yet, then posts that a message joined, that had a message edited or
         deleted, or that had a question answered, after their last dry run (a revision), each oldest first.
 
-        `revisable_since`: only posts keyed on a message from this Slack time on are revised. An older post's
-        reply has expired with its plan: a message that joins it is kept, and starts no revision. It also keeps
+        `revisable_since`: only posts whose plan expires from this Slack time on (`plan_from`, fixed by the first
+        dry run) are revised. An older post's reply has expired with its plan: a message that joins it is kept,
+        and starts no revision. It also keeps
         the step from reading every post ever answered.
         """
         since = "-1" if revisable_since is None else format(revisable_since, "f")
         first = self._db.execute(
-            "SELECT p.workspace_id, p.channel_id, p.ts, m.ts, 1 FROM posts p JOIN post_messages m ON m.post_id = p.id"
+            "SELECT p.workspace_id, p.channel_id, p.ts, m.ts, 1, NULL FROM posts p"
+            " JOIN post_messages m ON m.post_id = p.id"
             " WHERE p.dry_run_at IS NULL ORDER BY p.id"
         ).fetchall()
         revised = self._db.execute(
             "WITH recent AS ("
-            " SELECT id FROM posts WHERE dry_run_at IS NOT NULL AND CAST(ts AS REAL) >= CAST(? AS REAL)"
+            " SELECT id FROM posts WHERE dry_run_at IS NOT NULL AND CAST(plan_from AS REAL) >= CAST(? AS REAL)"
             "),"
             " last AS ("
             " SELECT d.post_id, coalesce(max(r.read_through), d.read_through) AS through,"
@@ -531,7 +535,7 @@ class Store:
             " coalesce(max(r.answers_through), d.answers_through) AS answers, count(r.id) + 2 AS next"
             " FROM recent JOIN dry_runs d ON d.post_id = recent.id"
             " LEFT JOIN dry_run_revisions r ON r.post_id = d.post_id GROUP BY d.post_id"
-            ") SELECT p.workspace_id, p.channel_id, p.ts, m.ts, last.next FROM last"
+            ") SELECT p.workspace_id, p.channel_id, p.ts, m.ts, last.next, p.plan_from FROM last"
             " JOIN posts p ON p.id = last.post_id JOIN post_messages m ON m.post_id = p.id"
             " WHERE EXISTS (SELECT 1 FROM post_messages n WHERE n.post_id = p.id AND n.id > last.through)"
             # A change noted since: looked up by message key (its index), never by scanning every change.
@@ -544,10 +548,13 @@ class Store:
             " ORDER BY p.id",
             (since,),
         ).fetchall()
-        found: dict[PostKey, tuple[int, list[str]]] = {}
-        for workspace, channel, post_ts, ts, revision in [*first, *revised]:
-            found.setdefault(PostKey(workspace, channel, post_ts), (int(revision), []))[1].append(ts)
-        return [WaitingPost(key, max(ts, key=seconds), key.ts in ts, revision) for key, (revision, ts) in found.items()]
+        found: dict[PostKey, tuple[int, str | None, list[str]]] = {}
+        for workspace, channel, post_ts, ts, revision, plan_from in [*first, *revised]:
+            found.setdefault(PostKey(workspace, channel, post_ts), (int(revision), plan_from, []))[2].append(ts)
+        return [
+            WaitingPost(key, max(ts, key=seconds), key.ts in ts, revision, plan_from)
+            for key, (revision, plan_from, ts) in found.items()
+        ]
 
     def post_of(self, message: PostKey) -> PostKey | None:
         """The post that holds this message, whether or not it has had its dry run."""
@@ -713,6 +720,10 @@ class Store:
         `question` is the question the reply asks, stored with its buttons in the same transaction, so no button
         a reply carries is without its row. A reply or a notice that a revision posts makes the post's open
         question stale: it no longer belongs to what stands in the thread.
+
+        The first dry run fixes the Slack time the post's plan expires from (`plan_from`): its question's
+        `expires_from`, or else the time of the newest message it read. The post's revisions, and every question
+        asked about it, count from that one time.
         """
         posted = (DryRunOutcome.REPLIED, DryRunOutcome.RETRACTED)
         if reply_ts is not None and (outcome not in posted or not _SLACK_TS.fullmatch(reply_ts)):
@@ -738,6 +749,7 @@ class Store:
                 raise ValueError("a dry run knows only of changes noted for its post")
             if revision == 1 and answers:
                 raise ValueError("a first dry run knows of no answer")
+            plan_from = self._plan_from(post_id, revision, through, question)
             now = self._now()
             if revision > 1:
                 if answers is None:
@@ -784,8 +796,8 @@ class Store:
                     self._ask(post_id, key, revision, reply_ts, question, now)
                 return
             cursor = self._db.execute(
-                "UPDATE posts SET dry_run_at = ?, reply_ts = ? WHERE id = ? AND dry_run_at IS NULL",
-                (now, reply_ts, post_id),
+                "UPDATE posts SET dry_run_at = ?, reply_ts = ?, plan_from = ? WHERE id = ? AND dry_run_at IS NULL",
+                (now, reply_ts, plan_from, post_id),
             )
             if cursor.rowcount != 1:
                 raise StateConflict("the post already has its dry-run outcome")
@@ -969,6 +981,27 @@ class Store:
             return None
         item = _review_item(PostKey(*row[11:14]), row[2:11])
         return Button(button_id, item, int(row[0]), json.loads(row[1]))
+
+    def _plan_from(self, post_id: int, revision: int, through: int, question: NewQuestion | None) -> str:
+        """The time the post's plan expires from (migration 0015). A revision's is the one its first dry run
+        stored. A first dry run takes its question's, which must be the time of one of the post's messages, or
+        else the newest time of its messages up to post_messages.id `through`."""
+        if revision > 1:
+            row = self._db.execute("SELECT plan_from FROM posts WHERE id = ?", (post_id,)).fetchone()
+            if row is None or row[0] is None:
+                raise StateConflict("the post's first dry run fixed no plan expiry")
+            if question is not None and question.expires_from != row[0]:
+                raise ValueError("a question expires with its post's plan")
+            return str(row[0])
+        if question is not None:
+            held = self._db.execute(
+                "SELECT 1 FROM post_messages WHERE post_id = ? AND ts = ?", (post_id, question.expires_from)
+            ).fetchone()
+            if held is None:
+                raise ValueError("a plan expires from the time of one of its post's messages")
+            return question.expires_from
+        times = self._db.execute("SELECT ts FROM post_messages WHERE post_id = ? AND id <= ?", (post_id, through))
+        return max((str(row[0]) for row in times), key=seconds)
 
     def _read_through(self, post_id: int, read: Sequence[str] | None) -> int:
         """The newest post_messages.id of those read (all of the post's messages when None)."""

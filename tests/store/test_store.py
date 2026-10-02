@@ -14,10 +14,8 @@ from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, IllegalTransition, RequestState
 from stockthread.store import (
-    DryRunOutcome,
     InstanceLocked,
     LockLost,
-    NewQuestion,
     SchemaTooNew,
     StateConflict,
     Store,
@@ -712,9 +710,19 @@ def test_questions_closed_before_buttons_were_taken_down_are_left_as_they_are(
     old = Store.open(path)
     old.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
     old.place_message(OWNER, POST, user_id="U0SAM0001", thread_ts=None, window_seconds=5)
-    ask = NewQuestion({"ask": "confirm"}, False, [("y" * 22, {"kind": "yes"})], poster="U0SAM0001", expires_from="1")
-    old.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, "1790000020.000100", question=ask)
     old.close()
+    with sqlite3.connect(path) as db:  # this code's finish_dry_run writes a later column
+        db.execute("UPDATE posts SET dry_run_at = 'then', reply_ts = '1790000020.000100'")
+        db.execute(
+            "INSERT INTO dry_runs (post_id, outcome, read_through, changes_through, created_at)"
+            " VALUES (1, 'replied', 1, 0, 'then')"
+        )
+        db.execute(
+            "INSERT INTO review_items (post_id, revision, question, approver_only, channel_id, message_ts, status,"
+            " created_at, poster_id, expires_from) VALUES (1, 1, '{\"ask\": \"confirm\"}', 0, ?, ?, 'open', 'then',"
+            " ?, ?)",
+            (POST.channel_id, "1790000020.000100", "U0SAM0001", POST.ts),
+        )
     raw(path).execute("UPDATE review_items SET status = 'stale', closed_at = 'then'")
     monkeypatch.setattr(store_db, "_migrations", lambda: real)
     upgraded = Store.open(path)

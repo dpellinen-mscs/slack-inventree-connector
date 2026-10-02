@@ -900,8 +900,13 @@ def test_an_upgrade_keeps_every_noted_change_and_notes_a_second_edit_of_a_messag
     old.note_revision(OWNER, PostKey(WORKSPACE, CHANNEL, "1790000099.000100"))  # a message of no post here
     enqueue(old, edit_of(ROOT, "1790000030.000100", TAKE, "took 3 Disc 40 from main stock to truck 1"))
     old.note_revision(OWNER, key, 1)  # its first edit; a second one would not have been noted then
-    old.finish_dry_run(OWNER, key, DryRunOutcome.WITHHELD, result={"withheld": "changed"})
     old.close()
+    with sqlite3.connect(path) as raw:  # this code's finish_dry_run writes a later column
+        raw.execute("UPDATE posts SET dry_run_at = 'then'")
+        raw.execute(
+            "INSERT INTO dry_runs (post_id, outcome, result, read_through, changes_through, created_at)"
+            " VALUES (1, 'withheld', '{\"withheld\": \"changed\"}', 1, 2, 'then')"
+        )
     monkeypatch.setattr(store_db, "_migrations", lambda: real)
     upgraded = Store.open(path)
     upgraded.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
@@ -2636,6 +2641,23 @@ def test_the_plan_of_a_reply_answered_without_its_root_expires_from_the_reply(
     assert last_status(path) == ("done", "answered")
 
 
+def test_an_answer_taken_long_after_the_root_is_acted_on_like_any_other(store: Store, clock: Clock, path: Path) -> None:
+    # Issue #74: the click is taken because the plan expires from the reply, so the revision that acts on it must
+    # count from the reply too (not from the older root the post is keyed on).
+    root, reply_ts = "1789990000.000100", "1790000000.000100"
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: TWO_DISCS, clock)
+    enqueue(store, message(reply_ts, TAKE, user=RIVER, thread_ts=root))
+    due(worker, clock)
+    reply, ts = posted(worker)
+    clock.at("1790082800.000000")  # 23 hours after the reply, 25.8 after the root
+    clicked(store, click_on(reply, ts, 0, RIVER), "1")
+    worker.step()
+    assert last_status(path) == ("done", "answered")
+    assert revisions(path) == [(2, "replied", True)]  # acted on, not only recorded
+    for item in store.questions(PostKey(WORKSPACE, CHANNEL, root)):
+        assert item.expires_from == reply_ts  # each question expires with the one plan
+
+
 def test_a_click_while_the_post_waits_for_its_revision_answers_nothing(store: Store, clock: Clock, path: Path) -> None:
     worker = asked(store, clock)
     reply, ts = posted(worker)
@@ -3338,10 +3360,20 @@ def test_answers_given_before_the_upgrade_start_no_revision(path: Path, monkeypa
     old = Store.open(path)
     old.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
     old.place_message(OWNER, KEY, user_id=SAM, thread_ts=None, window_seconds=5)
-    question = NewQuestion({"ask": "confirm"}, False, [("y" * 22, {"kind": "yes"})], poster=SAM, expires_from=ROOT)
-    old.finish_dry_run(OWNER, KEY, DryRunOutcome.REPLIED, "1790009999.000001", result={}, question=question)
     old.release_lock(OWNER)
     old.close()
+    with sqlite3.connect(path) as raw:  # this code's finish_dry_run writes a later column
+        raw.execute("UPDATE posts SET dry_run_at = 'then', reply_ts = '1790009999.000001'")
+        raw.execute(
+            "INSERT INTO dry_runs (post_id, outcome, read_through, changes_through, created_at)"
+            " VALUES (1, 'replied', 1, 0, 'then')"
+        )
+        raw.execute(
+            "INSERT INTO review_items (post_id, revision, question, approver_only, channel_id, message_ts, status,"
+            " created_at, poster_id, expires_from) VALUES (1, 1, '{\"ask\": \"confirm\"}', 0, ?, ?, 'open', 'then',"
+            " ?, ?)",
+            (CHANNEL, "1790009999.000001", SAM, ROOT),
+        )
     with sqlite3.connect(path) as raw:  # as the store before migration 0013 recorded a click (it reads no later column)
         raw.execute(
             "UPDATE review_items SET status = 'answered', answer = ?, answered_by = ?, closed_at = ?",

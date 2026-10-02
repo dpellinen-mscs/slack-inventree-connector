@@ -8,6 +8,12 @@ follow [Semantic Versioning](https://semver.org/) from the first release.
 
 Nothing is released yet. The connector cannot write stock in this state.
 
+### Fixed
+
+- A question and the revisions of its post now expire at the same time, fixed by the post's first dry run
+  (migration 0015). Before, an answer given late to a thread whose root was older than its newest message was
+  recorded but never acted on.
+
 ### Added
 
 - `stockthread check-setup`: reads InvenTree and reports the server version, what the token's user lacks

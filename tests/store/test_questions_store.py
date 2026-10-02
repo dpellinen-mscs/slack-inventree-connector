@@ -34,13 +34,13 @@ def store(path: Path) -> Iterator[Store]:
     opened.close()
 
 
-def confirm(yes: str = YES, no: str = NO, *, approver_only: bool = False) -> NewQuestion:
+def confirm(yes: str = YES, no: str = NO, *, approver_only: bool = False, expires_from: str = POST.ts) -> NewQuestion:
     return NewQuestion(
         {"ask": "confirm", "reason": "late_ingest", "movement": 0},
         approver_only,
         [(yes, {"kind": "yes"}), (no, {"kind": "no"})],
         poster="U0SAM0001",
-        expires_from=POST.ts,
+        expires_from=expires_from,
     )
 
 
@@ -142,7 +142,13 @@ def test_a_revision_that_posts_nothing_leaves_the_question_open(store: Store, ou
 
 def test_a_revised_reply_asks_its_own_question(store: Store) -> None:
     store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
-    reply_again(store, "1790000100.000100", 2, DryRunOutcome.REPLIED, question=confirm("c" * 22, "d" * 22))
+    reply_again(
+        store,
+        "1790000100.000100",
+        2,
+        DryRunOutcome.REPLIED,
+        question=confirm("c" * 22, "d" * 22),
+    )
     first, second = store.questions(POST)
     assert (first.revision, first.status) == (1, QuestionStatus.STALE)
     assert (second.revision, second.status, second.message_ts) == (2, QuestionStatus.OPEN, "1790000100.000109")
@@ -498,7 +504,13 @@ def test_closed_questions_are_taken_down_before_expired_ones(store: Store) -> No
     store.expire_questions(OWNER, EXPIRES + 1)
     other = PostKey(POST.workspace_id, POST.channel_id, "1790000500.000100")
     store.place_message(OWNER, other, user_id="U0SAM0001", thread_ts=None, window_seconds=5)
-    store.finish_dry_run(OWNER, other, DryRunOutcome.REPLIED, "1790000520.000100", question=confirm("c" * 22, "d" * 22))
+    store.finish_dry_run(
+        OWNER,
+        other,
+        DryRunOutcome.REPLIED,
+        "1790000520.000100",
+        question=confirm("c" * 22, "d" * 22, expires_from=other.ts),
+    )
     answered = store.button("c" * 22)
     assert answered is not None
     assert store.answer_question(OWNER, answered, "U0SAM0001") is Answered.ANSWERED
@@ -513,3 +525,88 @@ def test_an_expired_question_can_still_go_stale_and_a_new_one_be_asked(store: St
     assert (first.status, second.status) == (QuestionStatus.STALE, QuestionStatus.OPEN)
     [(item, by)] = [(i, by) for i, by in store.closed_with_buttons(limit=10)]
     assert (item.id, item.status, by) == (first.id, QuestionStatus.STALE, None)  # says "replaced", not "expired"
+
+
+# One plan expiry per post (migration 0015, issue #74): the first dry run fixes `plan_from`, and the post's
+# revisions and questions all count from it.
+
+
+def plan_from(path: Path) -> list[str | None]:
+    with sqlite3.connect(path) as db:
+        return [row[0] for row in db.execute("SELECT plan_from FROM posts ORDER BY id")]
+
+
+def test_the_first_dry_run_fixes_the_plan_from_its_question_or_its_newest_message(store: Store, path: Path) -> None:
+    store.place_message(OWNER, PostKey(POST.workspace_id, POST.channel_id, "1790000003.000100"), user_id="U0SAM0001",
+                        thread_ts=POST.ts, window_seconds=5)  # fmt: skip
+    assert plan_from(path) == [None]
+    with pytest.raises(ValueError, match="one of its post's messages"):
+        store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm(expires_from="1790000002.0"))
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm(expires_from=POST.ts))
+    assert plan_from(path) == [POST.ts]
+    other = PostKey(POST.workspace_id, POST.channel_id, "1790000500.000100")
+    store.place_message(OWNER, other, user_id="U0SAM0001", thread_ts=None, window_seconds=5)
+    store.place_message(OWNER, PostKey(POST.workspace_id, POST.channel_id, "1790000502.000100"), user_id="U0SAM0001",
+                        thread_ts=other.ts, window_seconds=5)  # fmt: skip
+    store.finish_dry_run(OWNER, other, DryRunOutcome.SILENT)
+    assert plan_from(path) == [POST.ts, "1790000502.000100"]  # no question: the newest message it read
+
+
+def test_a_revision_counts_from_the_plan_and_its_question_expires_with_it(store: Store, path: Path) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    store.place_message(OWNER, PostKey(POST.workspace_id, POST.channel_id, "1790000100.000100"), user_id="U0SAM0001",
+                        thread_ts=POST.ts, window_seconds=5)  # fmt: skip
+    [waiting] = store.posts_waiting_for_dry_run(revisable_since=Decimal(POST.ts))
+    assert (waiting.revision, waiting.plan_from) == (2, POST.ts)
+    assert store.posts_waiting_for_dry_run(revisable_since=Decimal(POST.ts) + Decimal("0.000001")) == []
+    with pytest.raises(ValueError, match="expires with its post's plan"):
+        store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, "1790000100.000109", revision=2,
+                             question=confirm("c" * 22, "d" * 22, expires_from="1790000100.000100"))  # fmt: skip
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, "1790000100.000109", revision=2,
+                         question=confirm("c" * 22, "d" * 22))  # fmt: skip
+    assert [item.expires_from for item in store.questions(POST)] == [POST.ts, POST.ts]
+    assert plan_from(path) == [POST.ts]
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("UPDATE posts SET plan_from = '1790000001.000100'", "expires from one time"),
+        ("UPDATE posts SET plan_from = NULL", "expires from one time"),
+    ],
+)
+def test_the_plan_is_fixed_once(store: Store, path: Path, statement: str, message: str) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.SILENT)
+    with sqlite3.connect(path) as db, pytest.raises(sqlite3.IntegrityError, match=message):
+        db.execute(statement)
+
+
+def test_a_dry_run_cannot_be_recorded_without_its_plan(store: Store, path: Path) -> None:
+    with sqlite3.connect(path) as db, pytest.raises(sqlite3.IntegrityError, match="fixes when the post's plan"):
+        db.execute("UPDATE posts SET dry_run_at = 'now'")
+
+
+def test_the_upgrade_fixes_each_plan_from_its_first_question_or_the_post(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from stockthread.store import db as store_db
+
+    real = store_db._migrations()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real[:14])
+    old = Store.open(path)
+    old.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
+    keys = [PostKey(POST.workspace_id, POST.channel_id, f"17900000{n}0.000100") for n in range(3)]
+    for key in keys:
+        old.place_message(OWNER, key, user_id="U0SAM0001", thread_ts=None, window_seconds=5)
+    old.close()
+    with sqlite3.connect(path) as db:  # this code's finish_dry_run writes the new column
+        db.execute("UPDATE posts SET dry_run_at = 'then' WHERE id IN (1, 2)")
+        db.execute(
+            "INSERT INTO review_items (post_id, revision, question, approver_only, channel_id, message_ts, status,"
+            " created_at, poster_id, expires_from) VALUES (1, 1, '{}', 0, ?, ?, 'open', 'then', ?, ?)",
+            (POST.channel_id, REPLY, "U0SAM0001", "1790000005.000100"),
+        )
+    monkeypatch.setattr(store_db, "_migrations", lambda: real)
+    Store.open(path).close()
+    # The first question's time, the post's own time, and none yet for a post without its dry run.
+    assert plan_from(path) == ["1790000005.000100", keys[1].ts, None]
