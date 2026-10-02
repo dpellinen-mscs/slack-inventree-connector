@@ -16,6 +16,11 @@ Nothing is released yet. The connector cannot write stock in this state.
 
 ### Added
 
+- Source selection rule (`core/resolve.py`): which stock items a line takes. It considers only items that are
+  OK and unallocated, prefers one item that covers the quantity, otherwise splits oldest first, moves
+  serialized stock by serial number, and gives a review reason when batches or supplier parts differ. It is
+  not yet used by the dry run.
+
 - `stockthread check-setup`: reads InvenTree and reports the server version, what the token's user lacks
   or has beyond the minimum roles, each `[vehicles]` path that is not exactly one stock location, and
   people who have posted with no vehicle set. Exit code 1 when something must be fixed.

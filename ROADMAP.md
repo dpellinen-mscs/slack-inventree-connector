@@ -93,6 +93,8 @@ The quickstart reaches the first dry-run in about 15 minutes.
   - [x] An edit or a deletion after the dry run starts a revision by itself
   - [x] A revision reads an edited message's new text (and so does the first dry run; a deleted message drops out)
 - [ ] Source selection: choose concrete stock items for each line, serials included
+  - [x] The pick rule: OK and unallocated items only, one covering item before a split, oldest first, serials, differing batch or supplier part asks (`core/resolve.py`)
+  - [ ] In the dry run: read each line's stock, show the pick, and ask the stock question as a choice of stock items
 - [ ] Plan expiry
   - [x] A question whose plan expired is taken out of its reply, says so, and takes no answer (migration 0014)
   - [x] One expiry time per post for its questions and its revisions (migration 0015, #74)
