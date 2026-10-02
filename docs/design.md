@@ -633,10 +633,12 @@ needs.
       is applied and verified ([0012](decisions/0012-first-confirmation-becomes-alias.md)).
       Answers given as thread replies follow the same rules once they are
       read (below).
-  - **Answers by thread reply (designed, not built).** Four questions have
+  - **Answers by thread reply (designed; the reading rules are built, the
+    worker does not use them yet).** Four questions have
     no buttons: which part (`name_part`), which place (`name_location`),
     how many (`quantity`) and which serials (`serials`). The person
-    answers them by writing in the thread.
+    answers them by writing in the thread. Which questions take one and
+    what reads cleanly (below) are `core/typed_answers.py`.
     - *Which questions take one.* Only a question that names one line
       (or, for `name_location`, one side of the movement). A question
       that names no line takes no typed answer: "How many of each item?"
