@@ -427,9 +427,12 @@ def without_question(blocks: Sequence[Any]) -> list[dict[str, Any]] | None:
     return None
 
 
-def question_closed(answered_by: str | None) -> dict[str, Any]:
-    """The line that stands where a question was, once it is answered (by whom) or replaced by a newer reply."""
-    if answered_by is None:
+def question_closed(answered_by: str | None, *, expired: bool = False) -> dict[str, Any]:
+    """The line that stands where a question was, once it is answered (by whom), replaced by a newer reply, or
+    expired with its plan."""
+    if expired:
+        text = "This question expired, so nothing from this post will be applied. To record it, post it again."
+    elif answered_by is None:
         text = "This question was replaced by a newer reply in this thread."
     elif _SLACK_USER.fullmatch(answered_by):
         text = f"This question was answered by <@{answered_by}>."

@@ -94,6 +94,7 @@ The quickstart reaches the first dry-run in about 15 minutes.
   - [x] A revision reads an edited message's new text (and so does the first dry run; a deleted message drops out)
 - [ ] Source selection: choose concrete stock items for each line, serials included
 - [ ] Plan expiry
+  - [x] A question whose plan expired is taken out of its reply, says so, and takes no answer (migration 0014)
 - [ ] Setup check: users without a vehicle, token roles, locations that are missing
 - [x] Admin guidance: how to model vehicles and sites as stock locations (`docs/locations.md`)
 

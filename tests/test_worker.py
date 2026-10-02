@@ -2875,6 +2875,33 @@ def test_an_answered_question_is_taken_out_and_says_who_answered(store: Store, c
     assert buttons(path) == [("answered", "removed", 0)]
 
 
+@pytest.mark.parametrize(("past", "expired"), [(".000100", False), (".000101", True)])
+def test_an_expired_question_is_taken_out_and_says_so(
+    store: Store, clock: Clock, path: Path, past: str, expired: bool
+) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    clock.at(f"{1790000000 + worker.settings.slack.plan_expiry_hours * 3600}{past}")  # the post is at .000100
+    worker.step()
+    if not expired:  # the same instant a click still answers at
+        assert slack.updates == []
+        assert buttons(path) == [("open", "shown", 0)]
+        return
+    [update] = slack.updates
+    assert update["blocks"][-1]["elements"][0]["text"] == (
+        "This question expired, so nothing from this post will be applied. To record it, post it again."
+    )
+    assert all(block["type"] != "actions" for block in update["blocks"])
+    assert buttons(path) == [("open", "removed", 0)]
+    clicked(store, click_on(reply, ts, 0, SAM), "1")  # a client that still shows the buttons
+    worker.step()
+    assert last_status(path) == ("dropped", "expired")
+    worker.step()
+    assert len(slack.updates) == 1  # once
+
+
 def test_buttons_that_cannot_be_taken_down_are_tried_with_backoff_then_left(
     store: Store, clock: Clock, path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -3313,11 +3340,13 @@ def test_answers_given_before_the_upgrade_start_no_revision(path: Path, monkeypa
     old.place_message(OWNER, KEY, user_id=SAM, thread_ts=None, window_seconds=5)
     question = NewQuestion({"ask": "confirm"}, False, [("y" * 22, {"kind": "yes"})], poster=SAM, expires_from=ROOT)
     old.finish_dry_run(OWNER, KEY, DryRunOutcome.REPLIED, "1790009999.000001", result={}, question=question)
-    button = old.button("y" * 22)
-    assert button is not None
-    assert old.answer_question(OWNER, button, SAM).value == "answered"
     old.release_lock(OWNER)
     old.close()
+    with sqlite3.connect(path) as raw:  # as the store before migration 0013 recorded a click (it reads no later column)
+        raw.execute(
+            "UPDATE review_items SET status = 'answered', answer = ?, answered_by = ?, closed_at = ?",
+            ('{"button": 0, "kind": "yes"}', SAM, "2026-09-30T12:00:00.000000+00:00"),
+        )
     monkeypatch.setattr(store_db, "_migrations", lambda: real)
     store = Store.open(path)
     try:

@@ -196,6 +196,8 @@ class Answered(StrEnum):
     POST_CHANGED = "post_changed"
     """The post changed after the dry run that asked the question, or a later dry run read it otherwise: the
     question may no longer be about what the post says."""
+    EXPIRED = "expired"
+    """Its plan expired and its buttons were taken down (migration 0014)."""
 
 
 @dataclass(frozen=True)
@@ -840,13 +842,15 @@ class Store:
         with self._transaction():
             self._check_lock(owner)
             row = self._db.execute(
-                "SELECT i.post_id, i.revision FROM review_items i JOIN interactions b ON b.review_item_id = i.id"
-                " WHERE i.id = ? AND b.id = ? AND i.status = 'open'",
+                "SELECT i.post_id, i.revision, i.expired_at FROM review_items i"
+                " JOIN interactions b ON b.review_item_id = i.id WHERE i.id = ? AND b.id = ? AND i.status = 'open'",
                 (button.item.id, button.id),
             ).fetchone()
             if row is None:
                 return Answered.NOT_OPEN
             post_id, revision = int(row[0]), int(row[1])
+            if row[2] is not None:
+                return Answered.EXPIRED
             if self._moved_on(post_id, revision):
                 return Answered.POST_CHANGED
             self._db.execute(
@@ -870,15 +874,39 @@ class Store:
         newest = self._db.execute("SELECT max(id) FROM post_messages WHERE post_id = ?", (post_id,)).fetchone()[0]
         return bool(newest > through or self._changes_through(post_id) > changes)
 
+    def expire_questions(self, owner: str, before: Decimal) -> int:
+        """Mark open questions whose plan expiry counts from before `before` (Slack seconds) as expired, so their
+        buttons are taken down (migration 0014). Questions from before migration 0011 count from the post's own time,
+        as a click does. Compared as decimals, as a click's expiry is. Returns how many were marked."""
+        rows = self._db.execute(
+            "SELECT i.id, i.post_id, coalesce(i.expires_from, p.ts) FROM review_items i"
+            " JOIN posts p ON p.id = i.post_id WHERE i.status = 'open' AND i.expired_at IS NULL ORDER BY i.id"
+        ).fetchall()
+        expired = [(item_id, post_id) for item_id, post_id, since in rows if seconds(since) < before]
+        if not expired:  # the common case: no write
+            return 0
+        marked = 0
+        with self._transaction():
+            self._check_lock(owner)
+            for item_id, post_id in expired:
+                cursor = self._db.execute(
+                    "UPDATE review_items SET expired_at = ? WHERE id = ? AND status = 'open' AND expired_at IS NULL",
+                    (self._now(), item_id),
+                )
+                if cursor.rowcount:  # not closed since it was read
+                    self._audit(Actor.PLANNER, "question_expired", post_id=int(post_id))
+                    marked += 1
+        return marked
+
     def closed_with_buttons(self, limit: int) -> list[tuple[ReviewItem, str | None]]:
-        """Questions answered or gone stale whose reply still shows them (migration 0012), with who answered (None
-        for a stale one): fewest failed tries first, then oldest first."""
+        """Questions answered, gone stale or expired (still `open`, migration 0014) whose reply still shows them
+        (migration 0012), with who answered (None for the others): fewest failed tries first, then oldest first."""
         rows = self._db.execute(
             "SELECT i.id, i.revision, i.question, i.approver_only, i.channel_id, i.message_ts, i.status, i.poster_id,"
             " i.expires_from, p.workspace_id, p.channel_id, p.ts, i.answered_by"
             " FROM review_items i JOIN posts p ON p.id = i.post_id"
-            " WHERE i.status <> 'open' AND i.buttons = 'shown' AND i.message_ts IS NOT NULL"
-            " ORDER BY i.buttons_tries, i.id LIMIT ?",
+            " WHERE (i.status <> 'open' OR i.expired_at IS NOT NULL) AND i.buttons = 'shown'"
+            " AND i.message_ts IS NOT NULL ORDER BY i.buttons_tries, i.id LIMIT ?",
             (limit,),
         ).fetchall()
         return [(_review_item(PostKey(*row[9:12]), row[:9]), row[12]) for row in rows]

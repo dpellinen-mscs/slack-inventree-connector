@@ -488,16 +488,25 @@ needs.
     the lateness differs (`late_ingest` is not compared; the reply that
     stands, and its question, were read on time). Open does not mean
     current: a plan that has expired is not revised, so its question stays
-    open, and a click is checked against expiry as well. The stored
+    open, and a click is checked against expiry as well. Its buttons are
+    taken down (below), and from then on it takes no answer. The stored
     `approver_only` column is the mark a click trusts.
-  - **Taken down once closed (built).** A question that is answered, or
-    replaced by a newer reply, is taken out of the reply it was asked in.
+  - **Taken down once closed (built).** A question that is answered,
+    replaced by a newer reply, or whose plan expired while it was open, is
+    taken out of the reply it was asked in.
     The divider above a question carries the block id `question`. A step
     of the worker, once the queue is empty, reads the reply back from
     Slack (`conversations.replies`, bounded to that one message), keeps
     every block before that divider, and edits the reply
-    (`chat.update`) to end with one line: "answered by @user" or
-    "replaced by a newer reply". The text of the reply passes through
+    (`chat.update`) to end with one line: "answered by @user",
+    "replaced by a newer reply", or "expired, so nothing from this post
+    will be applied; to record it, post it again". Expiry is judged by the
+    same step, from the same time and by the same comparison as a click
+    (the plan's `expires_from` plus `plan_expiry_hours`; at that very
+    instant it has not expired yet). The question is marked `expired_at`
+    (once, only while open; migration 0014) with an audit row, and an
+    expired question takes no answer even if `plan_expiry_hours` is raised
+    later, because its buttons are gone. The text of the reply passes through
     memory only; nothing of it is stored or logged. One reply is edited
     every 2 seconds at most, fewest failed tries first, within the 50 a
     minute that each of the two Slack methods allows (`conversations.replies`
@@ -1062,7 +1071,7 @@ and needs no extra service.
 | `extractions` | Extractor name and version, prompt version, raw output |
 | `candidates` | Candidate movements and line items |
 | `matches` | Match results with candidates and the rule that matched |
-| `review_items` | One question per dry run that asked one: the question as ids and codes, approvers only or not, the message it was asked in, open, answered or stale, the answer and who answered (migration 0010); the poster and when its plan expires (0011) |
+| `review_items` | One question per dry run that asked one: the question as ids and codes, approvers only or not, the message it was asked in, open, answered or stale, the answer and who answered (migration 0010); the poster and when its plan expires (0011); where its buttons stand (0012); when it expired unanswered (0014) |
 | `requests` | The state machine of section 7, unique on the request key, with the marker id |
 | `request_attempts` | One row per apply or undo attempt: marker, snapshot, request body, outcome |
 | `interactions` | One row per button: its random id, its question and the answer it stands for (migration 0010) |
