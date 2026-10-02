@@ -524,7 +524,10 @@ class Worker:
         done = 0
         for_the_model: list[WaitingPost] = []
         expiry = self.settings.slack.plan_expiry_hours * 3600
-        for post in self.store.posts_waiting_for_dry_run(revisable_since=now - expiry):
+        # An answer taken as its plan expired is told it came too late, for one more plan window (issue #75).
+        for post in self.store.posts_waiting_for_dry_run(
+            revisable_since=now - expiry, late_answers_since=now - 2 * expiry
+        ):
             sent = self._running.get(post.key)
             if sent is not None:
                 if sent.next_check <= now and not self.stopping():
@@ -804,8 +807,13 @@ class Worker:
         answers: int | None = None,
     ) -> None:
         """Finish a post that gets no dry-run reply. A revision whose post had a reply standing posts a notice
-        that it no longer does, except when the post is too old: its reply has expired by then."""
+        that it no longer does, except when the post is too old: its reply has expired by then. A post too old
+        with an answer no dry run read (taken just before the plan expired) says once that it came too late, so
+        the thread never shows an answer that nothing came of."""
         reason = why or ("silent" if outcome is DryRunOutcome.SILENT else "failed")
+        if reason == "too_old" and answers is not None and answers > self.store.post_answers_read(post.key):
+            reason = "too_late"
+        # No reply standing with a late answer: a newer record took the reply back, and closed the question then.
         if reason == "too_old" or self._standing(post) is None:
             self._finish(post.key, outcome, extractor, result, post.revision, read, changes, answers)
             return

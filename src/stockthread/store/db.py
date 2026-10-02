@@ -510,16 +510,23 @@ class Store:
             if cursor.rowcount:
                 self._audit(Actor.PLANNER, "siblings_closed", post_id=post_id)
 
-    def posts_waiting_for_dry_run(self, revisable_since: Decimal | None = None) -> list[WaitingPost]:
+    def posts_waiting_for_dry_run(
+        self, revisable_since: Decimal | None = None, *, late_answers_since: Decimal | None = None
+    ) -> list[WaitingPost]:
         """Posts without a dry-run outcome yet, then posts that a message joined, that had a message edited or
         deleted, or that had a question answered, after their last dry run (a revision), each oldest first.
 
         `revisable_since`: only posts whose plan expires from this Slack time on (`plan_from`, fixed by the first
-        dry run) are revised. An older post's reply has expired with its plan: a message that joins it is kept,
-        and starts no revision. It also keeps
-        the step from reading every post ever answered.
+        dry run) are revised. An older post's reply has expired with its plan: a message that joins it is kept, and
+        starts no revision. It also keeps the step from reading every post ever revised.
+
+        `late_answers_since`: also older posts whose plan expires from this Slack time on and that have an answer
+        no dry run has read (taken just before the plan expired; its revision says it came too late). None: none.
+        Bounded, so an upgrade or long downtime does not post notices into threads long gone quiet.
         """
         since = "-1" if revisable_since is None else format(revisable_since, "f")
+        # Above any Slack time: no post is listed for a late answer.
+        late = "9e18" if late_answers_since is None else format(late_answers_since, "f")
         first = self._db.execute(
             "SELECT p.workspace_id, p.channel_id, p.ts, m.ts, 1, NULL FROM posts p"
             " JOIN post_messages m ON m.post_id = p.id"
@@ -528,6 +535,14 @@ class Store:
         revised = self._db.execute(
             "WITH recent AS ("
             " SELECT id FROM posts WHERE dry_run_at IS NOT NULL AND CAST(plan_from AS REAL) >= CAST(? AS REAL)"
+            # An answer no dry run has read yet, of a plan that expired since `late`: it was taken while the plan
+            # stood, and its revision says that it came too late. Each answered question is checked against the
+            # post's records (by index).
+            " UNION SELECT i.post_id FROM review_items i JOIN posts q ON q.id = i.post_id"
+            " WHERE i.status = 'answered' AND CAST(q.plan_from AS REAL) >= CAST(? AS REAL)"
+            " AND NOT EXISTS (SELECT 1 FROM dry_runs d WHERE d.post_id = i.post_id AND d.answers_through >= i.id)"
+            " AND NOT EXISTS (SELECT 1 FROM dry_run_revisions r WHERE r.post_id = i.post_id"
+            " AND r.answers_through >= i.id)"
             "),"
             " last AS ("
             " SELECT d.post_id, coalesce(max(r.read_through), d.read_through) AS through,"
@@ -546,7 +561,7 @@ class Store:
             " OR EXISTS (SELECT 1 FROM review_items i WHERE i.post_id = p.id AND i.status = 'answered'"
             " AND i.id > last.answers)"
             " ORDER BY p.id",
-            (since,),
+            (since, late),
         ).fetchall()
         found: dict[PostKey, tuple[int, str | None, list[str]]] = {}
         for workspace, channel, post_ts, ts, revision, plan_from in [*first, *revised]:
@@ -656,6 +671,18 @@ class Store:
         if post_id is None:
             raise KeyError("no such post")
         return self._answers_through(post_id)
+
+    def post_answers_read(self, key: PostKey) -> int:
+        """The newest answered question the post's newest dry run knew of; 0 when it knew of none."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        row = self._db.execute(
+            "SELECT coalesce((SELECT answers_through FROM dry_run_revisions WHERE post_id = ?"
+            " ORDER BY revision DESC LIMIT 1), (SELECT answers_through FROM dry_runs WHERE post_id = ?))",
+            (post_id, post_id),
+        ).fetchone()
+        return int(row[0] or 0)
 
     def _answers_through(self, post_id: int) -> int:
         row = self._db.execute(
