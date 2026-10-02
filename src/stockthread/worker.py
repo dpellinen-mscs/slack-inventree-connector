@@ -693,7 +693,7 @@ class Worker:
         # with a post whose stock changed. Outside the `try`: a failed read is an outage, and the post waits.
         stock = self._read_stock(views) if effects.rejected is None else {}
         try:
-            views = _with_stock(views, stock)
+            views = _with_stock(views, stock, effects.stock)
             decided = {
                 **record(views, late),
                 "reading": reading,  # before the answers: what a later reading is compared with
@@ -1200,11 +1200,15 @@ def _stock_lines(view: MovementView) -> list[tuple[int, Operation, int, int, Dec
 
 
 def _with_stock(
-    views: Sequence[MovementView], found: Mapping[tuple[int, int], Sequence[StockItem]]
+    views: Sequence[MovementView],
+    found: Mapping[tuple[int, int], Sequence[StockItem]],
+    chosen: Mapping[tuple[int, int], tuple[int, ...]] | None = None,
 ) -> list[MovementView]:
     """The views with the stock items each settled line acts on, and the reasons the picks raise, each naming its
-    line (`core/resolve.py`). The lines of every movement of the post share the stock, in the post's order. Lines
-    whose stock was not read are left as they are."""
+    line (`core/resolve.py`). The lines of every movement of the post share the stock, in the post's order. A line
+    a person named stock items for (`chosen`, by movement and line) acts on those only. Lines whose stock was not
+    read are left as they are."""
+    chosen = chosen or {}
     lines = [
         (index, entry)
         for index, view in enumerate(views)
@@ -1213,7 +1217,13 @@ def _with_stock(
     ]
     resolved = resolve_lines(
         [
-            LineStock(operation, quantity, found[(part, place)], views[index].movement.line_items[line].serials)
+            LineStock(
+                operation,
+                quantity,
+                found[(part, place)],
+                views[index].movement.line_items[line].serials,
+                chosen.get((index, line)),
+            )
             for index, (line, operation, part, place, quantity) in lines
         ]
     )

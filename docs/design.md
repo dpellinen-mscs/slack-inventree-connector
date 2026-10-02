@@ -619,8 +619,9 @@ needs.
       location answer is a match by the `answer` rule. "Yes" clears a
       reason only for a doubt about the whole reading or an approval
       question, and only on the line the question named (a reason
-      about another line is asked next); a "yes" to a stock question
-      clears nothing until source selection asks its own. "No" to any
+      about another line is asked next); a "yes" to a stock doubt asked
+      before the stock question was built clears nothing. Stock answers
+      name stock items (below). "No" to any
       yes-or-no question about the reading ends the plan. An answer that does not fit its question
       (a record not offered, a line the reading lacks) is ignored. A new
       answer always posts a reply, even one that changes nothing, so the
@@ -761,7 +762,9 @@ needs.
       becomes no alias: the person typed a name, not a new way to say it.
       A typed name the matcher found only loosely is confirmed by the next
       question first, as above, and the alias is still the post's text.
-  - **The stock question (designed, not built).** Tier 8 asks about the
+  - **The stock question** (`core/questions.py` asks it from the line's
+    pick; `core/resolve.py` offers the items and acts on the ones chosen).
+    Tier 8 asks about the
     stock a line acts on, once its part, place and quantity are settled
     and its stock was read (section 5, "Stock items, not parts"). What
     the thread can settle depends on why the pick is not decided:

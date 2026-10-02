@@ -317,3 +317,65 @@ def test_the_longest_reply_still_has_room_for_its_question() -> None:
     too_many = {"text": "", "blocks": [{"type": "divider"}] * MAX_BLOCKS}
     with pytest.raises(ValueError, match="more blocks"):
         with_question(too_many, message(question, *views))
+
+
+# The stock question (design section 4, "The stock question").
+
+
+def stock_item(pk: int, quantity: str = "5", **fields: Any) -> resolve.StockItem:
+    return resolve.StockItem(
+        pk, Decimal(quantity), 10, Decimal(0), batch=fields.get("batch"), supplier_part=fields.get("supplier_part")
+    )
+
+
+def stock_view(pick: resolve.SourcePick, movement_type: MovementType = MovementType.TAKE_TO_VEHICLE) -> MovementView:
+    movement = CandidateMovement(movement_type, (LineItem("Disc 40", Decimal(2)),), "main stock", "truck 1")
+    return MovementView(movement, (EXACT,), EXACT, EXACT, (), (pick,))
+
+
+def test_stock_choices_are_items_and_none_or_again_and_drop_it() -> None:
+    choose = Question(Ask.CHOOSE_STOCK, ReasonCode.STOCK_CHOICE, 0, 0, None, (41, 57))
+    assert choices(choose) == (Choice("record", 41), Choice("record", 57), Choice("none"))
+    split = Question(Ask.CONFIRM_STOCK, ReasonCode.STOCK_CHOICE, 0, 0, None, (41, 57))
+    assert choices(split) == (Choice("yes"), Choice("no"))
+    again = Question(Ask.READ_STOCK_AGAIN, ReasonCode.NO_TARGET_STOCK_ITEM, 0, 0)
+    assert choices(again) == (Choice("again"), Choice("no"))
+    assert choice_from_json(json.loads(json.dumps(choice_json(Choice("again"))))) == Choice("again")
+    with pytest.raises(ValueError, match="a choice carries"):
+        choice_from_json({"kind": "again", "record": 41, "movement_type": None})
+
+
+def test_a_stock_item_is_labelled_by_its_id_what_is_on_hand_and_its_batch_or_supplier_part() -> None:
+    offer = (stock_item(41, "5", batch="B-1"), stock_item(57, "2.5", supplier_part=9), stock_item(60, batch="x" * 90))
+    pick = resolve.SourcePick((), (), offer=offer)
+    question = Question(Ask.CHOOSE_STOCK, ReasonCode.STOCK_CHOICE, 0, 0, None, (41, 57, 60), detail="line 1: x")
+    body = question_message(question, [stock_view(pick)], PARTS, LOCATIONS, ids(question))
+    labels = [b["text"]["text"] for b in buttons(body)]
+    assert labels[:2] == ["#41 · 5 on hand · batch B-1", "#57 · 2.5 on hand · supplier part #9"]
+    assert len(labels[2]) == MAX_LABEL
+    assert labels[2].startswith("#60 · 5 on hand · batch x")
+    assert labels[3] == "None of these"
+    assert "Which stock item is “Disc 40” taken from (x)?" in text_of(body)
+    target = question_message(question, [stock_view(pick, MovementType.COUNT)], PARTS, LOCATIONS, ids(question))
+    assert "Which stock item of “Disc 40” is it (x)?" in text_of(target)
+
+
+def test_a_stock_question_about_items_the_pick_does_not_offer_is_not_shown() -> None:
+    pick = resolve.SourcePick((), (), offer=(stock_item(41),))
+    choose = Question(Ask.CHOOSE_STOCK, ReasonCode.STOCK_CHOICE, 0, 0, None, (41, 57))
+    with pytest.raises(ValueError, match="not offered"):
+        question_message(choose, [stock_view(pick)], PARTS, LOCATIONS, ids(choose))
+    split = Question(Ask.CONFIRM_STOCK, ReasonCode.STOCK_CHOICE, 0, 0, None, (41, 57))
+    with pytest.raises(ValueError, match="not the line's"):
+        question_message(split, [stock_view(pick)], PARTS, LOCATIONS, ids(split))
+
+
+def test_read_the_stock_again_says_what_is_wrong_and_where_it_is_fixed() -> None:
+    question = Question(
+        Ask.READ_STOCK_AGAIN, ReasonCode.QUANTITY_ABOVE_STOCK, 0, 0, detail=f"line 1: {resolve.DETAIL_TOO_FEW}"
+    )
+    body = question_message(question, [stock_view(resolve.SourcePick(()))], PARTS, LOCATIONS, ids(question))
+    assert [b["text"]["text"] for b in buttons(body)] == ["Read the stock again", "Drop it"]
+    text = text_of(body)
+    assert f"({resolve.DETAIL_TOO_FEW})" in text
+    assert "Fix it in InvenTree or edit the post" in text

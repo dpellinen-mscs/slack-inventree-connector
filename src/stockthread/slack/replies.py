@@ -24,7 +24,7 @@ from stockthread.core.model import (
     operation_for,
 )
 from stockthread.core.questions import Ask, Choice, Question, choices
-from stockthread.core.resolve import SourcePick
+from stockthread.core.resolve import SourcePick, StockItem
 
 MAX_SECTION = 2900
 """Slack allows 3000 characters in a section block. Longer text is cut, with a marker."""
@@ -350,6 +350,8 @@ def question_message(
         text = f"Which stock location is {place}?"
     elif ask is Ask.CONFIRM_LOCATION:
         text = f"Is {place} *{record}*?"
+    elif ask in (Ask.CHOOSE_STOCK, Ask.CONFIRM_STOCK, Ask.READ_STOCK_AGAIN):
+        text = _stock_question(question, view, written or "the item")
     else:
         text = (
             f"Which serial numbers of {written}? Reply in this thread with one per piece."
@@ -360,7 +362,12 @@ def question_message(
         text = f"Movement {question.movement + 1}: {text}"
     plain = text.replace(f"*{record}*", record) if record else text
     blocks: list[dict[str, Any]] = [_section(text)]
-    labels = _labels(buttons, names, cut_left=question.side is not None)
+    if ask is Ask.CHOOSE_STOCK:
+        labels = [_stock_label(choice, _offered(question, view)) for choice in buttons]
+    elif ask is Ask.READ_STOCK_AGAIN:
+        labels = ["Read the stock again", "Drop it"]
+    else:
+        labels = _labels(buttons, names, cut_left=question.side is not None)
     if buttons:
         blocks.append(
             {
@@ -377,6 +384,50 @@ def question_message(
             }
         )
     return {"text": plain, "blocks": blocks}
+
+
+def _stock_question(question: Question, view: MovementView, written: str) -> str:
+    """The stock question's words (design section 4, "The stock question"). Stock items are named by their
+    InvenTree ids; what is wrong is said in the rule's words, never the post's."""
+    detail = escape(re.sub(r"^line \d+:?\s*", "", question.detail))
+    why = f" ({detail})" if detail else ""
+    if question.ask is Ask.CHOOSE_STOCK:
+        if operation_for(view.movement.movement_type) in (Operation.ADD, Operation.COUNT):
+            return f"Which stock item of {written} is it{why}?"
+        return f"Which stock item is {written} taken from{why}?"
+    if question.ask is Ask.CONFIRM_STOCK:
+        pick = view.stock[question.line] if question.line is not None and question.line < len(view.stock) else None
+        split = pick.split if pick is not None else ()
+        if [take.item for take in split] != list(question.candidates):
+            raise ValueError("the split asked about is not the line's")
+        takes = " and ".join(f"{_number(take.quantity)} from #{take.item}" for take in split)
+        return f"No single stock item covers {written}{why}. Take {takes}?"
+    doubt = REASONS[question.reason].rstrip(".")
+    return (
+        f"About {written}: {doubt}{why}. Fix it in InvenTree or edit the post, then read the stock again, or drop it."
+    )
+
+
+def _offered(question: Question, view: MovementView) -> Mapping[int, StockItem]:
+    pick = view.stock[question.line] if question.line is not None and question.line < len(view.stock) else None
+    offered = {item.pk: item for item in pick.offer} if pick is not None else {}
+    if any(pk not in offered for pk in question.candidates):
+        raise ValueError("a stock item asked about is not offered")
+    return offered
+
+
+def _stock_label(choice: Choice, offered: Mapping[int, StockItem]) -> str:
+    """`#57 · 5 on hand · batch B-1`: words from InvenTree, never from the post."""
+    if choice.kind != "record" or choice.record is None:
+        return "None of these"
+    item = offered[choice.record]
+    parts = [f"#{item.pk}", f"{_number(item.quantity)} on hand"]
+    if item.batch:
+        parts.append(f"batch {' '.join(item.batch.split())}")
+    if item.supplier_part is not None:
+        parts.append(f"supplier part #{item.supplier_part}")
+    label = " · ".join(parts)
+    return label if len(label) <= MAX_LABEL else label[: MAX_LABEL - 1].rstrip() + "…"
 
 
 QUESTION_BLOCK = "question"

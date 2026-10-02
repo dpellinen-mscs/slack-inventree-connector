@@ -12,7 +12,11 @@ the reading that stands, oldest first, onto that same reading read again; this m
   for: its code and detail, for that movement and line only (the line the question named, or none). Any other
   reason (a serial, a quantity, the same doubt about another line, another doubt with the same code, an unclear
   type) is still asked about.
-- "No" to any yes-or-no question about the reading ends the plan: nothing of this reading will be applied.
+- A stock item picked from a list, or "yes" to a split, names the stock items a line acts on; "None of these" names
+  none. "Read the stock again" ends the line's earlier stock answers. The caller reads the stock again on every
+  revision and picks from the named items only (`resolve.resolve_lines`).
+- "No" to any yes-or-no question about the reading ends the plan: nothing of this reading will be applied. So does
+  "Drop it".
 
 An answer to a question for approvers counts only while its author is an approver; one that does not fit its
 question (a record that was not offered, a movement or line the reading does not have) changes nothing. Neither
@@ -62,6 +66,9 @@ class Effects:
     types: dict[int, MovementType] = field(default_factory=dict)
     parts: dict[tuple[int, int], Match] = field(default_factory=dict)
     places: dict[tuple[int, Side], Match] = field(default_factory=dict)
+    stock: dict[tuple[int, int], tuple[int, ...]] = field(default_factory=dict)
+    """(movement, line): the stock items a person named for the line, oldest answer first and the newest kept;
+    empty for "None of these". A line without an entry picks by the rule."""
     cleared: set[tuple[int, int | None, ReasonCode, str]] = field(default_factory=set)
     """(movement, line or None, code, detail): the reasons a "yes" cleared (`questions.reason_line` gives a reason's
     line)."""
@@ -112,6 +119,8 @@ def _apply(answer: Given, shape: Sequence[int], approvers: Collection[str], effe
                 return False
             effects.places[(movement, question.side)] = match
         return True
+    if ask in (Ask.CHOOSE_STOCK, Ask.CONFIRM_STOCK, Ask.READ_STOCK_AGAIN):
+        return _stock(answer, effects)
     if ask is Ask.CONFIRM:
         if choice.kind == "no":
             effects.rejected = answer.item  # whatever it doubted, the person says the reading is wrong
@@ -119,13 +128,38 @@ def _apply(answer: Given, shape: Sequence[int], approvers: Collection[str], effe
         if choice.kind == "yes" and clears_on_yes(question):
             effects.cleared.add((movement, question.line, question.reason, question.detail))
             return True
-    return False  # a question answered by a thread reply has no buttons; a yes to a stock doubt clears nothing yet
+    return False  # a question answered by a thread reply has no buttons; a yes to an old stock doubt clears nothing
+
+
+def _stock(answer: Given, effects: Effects) -> bool:
+    question, choice = answer.question, answer.choice
+    if question.line is None or question.side is not None:
+        return False
+    line = (question.movement, question.line)
+    if choice.kind == "no" and question.ask is not Ask.CHOOSE_STOCK:
+        effects.rejected = answer.item  # "no" to the split, or "Drop it"
+        return True
+    if question.ask is Ask.CHOOSE_STOCK:
+        if choice.kind == "record" and choice.record is not None and choice.record in question.candidates:
+            effects.stock[line] = (choice.record,)
+            return True
+        if choice.kind == "none":
+            effects.stock[line] = ()
+            return True
+    elif question.ask is Ask.CONFIRM_STOCK:
+        if choice.kind == "yes" and question.candidates:
+            effects.stock[line] = question.candidates
+            return True
+    elif choice.kind == "again":
+        effects.stock.pop(line, None)  # the line's earlier stock answers end; later ones count again
+        return True
+    return False
 
 
 def clears_on_yes(question: Question) -> bool:
     """Whether "yes" clears the question's reason: a doubt about the whole reading, or a question for approvers.
-    Other confirm questions (stock, until source selection asks its own) are asked again until something else
-    settles them."""
+    Other confirm questions (a stock doubt asked before the stock question was built) are asked again until
+    something else settles them."""
     return question.ask is Ask.CONFIRM and (question.approver_only or tier_of(question) is Tier.READING)
 
 

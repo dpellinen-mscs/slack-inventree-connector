@@ -3560,15 +3560,29 @@ def test_a_split_is_shown_item_by_item(store: Store, clock: Clock) -> None:
 
 
 @pytest.mark.parametrize(
-    ("items", "code", "detail"),
+    ("items", "code", "detail", "ask", "candidates"),
     [
-        ([], "no_target_stock_item", "line 1: no stock item at the source"),
-        ([ok(41, 1)], "quantity_above_stock", "line 1: fewer at the source than the quantity"),
-        ([ok(41, 5, "B1"), ok(57, 5, "B2")], "stock_choice", "line 1: the items differ in batch"),
+        ([], "no_target_stock_item", "line 1: no stock item at the source", "read_stock_again", []),
+        ([ok(41, 1)], "quantity_above_stock", "line 1: fewer at the source than the quantity", "read_stock_again", []),
+        (
+            [ok(41, 5, "B1"), ok(57, 5, "B2")],
+            "stock_choice",
+            "line 1: the items differ in batch",
+            "choose_stock",
+            [41, 57],
+        ),
+        ([ok(41, 1, "B1"), ok(57, 5, "B2")], "stock_choice", "line 1: the items differ in batch", "choose_stock", [57]),
+        (
+            [ok(41, 1, "B1"), ok(57, 1, "B2"), ok(60, 1)],
+            "stock_choice",
+            "line 1: the items differ in batch",
+            "confirm_stock",
+            [41, 57],
+        ),
     ],
 )
 def test_stock_that_does_not_settle_the_pick_is_a_reason_and_asks_the_stock_question(
-    store: Store, clock: Clock, items: list[StockItem], code: str, detail: str
+    store: Store, clock: Clock, items: list[StockItem], code: str, detail: str, ask: str, candidates: list[int]
 ) -> None:
     worker = stocked(store, clock, FakeStock({(1, 10): items}))
     reply, _ = posted(worker)
@@ -3577,7 +3591,112 @@ def test_stock_that_does_not_settle_the_pick_is_a_reason_and_asks_the_stock_ques
     assert movement["reasons"] == [{"code": code, "source": "rule", "detail": detail}]
     assert [code, detail] in movement["gate"]
     [item] = store.questions(KEY)
-    assert (item.question["ask"], item.question["reason"], item.question["line"]) == ("confirm", code, 0)
+    assert (item.question["ask"], item.question["reason"], item.question["line"]) == (ask, code, 0)
+    assert item.question["candidates"] == candidates
+
+
+def newest(worker: Worker) -> tuple[dict[str, Any], str]:
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    return slack.posted[-1], f"1790009999.{len(slack.posted):06d}"
+
+
+def test_a_stock_item_picked_by_button_is_the_one_the_line_takes_from(store: Store, clock: Clock, path: Path) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(41, 5, "B1"), ok(57, 5, "B2")]}))
+    reply, ts = posted(worker)
+    labels = [element["text"]["text"] for element in reply["blocks"][-1]["elements"]]
+    assert labels == ["#41 · 5 on hand · batch B1", "#57 · 5 on hand · batch B2", "None of these"]
+    assert "taken from (the items differ in batch)?" in reply_text(reply)
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    assert last_status(path) == ("done", "answered")
+    assert revisions(path) == [(2, "replied", True)]
+    revised, _ = newest(worker)
+    assert "(from stock item #57)" in reply_text(revised)
+    assert "this could apply" in reply_text(revised)
+    movement = first_movement(store)
+    assert movement["items"][0]["stock"] == [{"item": 57, "quantity": "2"}]
+    assert movement["reasons"] == []
+    assert [item.status.value for item in store.questions(KEY)] == ["answered"]
+
+
+def test_a_chosen_stock_item_that_no_longer_covers_the_line_is_asked_about_again(store: Store, clock: Clock) -> None:
+    stock = FakeStock({(1, 10): [ok(41, 5, "B1"), ok(57, 5, "B2"), ok(60, 5, "B2")]})
+    worker = stocked(store, clock, stock)
+    reply, ts = posted(worker)
+    stock.items[(1, 10)] = [ok(41, 1, "B1"), ok(57, 5, "B2"), ok(60, 5, "B2")]  # 41 was used up since
+    clicked(store, click_on(reply, ts, 0, SAM), "1")
+    worker.step()
+    movement = first_movement(store)
+    assert movement["items"][0]["stock"] == []
+    detail = "line 1: the chosen stock items no longer cover the quantity"
+    assert movement["reasons"] == [{"code": "stock_choice", "source": "rule", "detail": detail}]
+    *_, item = store.questions(KEY)
+    assert (item.question["ask"], item.question["candidates"]) == ("choose_stock", [57, 60])
+
+
+def test_none_of_these_asks_to_read_the_stock_again_which_picks_by_the_rule_once_fixed(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    stock = FakeStock({(1, 10): [ok(41, 5, "B1"), ok(57, 5, "B2")]})
+    worker = stocked(store, clock, stock)
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 2, SAM), "1")  # None of these
+    worker.step()
+    again, again_ts = newest(worker)
+    *_, item = store.questions(KEY)
+    assert item.question["ask"] == "read_stock_again"
+    assert [element["text"]["text"] for element in again["blocks"][-1]["elements"]] == [
+        "Read the stock again",
+        "Drop it",
+    ]
+    assert "Fix it in InvenTree or edit the post" in reply_text(again)
+    stock.items[(1, 10)] = [ok(57, 5, "B2")]  # fixed in InvenTree
+    clicked(store, click_on(again, again_ts, 0, SAM, at="1790000200.000100"), "2")
+    worker.step()
+    assert revisions(path)[-1] == (3, "replied", True)
+    assert "this could apply" in reply_text(newest(worker)[0])
+    assert first_movement(store)["items"][0]["stock"] == [{"item": 57, "quantity": "2"}]
+
+
+def test_read_the_stock_again_asks_the_choice_again_when_nothing_was_fixed(store: Store, clock: Clock) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(41, 5, "B1"), ok(57, 5, "B2")]}))
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 2, SAM), "1")
+    worker.step()
+    again, again_ts = newest(worker)
+    clicked(store, click_on(again, again_ts, 0, SAM, at="1790000200.000100"), "2")
+    worker.step()
+    *_, item = store.questions(KEY)
+    assert (item.question["ask"], item.question["candidates"]) == ("choose_stock", [41, 57])
+
+
+@pytest.mark.parametrize(
+    ("items", "button"),
+    [([], 1), ([ok(41, 1, "B1"), ok(57, 1, "B2"), ok(60, 1)], 1)],  # "Drop it"; "no" to the split
+)
+def test_drop_it_and_no_to_a_split_end_the_plan(
+    store: Store, clock: Clock, items: list[StockItem], button: int
+) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): items}))
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, button, SAM), "1")
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    [item] = store.questions(KEY)
+    assert record.result["rejected"] == item.id
+
+
+def test_yes_to_a_split_takes_it(store: Store, clock: Clock) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(41, 1, "B1"), ok(57, 1, "B2"), ok(60, 1)]}))
+    reply, ts = posted(worker)
+    assert "(the items differ in batch). Take 1 from #41 and 1 from #57?" in reply_text(reply)
+    clicked(store, click_on(reply, ts, 0, SAM), "1")
+    worker.step()
+    assert first_movement(store)["items"][0]["stock"] == [{"item": 41, "quantity": "1"}, {"item": 57, "quantity": "1"}]
+    assert first_movement(store)["reasons"] == []
 
 
 @pytest.mark.parametrize(("held", "could"), [(3, False), (5, True)])
