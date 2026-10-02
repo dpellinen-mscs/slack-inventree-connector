@@ -334,8 +334,10 @@ needs.
     notice once, "The answer came as its plan expired: nothing of it
     will be applied", so the thread never shows an answer that nothing
     came of (issue #75). Such posts are found from the answer side: each
-    answered question that the post's dry runs have not read yet, looked
-    up by the post's records (by index).
+    answered question that the post's dry runs have not read yet, of a
+    plan that expired within the last plan window. Later than that
+    (downtime, or an upgrade over answers stranded before this fix), the
+    thread has gone quiet and is left so.
   - **An edit or a deletion alone** after the dry run starts a revision
     too. Every dry run also records the newest noted edit or deletion of
     its post it was decided with (`changes_through`, a

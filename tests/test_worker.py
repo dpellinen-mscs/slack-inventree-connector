@@ -2655,13 +2655,20 @@ def test_an_answer_taken_as_the_plan_expires_says_once_that_it_came_too_late(
     assert store.posts_waiting_for_dry_run(revisable_since=Decimal(expiry + 600)) == []
 
 
-def test_an_expired_post_without_a_new_answer_stays_quiet(store: Store, clock: Clock, path: Path) -> None:
+def test_an_answer_whose_plan_expired_more_than_a_plan_window_ago_gets_no_notice(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    # Downtime, or an upgrade over answers stranded before #75: a thread long gone quiet is not woken up.
     worker = asked(store, clock)
-    expiry = 1790000000 + worker.settings.slack.plan_expiry_hours * 3600
-    clock.at(f"{expiry + 60}.000000")
+    reply, ts = posted(worker)
+    hours = worker.settings.slack.plan_expiry_hours
+    expiry = 1790000000 + hours * 3600
+    clock.at(f"{expiry}.000100")
+    clicked(store, click_on(reply, ts, 0, SAM), "1")
+    worker.drain()
+    clock.at(f"{expiry + hours * 3600 + 1}.000000")
     worker.step()
     assert revisions(path) == []
-    assert store.posts_waiting_for_dry_run(revisable_since=Decimal(expiry + 60)) == []
     slack = worker.slack
     assert isinstance(slack, FakeSlack)
     assert len(slack.posted) == 1  # the reply above, and nothing since
