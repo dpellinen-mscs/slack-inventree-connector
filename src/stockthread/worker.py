@@ -79,7 +79,7 @@ from stockthread.core.model import (
     operation_for,
 )
 from stockthread.core.questions import choice_json, choices, pick_question, question_json, reason_line
-from stockthread.core.resolve import SourcePick, StockItem, resolve_line
+from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.validate import photo_not_read, validate
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.catchup import is_catch_up
@@ -1194,22 +1194,32 @@ def _stock_lines(view: MovementView) -> list[tuple[int, Operation, int, int, Dec
 def _with_stock(
     views: Sequence[MovementView], found: Mapping[tuple[int, int], Sequence[StockItem]]
 ) -> list[MovementView]:
-    """The views with the stock items each settled line acts on, and the reasons the pick raises, each naming its
-    line (`core/resolve.py`). Lines whose stock was not read are left as they are."""
-    resolved = []
-    for view in views:
-        lines = [entry for entry in _stock_lines(view) if (entry[2], entry[3]) in found]
-        if not lines:
-            resolved.append(view)
-            continue
-        picks: list[SourcePick | None] = [None] * len(view.items)
-        added: list[ReviewReason] = []
-        for line, operation, part, place, quantity in lines:
-            pick = resolve_line(operation, quantity, found[(part, place)], view.movement.line_items[line].serials)
-            picks[line] = pick
-            added.extend(replace(reason, detail=f"line {line + 1}: {reason.detail}") for reason in pick.reasons)
-        resolved.append(replace(view, reasons=(*view.reasons, *added), stock=tuple(picks)))
-    return resolved
+    """The views with the stock items each settled line acts on, and the reasons the picks raise, each naming its
+    line (`core/resolve.py`). The lines of every movement of the post share the stock, in the post's order. Lines
+    whose stock was not read are left as they are."""
+    lines = [
+        (index, entry)
+        for index, view in enumerate(views)
+        for entry in _stock_lines(view)
+        if (entry[2], entry[3]) in found
+    ]
+    resolved = resolve_lines(
+        [
+            LineStock(operation, quantity, found[(part, place)], views[index].movement.line_items[line].serials)
+            for index, (line, operation, part, place, quantity) in lines
+        ]
+    )
+    picks: dict[int, list[SourcePick | None]] = {}
+    added: dict[int, list[ReviewReason]] = {}
+    for (index, (line, *_)), pick in zip(lines, resolved, strict=True):
+        picks.setdefault(index, [None] * len(views[index].items))[line] = pick
+        added.setdefault(index, []).extend(
+            replace(reason, detail=f"line {line + 1}: {reason.detail}") for reason in pick.reasons
+        )
+    return [
+        replace(view, reasons=(*view.reasons, *added[index]), stock=tuple(picks[index])) if index in picks else view
+        for index, view in enumerate(views)
+    ]
 
 
 def _picked(pick: SourcePick) -> list[dict[str, Any]]:
