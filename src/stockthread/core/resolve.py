@@ -225,7 +225,7 @@ def resolve_lines(lines: Sequence[LineStock]) -> list[SourcePick]:
                 take.item in taken and taken[take.item] >= whole[take.item] for take in pick.takes
             ):
                 pick = replace(pick, reasons=(*pick.reasons, _reason(ReasonCode.STOCK_CHOICE, DETAIL_EMPTIED)))
-        picks.append(_offered(line, left, pick))
+        picks.append(_offered(line, left, pick, taken))
     counted = {
         take.item
         for line, pick in zip(lines, picks, strict=True)
@@ -249,6 +249,9 @@ def _chosen(line: LineStock, chosen: tuple[int, ...], left: Sequence[StockItem])
     if not chosen:
         return SourcePick((), (_reason(ReasonCode.STOCK_CHOICE, DETAIL_NONE_CHOSEN),))
     if line.operation in (Operation.TRANSFER, Operation.REMOVE):
+        pool = [item for item in left if item.available]
+        if any(item.serial for item in pool) and not all(item.serial for item in pool):
+            return SourcePick((), (_reason(ReasonCode.STOCK_CHOICE, DETAIL_MIXED),))  # a choice does not settle it
         named = [item for item in left if item.pk in chosen]
         pick = pick_source(line.quantity, named, line.serials) if named else SourcePick(())
         if pick.takes and all(reason.detail in (DETAIL_BATCH, DETAIL_SUPPLIER_PART) for reason in pick.reasons):
@@ -262,12 +265,18 @@ def _chosen(line: LineStock, chosen: tuple[int, ...], left: Sequence[StockItem])
     return SourcePick((Take(item.pk, line.quantity),))
 
 
-def _offered(line: LineStock, left: Sequence[StockItem], pick: SourcePick) -> SourcePick:
-    """The pick with what the stock question offers, when a choice can settle one of its reasons."""
+def _offered(line: LineStock, left: Sequence[StockItem], pick: SourcePick, taken: Mapping[int, Decimal]) -> SourcePick:
+    """The pick with what the stock question offers, when a choice can settle one of its reasons. An add is not
+    offered an item the lines before it take in full."""
     if not any(reason.detail in CHOOSABLE for reason in pick.reasons):
         return pick
     if line.operation not in (Operation.TRANSFER, Operation.REMOVE):
-        targets = sorted((item for item in left if not item.serial), key=lambda item: item.pk)
+        emptied = {
+            item.pk for item in left if line.operation is Operation.ADD and taken.get(item.pk, -1) >= item.quantity
+        }
+        targets = sorted(
+            (item for item in left if not item.serial and item.pk not in emptied), key=lambda item: item.pk
+        )
         return replace(pick, offer=tuple(targets[:MAX_OFFER]))
     pool = sorted((item for item in left if item.available and not item.serial), key=lambda item: item.pk)
     covering = tuple(item for item in pool if item.quantity >= line.quantity)[:MAX_OFFER]

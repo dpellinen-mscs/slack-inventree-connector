@@ -430,3 +430,33 @@ def test_several_items_named_for_a_target_are_not_an_answer() -> None:
     stock = [item(57, "1"), item(58, "4")]
     (pick,) = resolve_lines([LineStock(COUNT, Decimal(3), stock, chosen=(57, 58))])
     assert codes(pick) == [(ReasonCode.STOCK_CHOICE, DETAIL_SEVERAL_TARGETS)]
+
+
+def test_a_chosen_item_does_not_settle_partly_serialized_stock() -> None:
+    stock = [item(41, "5", batch="A"), item(60, "1", serial="S1")]
+    for chosen in ((41,), (57,)):
+        (pick,) = resolve_lines([LineStock(TRANSFER, Decimal(1), stock, chosen=chosen)])
+        assert (pick.takes, codes(pick)) == ((), [(ReasonCode.STOCK_CHOICE, DETAIL_MIXED)])
+        assert (pick.offer, pick.split) == ((), ())
+
+
+def test_the_offer_leaves_out_serialized_allocated_and_not_ok_items() -> None:
+    stock = [item(57, "5", batch="A"), item(58, "5", batch="B"), item(59, "5", allocated="1"), item(60, "5", status=55)]
+    (pick,) = resolve_lines([LineStock(TRANSFER, Decimal(3), stock, chosen=(41,))])
+    assert [offered.pk for offered in pick.offer] == [57, 58]
+
+
+def test_an_add_is_not_offered_an_item_an_earlier_line_takes_in_full() -> None:
+    stock = [item(41, "2"), item(42, "4"), item(43, "1")]
+    _, add = resolve_lines([LineStock(TRANSFER, Decimal(2), [item(41, "2")]), LineStock(ADD, Decimal(3), stock)])
+    assert codes(add) == [(ReasonCode.STOCK_CHOICE, DETAIL_SEVERAL_TARGETS)]
+    assert [offered.pk for offered in add.offer] == [42, 43]
+    _, count = resolve_lines([LineStock(TRANSFER, Decimal(2), [item(41, "2")]), LineStock(COUNT, Decimal(3), stock)])
+    assert [offered.pk for offered in count.offer] == [41, 42, 43]
+
+
+def test_serialized_stock_is_never_offered_as_a_choice() -> None:
+    stock = [item(60, "1", serial="S1"), item(61, "1", serial="S2")]
+    (pick,) = resolve_lines([LineStock(TRANSFER, Decimal(1), stock, chosen=(41,))])
+    assert codes(pick) == [(ReasonCode.STOCK_CHOICE, DETAIL_CHOSEN_SHORT)]
+    assert (pick.offer, pick.split) == ((), ())  # so the question is "read the stock again"
