@@ -618,7 +618,133 @@ needs.
       was clicked. A confirmed match becomes an alias only after the plan
       is applied and verified ([0012](decisions/0012-first-confirmation-becomes-alias.md)).
       Answers given as thread replies follow the same rules once they are
-      read (a later slice).
+      read (below).
+  - **Answers by thread reply (designed, not built).** Four questions have
+    no buttons: which part (`name_part`), which place (`name_location`),
+    how many (`quantity`) and which serials (`serials`). The person
+    answers them by writing in the thread.
+    - *Which questions take one.* Only a question that names one line
+      (or, for `name_location`, one side of the movement). A question
+      that names no line takes no typed answer: "How many of each item?"
+      on a post with several lines, or "Which item was moved?" on a
+      reading with no lines (a photo-only post). Every reply to it is a
+      thread message and is read with the post, so the model reads
+      "3 and 2" or "two of the patch cords" with the post's own words.
+    - *What counts as an answer.* Messages in the thread are judged in
+      `ts` order. A message counts as the answer to the open question
+      only when all of these hold. It is in the post's thread and is not
+      from a bot. It was posted after the reply that asked (its `ts` is
+      greater than the question's `message_ts`). Its author may answer
+      that question, the same rule as for a button. It is the first
+      message that meets these conditions and reads cleanly: a message
+      before it that does not read cleanly uses up nothing. A question
+      gets one answer, and one message answers one question. And it
+      *reads cleanly as an answer* to that ask:
+      - `quantity`: the whole message is one number, as digits or as a
+        word the rules already read ("3", "three"), greater than zero
+        (zero only for a count). A piece word may follow ("3 pcs",
+        "3 each"); so may the line's own unit when that unit is not a
+        container ("40 ft" for a cable line in feet). A container word
+        ("2 boxes", "a case of 12") does not read cleanly: v1.0 never
+        converts packs (section 5). Nor do "3 or 4", "a few" and
+        "3, and 2 to truck 2".
+      - `name_part`: the matcher, run on the whole message as the line's
+        item text, gives a part matched by a rule that may authorize
+        (exact, normalized or alias), or a short list of candidates
+        (at most `MAX_CHOICES`). A loose single match also counts; the
+        next question then confirms it, as for any loose match.
+      - `name_location`: the same, with the location matcher and the side
+        the question named.
+      - `serials`: the message holds only serial-shaped tokens separated
+        by spaces, commas or new lines, as many as the line's quantity,
+        no token twice. A token is serial-shaped when it is 4 to 40
+        characters of letters, digits and `-`, `_`, `/`, `.` or `:`, and
+        holds at least one digit, or when it is a MAC address (12 hex
+        digits, bare or split by `:` or `-`). A token that the part or
+        location matcher reads as a name (exact, normalized or alias)
+        is not serial-shaped. So "ok", "thanks", "done", "3" and a part
+        name such as "U7-Lite" do not read cleanly, whatever the line's
+        quantity. The eval set holds these as cases that must not read
+        as serials.
+    - *Anything else is a thread message, as today.* A message that does
+      not read cleanly ("ok thanks", "one sec, checking", "actually it was
+      truck 2") is read with the whole post, so a correction is never lost
+      to a parser that took it for an answer. A message that does read
+      cleanly, but whose author may not answer, is a thread message too.
+    - *Messages between the question and the answer.* A thread message
+      that joins (or is edited) after the question and before the answer
+      is read with the post first, as for any thread message. If the
+      reading is still the one that asked, the question is still open and
+      the later message can answer it: "one sec, checking" then "3" works.
+      If the reading differs (an approver's "wait, it was 4"), answers
+      start over and the old question is no longer open; the later
+      message was posted before the new question, so it is a thread
+      message too, and the new question is asked. The answer message
+      itself never counts as a change of the post for this check, nor for
+      the clicks' "the post changed" check.
+    - *Effect.* An answer message is a fact about the reading that asked,
+      like a click, so it is kept out of what the extractor reads: the
+      reading that stands does not change, the answers given about it
+      still replay, and a model never reads "the 48-port one" as a new
+      item. Validation still sees its text (an item or a place named in
+      the answer is in the post). On replay:
+      - a `quantity` answer replaces the line's quantity. On a pack-unit
+        question it also sets the line's unit to the piece and drops its
+        pack size, and it clears every pack-unit reason on that line (the
+        field rule and "container word in the text" alike), so the dry run
+        shows "24", never "24 box". On a vague-quantity question a
+        non-container unit stays as it was.
+      - a `name_part` answer gives the matcher the typed text for that
+        line, and a `name_location` answer gives the location matcher the
+        typed text for that side. The line keeps the post's own words as
+        its item text (or place text), and the dry run and the audit
+        trail show both ("ubiquity psu", named in the thread as
+        "Norvane PSU-48"). The match is recorded with the rule that found
+        the typed text and with `source: answer`.
+      - a `serials` answer replaces the line's serials. Typed by a person
+        in the thread, they count as confirmed (the brief: serials are
+        confirmed by barcode, OCR or a person).
+      Validation and the matcher then run as for any reading. The
+      question's own reason (code and detail) is cleared, as for a "yes",
+      because some reasons are about the text and would come back.
+    - *What the extractor reads.* One rule: a message is kept out of the
+      extractor's input only while it is the counted answer to a question
+      of the reading that stands. When answers start over (another
+      message edited, a new message read otherwise), every earlier answer
+      message is read with the post again, since the new reading may ask
+      other questions or none, and a value given about an old reading is
+      not carried over silently. A typed name that no longer reads
+      cleanly because the catalog changed is not re-judged: whether a
+      message counted is decided once, when it is first read, and
+      stored. On replay its typed text is matched again against the
+      catalog as it is then; if that finds nothing now, the line is
+      unmatched and the next question says so, but the message stays an
+      answer. Only an edit of that message judges it again (below). So a
+      reading never changes without someone touching the thread.
+    - *Stored.* The answer row keeps the message's `ts` and the kind of
+      answer, never the text: on replay the message is read as it is now.
+      An edit of an answer message is a change of the post like any other
+      and makes a revision. If it still reads cleanly, the new value is
+      the answer. If it no longer does, it is a thread message from then
+      on: it is read with the post, the reading differs, and the answers
+      start over, the safe side for an edit that may be a correction. A
+      deleted answer message is no answer, and the question it answered
+      is asked again.
+    - *Then.* As for a click: the post is due at once, the revised dry run
+      shows the result and asks the next question, and the question's
+      reply loses nothing (it has no buttons to take down). The answer
+      message gets no ephemeral note when it counts; a message that reads
+      cleanly but comes from someone who may not answer gets the same note
+      a click would ("poster or approver only").
+    - *Limits.* As for buttons: an answer never authorizes a write. A
+      typed name is a human correction of the post's own words, so once
+      the plan is applied and verified, the post's item text becomes an
+      alias for the part named in the thread, and the post's place text
+      an alias for the location ("Sam's truck" means location Y), as ADR
+      0012 does for a confirmed loose match. The typed text itself
+      becomes no alias: the person typed a name, not a new way to say it.
+      A typed name the matcher found only loosely is confirmed by the next
+      question first, as above, and the alias is still the post's text.
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can
   approve. Display names are never trusted. Only the poster or an approver
@@ -708,7 +834,10 @@ needs.
 - **Locations.** Vehicles and job sites must exist as stock locations
   before stock can move there. The connector never creates locations by
   itself. The docs guide the admin through modeling them, and a setup check
-  lists the Slack users that have no vehicle mapped. Structural locations
+  lists the Slack users that have no vehicle mapped (built:
+  `stockthread check-setup`. It names the users who have posted, read as
+  ids from the local database, since listing a channel's members would
+  need another Slack scope). Structural locations
   cannot hold stock and are never a match.
 - **Least privilege.** InvenTree tokens carry the full permissions of
   their user, so the docs describe a dedicated user with the smallest set
@@ -716,8 +845,10 @@ needs.
   and view and add on Stock Item (`test_char_restricted_user_can_adjust`).
   InvenTree stores "change" together with "add" on Stock Item, so that
   user can also edit stock items; it cannot delete them. The setup check
-  reads the roles of the token's user and reports what is missing or
-  excessive. According
+  reads the roles of the token's user (`/api/user/roles/`) and reports
+  what is missing, as an error that says what it breaks, and what is more
+  than needed, as a warning. "Change" on Stock Item is not reported, since
+  it comes with "add". A superuser gets one warning. According
   to the research, tokens expire after one year by default. Where the API
   exposes the expiry, the connector reports it at startup.
 - **Pack units.** A container unit or a stated pack size is always a

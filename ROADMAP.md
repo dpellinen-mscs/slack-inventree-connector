@@ -95,7 +95,7 @@ The quickstart reaches the first dry-run in about 15 minutes.
 - [ ] Source selection: choose concrete stock items for each line, serials included
 - [ ] Plan expiry
   - [x] A question whose plan expired is taken out of its reply, says so, and takes no answer (migration 0014)
-- [ ] Setup check: users without a vehicle, token roles, locations that are missing
+- [x] Setup check: users without a vehicle, token roles, locations that are missing (`stockthread check-setup`; users are those who have posted, from the local database, so no new Slack scope)
 - [x] Admin guidance: how to model vehicles and sites as stock locations (`docs/locations.md`)
 
 **DoD:** every corpus case with a review reason produces the expected

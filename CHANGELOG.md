@@ -10,6 +10,9 @@ Nothing is released yet. The connector cannot write stock in this state.
 
 ### Added
 
+- `stockthread check-setup`: reads InvenTree and reports the server version, what the token's user lacks
+  or has beyond the minimum roles, each `[vehicles]` path that is not exactly one stock location, and
+  people who have posted with no vehicle set. Exit code 1 when something must be fixed.
 - A question whose plan expired is taken out of its reply with a line that says nothing from the post
   will be applied, and it takes no answer from then on (migration 0014).
 - Questions in the thread: an answer by button is acted on at once. A revised dry run applies every

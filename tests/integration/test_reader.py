@@ -71,6 +71,13 @@ async def test_stock_items_leave_out_sub_locations(scratch: Scratch) -> None:
     assert [row["pk"] for row in rows] == [here["pk"]]
 
 
+async def test_the_roles_of_the_token_user_are_read() -> None:
+    async with make_reader() as reader:
+        roles = await reader.user_roles()
+    assert roles["is_superuser"] is True  # the CI token is the admin's
+    assert roles["roles"]["stock"] == ["view", "add", "change", "delete"]
+
+
 async def test_a_wrong_token_is_refused() -> None:
     async with make_reader(token="inv-not-a-real-token") as reader:
         with pytest.raises(InvenTreeError, match="refused the token"):
