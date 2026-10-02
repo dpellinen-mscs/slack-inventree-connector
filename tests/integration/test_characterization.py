@@ -97,6 +97,23 @@ def test_char_partial_transfer_split(api: RawApi, scratch: Scratch) -> None:
     assert float(new["quantity"]) == 3
 
 
+def test_char_whole_transfer_moves_the_item(api: RawApi, scratch: Scratch) -> None:
+    """A transfer of all an item holds moves that item: same id, now at the destination, nothing left behind. So a
+    later add to that id lands at the destination (core/resolve.py flags an add after such a take)."""
+    item = scratch.stock(3)
+    response = api.post(
+        "/api/stock/transfer/", {"items": [{"pk": item["pk"], "quantity": 3}], "location": scratch.other, "notes": "w"}
+    )
+    assert response.status_code == 201, response.text[:500]
+    moved = scratch.item(item["pk"])
+    assert (moved["location"], float(moved["quantity"])) == (scratch.other, 3)
+    assert api.items(scratch.part, scratch.parent) == []
+    response = api.post("/api/stock/add/", {"items": [{"pk": item["pk"], "quantity": 5}], "notes": "w"})
+    assert response.status_code == 201, response.text[:500]
+    added = scratch.item(item["pk"])
+    assert (added["location"], float(added["quantity"])) == (scratch.other, 8)
+
+
 def test_char_multi_item_request_is_atomic(api: RawApi, scratch: Scratch) -> None:
     """One bad line fails the whole request, and nothing moves."""
     good = scratch.stock(5)

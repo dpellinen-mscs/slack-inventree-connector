@@ -1448,6 +1448,7 @@ the test suite.
 | `test_char_serialized_quantity_noop` | Add and remove on a serialized item change nothing, return success, and whether they still write a history entry |
 | `test_char_deplete_deletes_item_keeps_history` | Depletion can delete the stock item. The earlier history survives. The removal's marker is found by search on 1.5.6 but not on 1.4.3 |
 | `test_char_partial_transfer_split` | A partial transfer keeps the source id and creates a new item |
+| `test_char_whole_transfer_moves_the_item` | A transfer of all an item holds moves that item (same id, nothing left at the source), so a later add to it lands at the destination |
 | `test_char_marker_on_every_entry_type` | The notes reach every history entry a request writes |
 | `test_char_marker_visible_after_response` | Whether history is readable as soon as the server has answered |
 | `test_char_marker_search_is_substring` | The history search matches substrings, and `limit` with `offset` pages through it without overlap |
