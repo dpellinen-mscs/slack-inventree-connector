@@ -421,14 +421,16 @@ class Worker:
             self._notes_quiet_until = now + NOTE_QUIET_SECONDS
 
     def take_down_buttons(self) -> int:
-        """Take a question out of the reply it was asked in, once it is answered or a newer reply replaced it
-        (design section 4, "Interactivity"): the reply is read back from Slack, and edited to end with a line that
-        says what became of the question. Best effort, one reply per TAKE_DOWN_SPACING_SECONDS, fewest failed
-        tries first; the clicks are checked against the store whatever Slack shows. Returns 1 when a reply was
-        edited or given up on."""
+        """Take a question out of the reply it was asked in, once it is answered, a newer reply replaced it, or its
+        plan expired (design section 4, "Interactivity"): the reply is read back from Slack, and edited to end with a
+        line that says what became of the question. Best effort, one reply per TAKE_DOWN_SPACING_SECONDS, fewest
+        failed tries first; the clicks are checked against the store whatever Slack shows. Returns 1 when a reply
+        was edited or given up on."""
         now = self._now()
         if self.stopping() or now < max(self._quiet_until, self._take_down_quiet_until):
             return 0
+        # From the same time as a click's expiry (`_refuse_answer`).
+        self.store.expire_questions(self.owner, now - self.settings.slack.plan_expiry_hours * 3600)
         listed = self.store.closed_with_buttons(limit=1)
         if not listed:
             return 0
@@ -470,7 +472,9 @@ class Worker:
         if reply is None or not posted_by_app(reply, self.settings.slack.app_id):
             return False
         blocks = reply.get("blocks") or []
-        closing = question_closed(answered_by if item.status is QuestionStatus.ANSWERED else None)
+        # Listed while open only once expired (closed_with_buttons).
+        expired = item.status is QuestionStatus.OPEN
+        closing = question_closed(answered_by if item.status is QuestionStatus.ANSWERED else None, expired=expired)
         kept = without_question(blocks)
         if kept is None:
             return _closed_already(blocks, closing)  # an edit whose call ran out of time went through

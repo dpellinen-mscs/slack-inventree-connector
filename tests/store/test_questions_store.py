@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -398,3 +399,117 @@ def test_buttons_are_taken_down_once_after_their_question_closed(
         store.buttons_taken_down(OWNER, item.id, removed=True)
     with sqlite3.connect(path) as raw, pytest.raises(sqlite3.IntegrityError, match="taken down once"):
         raw.execute(statement)
+
+
+# Plan expiry (migration 0014): an open question whose plan expired is marked, and its buttons are taken down.
+
+EXPIRES = Decimal(POST.ts)
+"""`confirm()` counts its plan's expiry from the post's own time."""
+
+
+def test_an_open_question_is_marked_expired_once_and_listed_for_its_buttons(store: Store, path: Path) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    assert store.expire_questions(OWNER, EXPIRES) == 0  # not before: the same instant is not expired, as for a click
+    assert store.closed_with_buttons(limit=10) == []
+    assert store.expire_questions(OWNER, EXPIRES + Decimal("0.000001")) == 1
+    assert store.expire_questions(OWNER, EXPIRES + 1) == 0  # once
+    [(item, answered_by)] = store.closed_with_buttons(limit=10)
+    assert (item.status, answered_by) == (QuestionStatus.OPEN, None)
+    store.buttons_taken_down(OWNER, item.id, removed=True)
+    assert shown(path) == [("open", "removed", 0)]
+    with sqlite3.connect(path) as raw:
+        events = [row[0] for row in raw.execute("SELECT event FROM audit_log ORDER BY id")]
+    assert events[-2:] == ["question_expired", "buttons_removed"]
+
+
+def test_an_expired_question_takes_no_answer(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    store.expire_questions(OWNER, EXPIRES + 1)
+    yes = store.button(YES)
+    assert yes is not None
+    assert store.answer_question(OWNER, yes, "U0SAM0001") is Answered.EXPIRED
+    assert store.answer(yes.item.id) is None
+
+
+def test_a_closed_question_does_not_expire(store: Store, path: Path) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    yes = store.button(YES)
+    assert yes is not None
+    assert store.answer_question(OWNER, yes, "U0SAM0001") is Answered.ANSWERED
+    assert store.expire_questions(OWNER, EXPIRES + 1) == 0
+    with sqlite3.connect(path) as raw:
+        assert raw.execute("SELECT expired_at FROM review_items").fetchall() == [(None,)]
+
+
+def test_a_question_from_before_migration_0011_expires_from_the_post(store: Store, path: Path) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    with sqlite3.connect(path) as raw:
+        raw.execute("DROP TRIGGER review_items_keep_question")  # as the upgrade left it: no expiry time
+        raw.execute("UPDATE review_items SET expires_from = NULL")
+    assert store.expire_questions(OWNER, EXPIRES) == 0
+    assert store.expire_questions(OWNER, EXPIRES + 1) == 1
+
+
+def test_expiring_questions_needs_the_lock(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    store.release_lock(OWNER)
+    with pytest.raises(Exception, match="lock"):
+        store.expire_questions(OWNER, EXPIRES + 1)
+
+
+@pytest.mark.parametrize(
+    ("setup", "statement", "message"),
+    [
+        ("expired", "UPDATE review_items SET expired_at = '2026-10-02T00:00:00+00:00'", "expires once"),
+        ("expired", "UPDATE review_items SET expired_at = NULL", "expires once"),
+        ("stale", "UPDATE review_items SET expired_at = '2026-10-02T00:00:00+00:00'", "expires once"),
+        (
+            "expired",
+            "UPDATE review_items SET status = 'answered', answer = '{}', answered_by = 'U0SAM0001',"
+            " closed_at = '2026-10-02T00:00:00+00:00'",
+            "takes no answer",
+        ),
+    ],
+)
+def test_a_question_expires_once_while_open_and_then_takes_no_answer(
+    store: Store, path: Path, setup: str, statement: str, message: str
+) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    if setup == "expired":
+        store.expire_questions(OWNER, EXPIRES + 1)
+    else:
+        reply_again(store, "1790000100.000100", 2, DryRunOutcome.RETRACTED)
+    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.IntegrityError, match=message):
+        raw.execute(statement)
+
+
+def test_a_question_is_asked_unexpired(store: Store, path: Path) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    with sqlite3.connect(path) as raw, pytest.raises(sqlite3.IntegrityError, match="asked unexpired"):
+        raw.execute(
+            "INSERT INTO review_items (post_id, revision, question, approver_only, channel_id, message_ts, status,"
+            " created_at, poster_id, expires_from, expired_at) SELECT post_id, 2, question, approver_only,"
+            " channel_id, message_ts, 'open', created_at, poster_id, expires_from, created_at FROM review_items"
+        )
+
+
+def test_closed_questions_are_taken_down_before_expired_ones(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    store.expire_questions(OWNER, EXPIRES + 1)
+    other = PostKey(POST.workspace_id, POST.channel_id, "1790000500.000100")
+    store.place_message(OWNER, other, user_id="U0SAM0001", thread_ts=None, window_seconds=5)
+    store.finish_dry_run(OWNER, other, DryRunOutcome.REPLIED, "1790000520.000100", question=confirm("c" * 22, "d" * 22))
+    answered = store.button("c" * 22)
+    assert answered is not None
+    assert store.answer_question(OWNER, answered, "U0SAM0001") is Answered.ANSWERED
+    assert [i.status for i, _ in store.closed_with_buttons(limit=10)] == [QuestionStatus.ANSWERED, QuestionStatus.OPEN]
+
+
+def test_an_expired_question_can_still_go_stale_and_a_new_one_be_asked(store: Store) -> None:
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    store.expire_questions(OWNER, EXPIRES + 1)
+    reply_again(store, "1790000100.000100", 2, DryRunOutcome.REPLIED, question=confirm("s" * 22, "t" * 22))
+    first, second = store.questions(POST)
+    assert (first.status, second.status) == (QuestionStatus.STALE, QuestionStatus.OPEN)
+    [(item, by)] = [(i, by) for i, by in store.closed_with_buttons(limit=10)]
+    assert (item.id, item.status, by) == (first.id, QuestionStatus.STALE, None)  # says "replaced", not "expired"
