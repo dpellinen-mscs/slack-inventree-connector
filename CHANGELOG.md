@@ -10,6 +10,9 @@ Nothing is released yet. The connector cannot write stock in this state.
 
 ### Added
 
+- `stockthread check-setup`: reads InvenTree and reports the server version, what the token's user lacks
+  or has beyond the minimum roles, each `[vehicles]` path that is not exactly one stock location, and
+  people who have posted with no vehicle set. Exit code 1 when something must be fixed.
 - Questions in the thread: an answer by button is acted on at once. A revised dry run applies every
   answer about the same reading, validates again and asks the next question; a "no" to a doubt
   about the reading says it was rejected and that nothing of it will be applied (migration 0013).

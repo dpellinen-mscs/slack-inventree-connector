@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 
+from stockthread.setup_check import Level, check_roles, lacks_catalog_view
+
 if TYPE_CHECKING:
     from conftest import RawApi, Scratch
 
@@ -118,3 +120,32 @@ def test_char_user_without_stock_add_cannot_adjust(api: RawApi, scratch: Scratch
     after = scratch.item(item["pk"])
     assert (float(after["quantity"]), after["location"]) == (10, scratch.parent)
     assert len(api.get("/api/stock/track/", item=item["pk"])) == history
+
+
+def test_char_roles_endpoint_shows_the_minimum_as_the_setup_check_reads_it(api: RawApi, restricted: Any) -> None:
+    """`GET /api/user/roles/` names each role with its permissions, or null for none (measured on 1.4.3 and 1.5.6).
+    The setup check reads the documented minimum from it as enough, and the admin token as more than needed."""
+    group, _ = _group(api, MINIMUM_ROLES)
+    user = restricted(group)
+    response = user.get("/api/user/roles/")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["roles"]["stock"] == ["view", "add", "change"]
+    assert body["roles"]["admin"] is None
+    assert [finding.level for finding in check_roles(body)] == [Level.OK]
+    admin = check_roles(api.get("/api/user/roles/"))
+    assert Level.ERROR not in {finding.level for finding in admin}
+    assert "roles: the token's user is a superuser; use a dedicated user" in [finding.text for finding in admin]
+
+
+def test_char_user_without_part_view_cannot_read_the_catalog(api: RawApi, restricted: Any) -> None:
+    """Without view on Part, `GET /api/part/` answers 403 and the roles say so: the setup check then skips the catalog
+    read and prints the roles error (`run.inventree_findings`)."""
+    group, _ = _group(api, {**MINIMUM_ROLES, "part": {}})
+    user = restricted(group)
+    assert user.get("/api/part/", params={"limit": 1}).status_code == 403
+    body = user.get("/api/user/roles/").json()
+    assert lacks_catalog_view(body)
+    assert "roles: part lacks view, needed for dry runs (the catalog cannot be read)" in [
+        finding.text for finding in check_roles(body)
+    ]

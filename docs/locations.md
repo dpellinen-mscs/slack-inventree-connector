@@ -96,6 +96,8 @@ main stock to my truck") is the one that needs no question.
 1. Create the structural folders, then a location for each stock room, vehicle and site.
 2. Add the nicknames people use to each location's description.
 3. Map each person who says "my truck" in `[vehicles]`, and run `.venv/bin/stockthread check-config`.
-4. Start the connector, and read its log for people whose vehicle path was not found.
+4. Run `.venv/bin/stockthread check-setup`. It names each `[vehicles]` path that is not exactly one
+   stock location that can hold stock, and why. Once people have posted, it also names those who
+   have no vehicle set. The connector's log names unresolved vehicle paths again at every start.
 5. Post a test movement in the channel, and read the dry run: it names the location it matched next
    to the words as written.

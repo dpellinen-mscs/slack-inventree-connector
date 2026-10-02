@@ -825,7 +825,10 @@ needs.
 - **Locations.** Vehicles and job sites must exist as stock locations
   before stock can move there. The connector never creates locations by
   itself. The docs guide the admin through modeling them, and a setup check
-  lists the Slack users that have no vehicle mapped. Structural locations
+  lists the Slack users that have no vehicle mapped (built:
+  `stockthread check-setup`. It names the users who have posted, read as
+  ids from the local database, since listing a channel's members would
+  need another Slack scope). Structural locations
   cannot hold stock and are never a match.
 - **Least privilege.** InvenTree tokens carry the full permissions of
   their user, so the docs describe a dedicated user with the smallest set
@@ -833,8 +836,10 @@ needs.
   and view and add on Stock Item (`test_char_restricted_user_can_adjust`).
   InvenTree stores "change" together with "add" on Stock Item, so that
   user can also edit stock items; it cannot delete them. The setup check
-  reads the roles of the token's user and reports what is missing or
-  excessive. According
+  reads the roles of the token's user (`/api/user/roles/`) and reports
+  what is missing, as an error that says what it breaks, and what is more
+  than needed, as a warning. "Change" on Stock Item is not reported, since
+  it comes with "add". A superuser gets one warning. According
   to the research, tokens expire after one year by default. Where the API
   exposes the expiry, the connector reports it at startup.
 - **Pack units.** A container unit or a stated pack size is always a

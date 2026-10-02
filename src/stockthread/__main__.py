@@ -5,13 +5,16 @@ import json
 import logging
 import os
 import signal
+import sqlite3
 import sys
 import threading
 from pathlib import Path
 
 from stockthread import __version__
 from stockthread.config import ConfigError, load_settings
-from stockthread.run import run
+from stockthread.inventree import InvenTreeError
+from stockthread.run import check_setup, run
+from stockthread.setup_check import exit_code
 
 DEFAULT_CONFIG = "stockthread.toml"
 
@@ -29,6 +32,16 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("STOCKTHREAD_CONFIG", DEFAULT_CONFIG)),
         help=f"settings file (default: $STOCKTHREAD_CONFIG or {DEFAULT_CONFIG})",
     )
+    setup = commands.add_parser(
+        "check-setup",
+        help="read InvenTree and the local database, and report what to fix before the first dry run",
+    )
+    setup.add_argument(
+        "--config",
+        type=Path,
+        default=Path(os.environ.get("STOCKTHREAD_CONFIG", DEFAULT_CONFIG)),
+        help=f"settings file (default: $STOCKTHREAD_CONFIG or {DEFAULT_CONFIG})",
+    )
     serve = commands.add_parser("run", help="connect to Slack and post dry runs until stopped (Ctrl-C)")
     serve.add_argument(
         "--config",
@@ -40,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "check-config":
         return check_config(args.config)
+    if args.command == "check-setup":
+        return check_setup_command(args.config)
     if args.command == "run":
         return run_command(args.config)
     parser.print_help()
@@ -85,6 +100,23 @@ def check_config(path: Path) -> int:
     print(settings.writes_line())
     print(settings.llm_line())
     return 0
+
+
+def check_setup_command(path: Path) -> int:
+    """Print one line per finding; 1 when something must be fixed, 2 when the check could not run."""
+    try:
+        settings = load_settings(path, os.environ)
+    except ConfigError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    try:
+        findings = check_setup(settings)
+    except (InvenTreeError, sqlite3.Error) as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    for finding in findings:
+        print(f"{finding.level.value.upper():5} {finding.text}")
+    return exit_code(findings)
 
 
 if __name__ == "__main__":

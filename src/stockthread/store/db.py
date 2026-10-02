@@ -291,6 +291,18 @@ def _migrations() -> list[tuple[int, str]]:
     return found
 
 
+def posters_seen(path: str | Path) -> list[str] | None:
+    """The Slack user ids of everyone with a message in a post, read without changing the database (the setup
+    check), or None when there is no database yet."""
+    if not Path(path).exists():
+        return None
+    connection = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+    try:
+        return [row[0] for row in connection.execute("SELECT DISTINCT user_id FROM post_messages ORDER BY user_id")]
+    finally:
+        connection.close()
+
+
 class Store:
     def __init__(self, connection: sqlite3.Connection, clock: Callable[[], datetime]) -> None:
         self._db = connection
