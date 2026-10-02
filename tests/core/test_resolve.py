@@ -11,6 +11,7 @@ from stockthread.core.model import Operation, ReasonCode
 from stockthread.core.resolve import (
     DETAIL_BATCH,
     DETAIL_COUNTED,
+    DETAIL_EMPTIED,
     DETAIL_MIXED,
     DETAIL_NO_STOCK,
     DETAIL_NO_TARGET,
@@ -272,10 +273,38 @@ def test_a_line_that_fails_on_the_stock_as_read_says_why_and_that_others_share_i
     batches = [item(57, "3", batch="B1"), item(60, "3", batch="B2")]
     picks = resolve_lines([LineStock(TRANSFER, Decimal(2), batches), LineStock(TRANSFER, Decimal(2), batches)])
     assert picks[1].takes == takes((60, "2"))  # a proposal: its takes still count for the lines after it
-    assert codes(picks[1]) == [
-        (ReasonCode.STOCK_CHOICE, DETAIL_BATCH),
-        (ReasonCode.QUANTITY_ABOVE_STOCK, DETAIL_SHARED),
-    ]
+    assert codes(picks[1]) == [(ReasonCode.STOCK_CHOICE, DETAIL_BATCH)]  # enough is left: only the choice
+
+
+def test_a_choice_among_what_is_left_is_a_choice_not_a_shortage() -> None:
+    stock = [item(41, "5", batch="B-1"), item(57, "5", batch="B-2")]
+    first, second = resolve_lines([LineStock(TRANSFER, Decimal(2), stock), LineStock(TRANSFER, Decimal(2), stock)])
+    assert (first.takes, codes(first)) == (takes((41, "2")), [(ReasonCode.STOCK_CHOICE, DETAIL_BATCH)])
+    assert (second.takes, codes(second)) == (takes((41, "2")), [(ReasonCode.STOCK_CHOICE, DETAIL_BATCH)])
+    serials = [item(3, "1", serial="A1"), item(4, "1", serial="A2"), item(5, "1", serial="A3")]
+    named, unnamed = resolve_lines(
+        [LineStock(TRANSFER, Decimal(1), serials, ["A1"]), LineStock(TRANSFER, Decimal(1), serials)]
+    )
+    assert named.decided
+    assert codes(unnamed) == [(ReasonCode.STOCK_CHOICE, DETAIL_SERIALS_NEEDED)]  # two left for one: serials pick
+
+
+@pytest.mark.parametrize("operation", [TRANSFER, REMOVE])
+def test_an_add_into_an_item_an_earlier_line_takes_in_full_is_for_a_human(operation: Operation) -> None:
+    stock = [item(57, "3")]
+    take, add = resolve_lines([LineStock(operation, Decimal(3), stock), LineStock(ADD, Decimal(5), stock)])
+    assert take.decided
+    assert (add.takes, codes(add)) == (takes((57, "5")), [(ReasonCode.STOCK_CHOICE, DETAIL_EMPTIED)])
+    two = resolve_lines(
+        [
+            LineStock(operation, Decimal(1), stock),
+            LineStock(operation, Decimal(2), stock),
+            LineStock(ADD, Decimal(5), stock),
+        ]
+    )
+    assert codes(two[2]) == [(ReasonCode.STOCK_CHOICE, DETAIL_EMPTIED)]  # together they take it all
+    part = resolve_lines([LineStock(operation, Decimal(2), stock), LineStock(ADD, Decimal(5), stock)])
+    assert all(pick.decided for pick in part)  # a partial take splits: the item stays where it was
 
 
 def test_an_add_takes_nothing_from_the_stock_the_other_lines_share() -> None:

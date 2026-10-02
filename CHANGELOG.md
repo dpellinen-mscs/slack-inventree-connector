@@ -22,8 +22,9 @@ Nothing is released yet. The connector cannot write stock in this state.
 - The dry run reads the stock of each settled line (part, place and quantity matched or answered) and shows
   the stock item ids it would act on; stock that does not settle the pick (none, too few, a choice that
   matters) is a review reason. A failed stock read makes the post wait, like a failed catalog read.
-  The lines of one post share the stock they read: a later line picks from what the earlier ones left, and a
-  counted item that another line acts on is a review reason.
+  The lines of one post share the stock they read: a later line picks from what the earlier ones left (only a
+  shortage they cause says so), and a counted item that another line acts on, or an add into an item that an
+  earlier line takes in full, is a review reason.
 
 - `stockthread check-setup`: reads InvenTree and reports the server version, what the token's user lacks
   or has beyond the minimum roles, each `[vehicles]` path that is not exactly one stock location, and

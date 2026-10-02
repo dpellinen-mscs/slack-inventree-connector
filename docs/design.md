@@ -865,10 +865,17 @@ needs.
   read: a transfer or a remove picks from what the lines before it left,
   so "took 2 and 3" from an item holding 3 is a review reason ("other
   lines of the post take the same stock"), never two picks from one
-  item. An add does not add to what later lines may take (the stock
-  read is the stock before the post). A count sets an item as it is, so a
-  counted item that another line also acts on is a review reason on each
-  of those lines: the result would depend on the order.
+  item. That reason is raised only for a shortage the other lines cause;
+  a line that still has enough left gets the reasons of what is left
+  (a choice that matters among what is left is a choice, not a
+  shortage). An add does not add to what later lines may take (the stock
+  read is the stock before the post), but an add into an item that the
+  lines before it take in full is a review reason ("an earlier line of
+  the post takes all of the stock item an add acts on"): InvenTree moves
+  an item that is transferred whole, and may delete one removed to zero.
+  A count sets an item as it is, so a counted item that another line also
+  acts on is a review reason on each of those lines: the result would
+  depend on the order.
   In the dry run (built), the worker reads stock last: after the answers
   are applied, so a part picked by button is the part whose stock is
   read, and outside the reading that answers are kept for, so a change
