@@ -1,0 +1,195 @@
+"""Source selection (core/resolve.py): which stock items a line takes, by the documented rule."""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Any
+
+import pytest
+
+from stockthread.core.model import ReasonCode
+from stockthread.core.resolve import (
+    DETAIL_BATCH,
+    DETAIL_MIXED,
+    DETAIL_NO_STOCK,
+    DETAIL_NO_TARGET,
+    DETAIL_SERIAL_COUNT,
+    DETAIL_SERIAL_NOT_FOUND,
+    DETAIL_SERIALIZED_TARGET,
+    DETAIL_SERIALS_NEEDED,
+    DETAIL_SEVERAL_TARGETS,
+    DETAIL_SUPPLIER_PART,
+    DETAIL_TOO_FEW,
+    StockItem,
+    Take,
+    pick_source,
+    stock_items,
+    target_item,
+)
+
+
+def item(pk: int, quantity: str = "10", **fields: Any) -> StockItem:
+    return StockItem(
+        pk,
+        Decimal(quantity),
+        fields.get("status", 10),
+        Decimal(fields.get("allocated", "0")),
+        fields.get("serial"),
+        fields.get("batch"),
+        fields.get("supplier_part"),
+    )
+
+
+def takes(*pairs: tuple[int, str]) -> tuple[Take, ...]:
+    return tuple(Take(pk, Decimal(quantity)) for pk, quantity in pairs)
+
+
+def codes(pick: Any) -> list[tuple[ReasonCode, str]]:
+    return [(reason.code, reason.detail) for reason in pick.reasons]
+
+
+def test_one_item_that_covers_the_quantity_is_preferred_over_a_split_and_the_oldest_of_those() -> None:
+    pick = pick_source(Decimal(3), [item(9, "5"), item(4, "2"), item(7, "3")])
+    assert pick.takes == takes((7, "3"))  # 4 is older but too small; 7 is older than 9
+    assert pick.decided
+
+
+def test_without_a_covering_item_the_quantity_is_split_oldest_first() -> None:
+    pick = pick_source(Decimal(6), [item(3, "4"), item(1, "1"), item(2, "4")])
+    assert pick.takes == takes((1, "1"), (2, "4"), (3, "1"))
+    assert pick.decided
+
+
+@pytest.mark.parametrize(
+    "excluded",
+    [{"status": 50}, {"allocated": "1"}, {"quantity": "0"}],
+    ids=["status not OK", "allocated", "empty"],
+)
+def test_items_not_ok_allocated_or_empty_are_never_picked(excluded: dict[str, Any]) -> None:
+    quantity = excluded.pop("quantity", "10")
+    pick = pick_source(Decimal(2), [item(1, quantity, **excluded), item(2, "5")])
+    assert pick.takes == takes((2, "2"))
+    alone = pick_source(Decimal(2), [item(1, quantity, **excluded)])
+    assert (alone.takes, codes(alone)) == ((), [(ReasonCode.NO_TARGET_STOCK_ITEM, DETAIL_NO_STOCK)])
+
+
+def test_too_little_stock_is_a_reason_and_picks_nothing() -> None:
+    pick = pick_source(Decimal(8), [item(1, "3"), item(2, "4")])
+    assert (pick.takes, codes(pick)) == ((), [(ReasonCode.QUANTITY_ABOVE_STOCK, DETAIL_TOO_FEW)])
+    assert not pick.decided
+
+
+def test_no_stock_at_all_is_a_reason() -> None:
+    pick = pick_source(Decimal(1), [])
+    assert codes(pick) == [(ReasonCode.NO_TARGET_STOCK_ITEM, DETAIL_NO_STOCK)]
+
+
+@pytest.mark.parametrize(("field", "values", "detail"), [
+    ("batch", ("B-1", "B-2"), DETAIL_BATCH),
+    ("batch", ("B-1", None), DETAIL_BATCH),
+    ("supplier_part", (3, 4), DETAIL_SUPPLIER_PART),
+])  # fmt: skip
+def test_a_choice_between_items_that_differ_is_a_proposal_with_a_reason(
+    field: str, values: tuple[Any, Any], detail: str
+) -> None:
+    pool = [item(1, "5", **{field: values[0]}), item(2, "5", **{field: values[1]})]
+    pick = pick_source(Decimal(2), pool)
+    assert pick.takes == takes((1, "2"))  # still proposed, so the reply can show it
+    assert codes(pick) == [(ReasonCode.STOCK_CHOICE, detail)]
+    assert not pick.decided
+
+
+def test_items_that_differ_need_no_human_when_the_pick_takes_all_of_them() -> None:
+    pick = pick_source(Decimal(10), [item(1, "5", batch="B-1"), item(2, "5", batch="B-2")])
+    assert pick.takes == takes((1, "5"), (2, "5"))
+    assert pick.decided
+
+
+def test_items_that_agree_need_no_human() -> None:
+    pick = pick_source(
+        Decimal(2), [item(1, "5", batch="B-1", supplier_part=3), item(2, "5", batch="B-1", supplier_part=3)]
+    )
+    assert pick.decided
+
+
+def test_serialized_stock_is_picked_by_serial_number_as_whole_items() -> None:
+    pool = [item(5, "1", serial="SN-3"), item(2, "1", serial="SN-1"), item(4, "1", serial="SN-2")]
+    pick = pick_source(Decimal(2), pool, ("SN-3", "SN-1"))
+    assert pick.takes == takes((2, "1"), (5, "1"))
+    assert pick.decided
+
+
+@pytest.mark.parametrize(("quantity", "serials", "code", "detail"), [
+    ("2", (), ReasonCode.STOCK_CHOICE, DETAIL_SERIALS_NEEDED),
+    ("4", (), ReasonCode.QUANTITY_ABOVE_STOCK, DETAIL_TOO_FEW),
+    ("2", ("SN-1",), ReasonCode.STOCK_CHOICE, DETAIL_SERIAL_COUNT),
+    ("1.5", (), ReasonCode.STOCK_CHOICE, DETAIL_SERIAL_COUNT),
+    ("1", ("SN-9",), ReasonCode.NO_TARGET_STOCK_ITEM, DETAIL_SERIAL_NOT_FOUND),
+])  # fmt: skip
+def test_serialized_stock_without_the_right_serials_is_for_a_human(
+    quantity: str, serials: tuple[str, ...], code: ReasonCode, detail: str
+) -> None:
+    pool = [item(1, "1", serial="SN-1"), item(2, "1", serial="SN-2"), item(3, "1", serial="SN-3")]
+    pick = pick_source(Decimal(quantity), pool, serials)
+    assert (pick.takes, codes(pick)) == ((), [(code, detail)])
+
+
+def test_serialized_stock_taken_whole_needs_no_serials() -> None:
+    pick = pick_source(Decimal(2), [item(1, "1", serial="SN-1"), item(2, "1", serial="SN-2")])
+    assert pick.takes == takes((1, "1"), (2, "1"))
+    assert pick.decided
+
+
+def test_a_serial_for_stock_that_is_not_serialized_is_not_found() -> None:
+    pick = pick_source(Decimal(1), [item(1, "5")], ("SN-1",))
+    assert codes(pick) == [(ReasonCode.NO_TARGET_STOCK_ITEM, DETAIL_SERIAL_NOT_FOUND)]
+
+
+def test_serialized_and_unserialized_stock_of_one_part_is_for_a_human() -> None:
+    pick = pick_source(Decimal(1), [item(1, "1", serial="SN-1"), item(2, "5")])
+    assert (pick.takes, codes(pick)) == ((), [(ReasonCode.STOCK_CHOICE, DETAIL_MIXED)])
+
+
+@pytest.mark.parametrize("quantity", ["0", "-1", "NaN", "Infinity"])
+def test_a_pick_is_for_a_quantity_above_zero(quantity: str) -> None:
+    with pytest.raises(ValueError, match="above zero"):
+        pick_source(Decimal(quantity), [item(1)])
+
+
+def test_an_add_or_a_count_needs_exactly_one_stock_item() -> None:
+    assert target_item([item(4, "2", status=50, allocated="2")]) == (4, ())
+    assert [(r.code, r.detail) for r in target_item([])[1]] == [(ReasonCode.NO_TARGET_STOCK_ITEM, DETAIL_NO_TARGET)]
+    for pool, detail in (
+        ([item(1), item(2)], DETAIL_SEVERAL_TARGETS),
+        ([item(1, "1", serial="SN-1")], DETAIL_SERIALIZED_TARGET),
+    ):
+        found, reasons = target_item(pool)
+        assert found is None
+        assert [(r.code, r.detail) for r in reasons] == [(ReasonCode.STOCK_CHOICE, detail)]
+
+
+ROW = {"pk": 7, "quantity": 12.5, "status": 10, "allocated": 0, "serial": None, "batch": "", "supplier_part": None}
+
+
+def test_rows_are_read_with_their_quantities_exact() -> None:
+    [read] = stock_items([{**ROW, "quantity": "12.50000", "serial": " SN-1 ", "batch": "B-1"}])
+    assert read == StockItem(7, Decimal("12.50000"), 10, Decimal(0), "SN-1", "B-1", None)
+    [blank] = stock_items([ROW])
+    assert (blank.quantity, blank.serial, blank.batch) == (Decimal("12.5"), None, None)
+
+
+@pytest.mark.parametrize("change", [
+    {"pk": None}, {"pk": True}, {"pk": 0}, {"status": "10"}, {"supplier_part": "3"},
+    {"quantity": None}, {"quantity": "x"}, {"quantity": -1}, {"quantity": "Infinity"}, {"quantity": True},
+    {"allocated": None}, {"serial": 5}, {"batch": []},
+])  # fmt: skip
+def test_a_malformed_row_raises_rather_than_moves_stock(change: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match="a stock item"):
+        stock_items([{**ROW, **change}])
+
+
+def test_a_row_without_its_allocation_raises() -> None:
+    row = dict(ROW)
+    del row["allocated"]
+    with pytest.raises(ValueError, match="allocated"):
+        stock_items([row])

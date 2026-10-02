@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,6 +14,8 @@ from pydantic import SecretStr
 
 from stockthread.catalog import load_catalog
 from stockthread.config import InvenTreeSettings
+from stockthread.core.model import ReasonCode
+from stockthread.core.resolve import DETAIL_BATCH, Take, pick_source, stock_items
 from stockthread.inventree import InvenTreeError, InvenTreeReader, ReadOnlyViolation, check_version
 
 if TYPE_CHECKING:
@@ -92,3 +96,33 @@ async def test_the_reader_cannot_write(api: RawApi, scratch: Scratch) -> None:
                 "/api/stock/remove/", json={"items": [{"pk": item["pk"], "quantity": 5}], "notes": "must not happen"}
             )
     assert float(scratch.item(item["pk"])["quantity"]) == 5
+
+
+async def test_source_selection_reads_real_stock_rows(scratch: Scratch) -> None:
+    # Every field core/resolve.py reads is in the list rows of the pinned versions, `allocated` included: a row
+    # without it raises rather than counting as unallocated.
+    older = scratch.stock(5, batch="B-1")
+    scratch.stock(3, batch="B-2")
+    scratch.stock(9, status=50)  # ATTENTION: never picked
+    async with make_reader() as reader:
+        rows = await reader.stock_items(part=scratch.part, location=scratch.parent)
+    items = stock_items(rows)
+    assert {item.allocated for item in items} == {Decimal(0)}
+    pick = pick_source(Decimal(4), items)
+    assert pick.takes == (Take(older["pk"], Decimal(4)),)
+    assert [(reason.code, reason.detail) for reason in pick.reasons] == [(ReasonCode.STOCK_CHOICE, DETAIL_BATCH)]
+
+
+async def test_stock_allocated_to_a_sales_order_is_never_picked(api: RawApi, scratch: Scratch) -> None:
+    part = api.create("/api/part/", {"name": f"Sold {uuid.uuid4().hex[:8]}", "description": "x", "salable": True})
+    allocated = api.create("/api/stock/", {"part": part["pk"], "location": scratch.parent, "quantity": 5})
+    free = api.create("/api/stock/", {"part": part["pk"], "location": scratch.parent, "quantity": 5})
+    customer = api.create("/api/company/", {"name": f"Acme Fiber {uuid.uuid4().hex[:8]}", "is_customer": True})
+    order = api.create("/api/order/so/", {"customer": customer["pk"]})
+    line = api.create("/api/order/so-line/", {"order": order["pk"], "part": part["pk"], "quantity": 1})
+    body = {"items": [{"line_item": line["pk"], "stock_item": allocated["pk"], "quantity": 1}]}
+    assert api.post(f"/api/order/so/{order['pk']}/allocate/", body).status_code == 201
+    async with make_reader() as reader:
+        items = stock_items(await reader.stock_items(part=part["pk"], location=scratch.parent))
+    assert {item.pk: item.allocated for item in items} == {allocated["pk"]: Decimal(1), free["pk"]: Decimal(0)}
+    assert pick_source(Decimal(2), items).takes == (Take(free["pk"], Decimal(2)),)  # the older one is promised

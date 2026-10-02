@@ -774,7 +774,16 @@ needs.
   stock, have status OK and are not allocated to an order. It picks by a
   documented rule: oldest first, and a single item that covers the quantity
   is preferred over a split. If the candidates differ in batch, status or
-  supplier part, the choice is a review reason.
+  supplier part, the choice is a review reason. Built as a pure step
+  (`core/resolve.py`, not yet in the dry run): "oldest" is the lowest
+  stock item id, "allocated" is the list row's `allocated` quantity
+  (sales order allocations included, measured on the pinned versions), and
+  a row without it is an error, never "none allocated". A choice exists only
+  when the pick leaves stock behind: a pick that empties every item asks
+  nothing. Serialized stock moves by serial number; without serials only a
+  pick of every serialized item is decided. Stock of one part that is
+  partly serialized is for a human. An add or a count needs exactly one
+  stock item of the part at its location.
 - **Movement type to API operation.** Every dry-run shows the operation.
 
   | Movement type | Operation |
