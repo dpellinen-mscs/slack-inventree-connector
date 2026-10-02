@@ -86,7 +86,7 @@ The quickstart reaches the first dry-run in about 15 minutes.
 - [ ] Answers by button or by thread reply update the candidate and re-run validation
   - [x] A click on a question's button is checked against its stored row and recorded as the answer
   - [x] The clicker is told why a click did nothing (stale, expired, not allowed): an ephemeral note in the thread
-  - [ ] The answer updates the candidate, re-runs validation, and asks the next question
+  - [x] The answer updates the candidate, re-runs validation, and asks the next question (by button; thread replies next)
 - [ ] Authorization: who may answer and who may approve, by button and by thread reply
 - [ ] Plan revisions: an edit, a deletion or a new thread message makes a plan stale
   - [x] A new message after the dry run gets a revised dry run, or a notice that the reply no longer stands

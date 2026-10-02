@@ -22,7 +22,7 @@ from stockthread.core.model import (
     ReviewReason,
 )
 from stockthread.core.questions import _BY_REASON, MAX_CHOICES, Ask, Question, pick_question
-from stockthread.core.validate import validate
+from stockthread.core.validate import TYPE_UNCLEAR, validate
 from stockthread.slack.replies import gate_reasons
 
 
@@ -85,7 +85,7 @@ def test_an_unclear_type_is_asked_as_a_choice_of_type() -> None:
     unclear = take(movement_type=MovementType.UNCLEAR)
     reasons = validate(unclear, "2 Disc 40 from main stock to truck 1", max_quantity=100)
     assert pick_question([View(unclear, (EXACT,), EXACT, EXACT, reasons)]) == Question(
-        Ask.MOVEMENT_TYPE, ReasonCode.MOVEMENT_UNCLEAR, 0
+        Ask.MOVEMENT_TYPE, ReasonCode.MOVEMENT_UNCLEAR, 0, detail=TYPE_UNCLEAR
     )
 
 
@@ -93,7 +93,7 @@ def test_a_hedge_on_an_unclear_type_is_confirmed_first() -> None:
     unclear = take(movement_type=MovementType.UNCLEAR)
     reasons = validate(unclear, "I think 2 Disc 40 from main stock to truck 1", max_quantity=100)
     assert pick_question([View(unclear, (EXACT,), EXACT, EXACT, reasons)]) == Question(
-        Ask.CONFIRM, ReasonCode.MOVEMENT_UNCLEAR, 0
+        Ask.CONFIRM, ReasonCode.MOVEMENT_UNCLEAR, 0, detail="hedge"
     )
 
 
@@ -120,9 +120,17 @@ def test_too_many_candidates_are_asked_as_a_reply() -> None:
 
 def test_a_loose_match_is_confirmed_with_its_record() -> None:
     loose = Match(MatchStatus.MATCHED, MatchRule.FUZZY, 7)
-    assert pick_question([view(items=(loose,))]) == Question(Ask.CONFIRM_PART, ReasonCode.FUZZY_MATCH, 0, 0, None, (7,))
+    assert pick_question([view(items=(loose,))]) == Question(
+        Ask.CONFIRM_PART, ReasonCode.FUZZY_MATCH, 0, 0, None, (7,), detail="part found by the fuzzy rule"
+    )
     assert pick_question([view(destination=loose)]) == Question(
-        Ask.CONFIRM_LOCATION, ReasonCode.FUZZY_MATCH, 0, None, "destination", (7,)
+        Ask.CONFIRM_LOCATION,
+        ReasonCode.FUZZY_MATCH,
+        0,
+        None,
+        "destination",
+        (7,),
+        detail="location found by the fuzzy rule",
     )
 
 
@@ -146,7 +154,9 @@ def test_the_quantity_question_names_its_line() -> None:
     assert question == Question(Ask.QUANTITY, ReasonCode.QUANTITY_MISSING, 0, 1)
     serials = ReviewReason(ReasonCode.SERIAL_UNCONFIRMED, ReasonSource.RULE, "line 2: serial not in the text")
     question = pick_question([View(take(*lines), (EXACT, EXACT), EXACT, EXACT, (serials,))])
-    assert question == Question(Ask.SERIALS, ReasonCode.SERIAL_UNCONFIRMED, 0, 1)
+    assert question == Question(
+        Ask.SERIALS, ReasonCode.SERIAL_UNCONFIRMED, 0, 1, detail="line 2: serial not in the text"
+    )
 
 
 def test_the_source_comes_before_the_destination() -> None:
@@ -178,7 +188,9 @@ def test_a_tier_goes_across_movements_before_the_next_tier() -> None:
 def test_a_match_reason_among_the_reasons_does_not_hide_the_match_question() -> None:
     loose = Match(MatchStatus.MATCHED, MatchRule.WORDS, 7)
     question = pick_question([view(take(), ReasonCode.FUZZY_MATCH, items=(loose,))])
-    assert question == Question(Ask.CONFIRM_PART, ReasonCode.FUZZY_MATCH, 0, 0, None, (7,))
+    assert question == Question(
+        Ask.CONFIRM_PART, ReasonCode.FUZZY_MATCH, 0, 0, None, (7,), detail="part found by the words rule"
+    )
 
 
 @pytest.mark.parametrize("case", cases(), ids=lambda case: case["id"])
@@ -214,7 +226,7 @@ def test_a_line_named_in_a_detail_is_the_line_asked() -> None:
     lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(1)))
     reasons = validate(take(*lines), "took 2 Disc 40 from main stock to truck 1", max_quantity=100)
     question = pick_question([View(take(*lines), (EXACT, EXACT), EXACT, EXACT, reasons)])
-    assert question == Question(Ask.CONFIRM, ReasonCode.ITEM_NOT_IN_TEXT, 0, 1)
+    assert question == Question(Ask.CONFIRM, ReasonCode.ITEM_NOT_IN_TEXT, 0, 1, detail="line 2")
 
 
 @pytest.mark.parametrize("detail", ["line 0: x", "line 3: x", "line 9"])
@@ -222,7 +234,7 @@ def test_a_line_out_of_range_is_not_named(detail: str) -> None:
     lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(1)))
     reason = ReviewReason(ReasonCode.SERIAL_UNCONFIRMED, ReasonSource.RULE, detail)
     question = pick_question([View(take(*lines), (EXACT, EXACT), EXACT, EXACT, (reason,))])
-    assert question == Question(Ask.SERIALS, ReasonCode.SERIAL_UNCONFIRMED, 0, None)
+    assert question == Question(Ask.SERIALS, ReasonCode.SERIAL_UNCONFIRMED, 0, None, detail=detail)
 
 
 def test_a_photo_read_into_items_is_confirmed_not_asked_again() -> None:
