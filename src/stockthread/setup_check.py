@@ -5,7 +5,7 @@ It reads only: the InvenTree version, the roles of the token's user, the stock l
 have posted in the watched channels (from the local database, ids only). Every finding is a fixed sentence about
 settings, roles or paths; nothing of a message is read or printed.
 
-Pure: facts in, findings out. The command (`__main__.check_setup`) gathers the facts.
+Pure: facts in, findings out. `run.check_setup` gathers the facts.
 """
 
 from __future__ import annotations
@@ -45,15 +45,30 @@ class Finding:
     text: str
 
 
-def check_roles(body: Mapping[str, Any]) -> list[Finding]:
-    """What the token's user (`GET /api/user/roles/`) lacks, and what it has beyond the minimum."""
+def _granted(body: Mapping[str, Any]) -> dict[str, frozenset[str]] | None:
+    """Role name -> permissions, or None when the server did not say."""
     roles = body.get("roles")
     if not isinstance(roles, Mapping):
-        return [Finding(Level.ERROR, "roles: the server did not say which roles the token's user has")]
-    granted = {
+        return None
+    return {
         name: frozenset(p for p in perms if isinstance(p, str)) if isinstance(perms, list) else frozenset()
         for name, perms in roles.items()
     }
+
+
+def lacks_catalog_view(body: Mapping[str, Any]) -> bool:
+    """Whether the roles show the catalog (parts and stock locations) cannot be read: then the read is not tried."""
+    granted = _granted(body)
+    if granted is None or body.get("is_superuser") is True:
+        return False  # unknown or unlimited: try the read
+    return any("view" not in granted.get(name, frozenset()) for name in ("part", "stock_location"))
+
+
+def check_roles(body: Mapping[str, Any]) -> list[Finding]:
+    """What the token's user (`GET /api/user/roles/`) lacks, and what it has beyond the minimum."""
+    granted = _granted(body)
+    if granted is None:
+        return [Finding(Level.ERROR, "roles: the server did not say which roles the token's user has")]
     found = []
     for name, needed in MINIMUM_ROLES.items():
         for permission in sorted(needed - granted.get(name, frozenset())):

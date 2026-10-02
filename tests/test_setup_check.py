@@ -7,11 +7,16 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+from pydantic import SecretStr
 
 from stockthread import __main__ as cli
+from stockthread.config import InvenTreeSettings
 from stockthread.core.matching import Catalog, LocationRecord
 from stockthread.core.model import PostKey
+from stockthread.inventree import InvenTreeReader
+from stockthread.run import inventree_findings
 from stockthread.setup_check import Finding, Level, check_posters, check_roles, check_vehicles, exit_code
 from stockthread.store import Store
 from stockthread.store.db import posters_seen
@@ -175,3 +180,67 @@ def test_the_command_prints_findings_and_fails_on_an_error(
     ]
     monkeypatch.setattr(cli, "check_setup", lambda settings: found[:1])
     assert cli.main(["check-setup", "--config", str(path)]) == 0
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+ROOT = {"server": "InvenTree", "version": "1.5.6", "apiVersion": 530}
+LOCATIONS = [{"pk": 10, "pathstring": "Vehicles/Sam", "description": "", "structural": False}]
+
+
+def inventree(roles: dict[str, Any], forbidden: frozenset[str] = frozenset()) -> tuple[InvenTreeReader, list[str]]:
+    """A reader whose server answers the setup check; paths in `forbidden` answer 403, as a missing view role does."""
+    asked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        asked.append(path)
+        if path in forbidden:
+            return httpx.Response(403, json={"detail": "You do not have permission to perform this action."})
+        if path == "/api/":
+            return httpx.Response(200, json=ROOT)
+        if path == "/api/user/roles/":
+            return httpx.Response(200, json=roles)
+        results = {"/api/part/": [], "/api/stock/location/": LOCATIONS}[path]
+        return httpx.Response(200, json={"count": len(results), "results": results})
+
+    client = InvenTreeReader(
+        InvenTreeSettings(url="http://inventree.local:8000"),
+        SecretStr("inv-synthetic"),
+        transport=httpx.MockTransport(handler),
+    )
+    return client, asked
+
+
+@pytest.mark.anyio
+async def test_a_missing_catalog_view_prints_the_roles_error_and_skips_the_catalog() -> None:
+    roles = {**MINIMUM, "roles": {**MINIMUM["roles"], "part": None}}
+    client, asked = inventree(roles, forbidden=frozenset({"/api/part/"}))
+    async with client:
+        findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"})
+    assert [(f.level, f.text) for f in findings[1:]] == [
+        (Level.ERROR, "roles: part lacks view, needed for dry runs (the catalog cannot be read)"),
+        (Level.WARN, "vehicles: not checked until part and stock_location have view"),
+    ]
+    assert "/api/part/" not in asked
+    assert exit_code(findings) == 1
+
+
+@pytest.mark.anyio
+async def test_a_catalog_refused_despite_the_roles_is_an_error_and_the_roles_still_print() -> None:
+    client, _ = inventree(MINIMUM, forbidden=frozenset({"/api/stock/location/"}))
+    async with client:
+        findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"})
+    assert levels(findings) == [Level.OK, Level.OK, Level.ERROR]
+    assert findings[2].text.startswith("vehicles: not checked, the catalog could not be read: ")
+
+
+@pytest.mark.anyio
+async def test_a_readable_catalog_checks_the_vehicle_paths() -> None:
+    client, _ = inventree(MINIMUM)
+    async with client:
+        findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"})
+    assert findings[2] == Finding(Level.OK, "vehicles: every one of the 1 paths is a stock location")
