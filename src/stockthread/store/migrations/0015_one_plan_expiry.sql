@@ -1,7 +1,6 @@
 -- One plan expiry per post (design section 4, "Plan expiry"; issue #74): `plan_from` is the Slack time a post's
 -- plan expires from, fixed by its first dry run (the newest message it read). Its revisions and every question
--- asked about it count from this one time, so a question cannot be answered once its post can no longer be
--- revised, and a post cannot be revised once its questions have expired.
+-- asked about it count from this one time: a click and a revision judge a plan's expiry alike.
 --
 -- Posts that had their dry run before this migration: a question asked in that first dry run already counts from
 -- the newest message, and the post now does too. A post without one keeps counting from its own time, as before.

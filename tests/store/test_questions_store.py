@@ -553,19 +553,22 @@ def test_the_first_dry_run_fixes_the_plan_from_its_question_or_its_newest_messag
 
 
 def test_a_revision_counts_from_the_plan_and_its_question_expires_with_it(store: Store, path: Path) -> None:
-    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    newest = "1790000003.000100"  # later than the post's own time: the plan counts from here, not from POST.ts
+    store.place_message(OWNER, PostKey(POST.workspace_id, POST.channel_id, newest), user_id="U0SAM0001",
+                        thread_ts=POST.ts, window_seconds=5)  # fmt: skip
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm(expires_from=newest))
     store.place_message(OWNER, PostKey(POST.workspace_id, POST.channel_id, "1790000100.000100"), user_id="U0SAM0001",
                         thread_ts=POST.ts, window_seconds=5)  # fmt: skip
-    [waiting] = store.posts_waiting_for_dry_run(revisable_since=Decimal(POST.ts))
-    assert (waiting.revision, waiting.plan_from) == (2, POST.ts)
-    assert store.posts_waiting_for_dry_run(revisable_since=Decimal(POST.ts) + Decimal("0.000001")) == []
+    [waiting] = store.posts_waiting_for_dry_run(revisable_since=Decimal(newest))
+    assert (waiting.revision, waiting.plan_from) == (2, newest)
+    assert store.posts_waiting_for_dry_run(revisable_since=Decimal(newest) + Decimal("0.000001")) == []
     with pytest.raises(ValueError, match="expires with its post's plan"):
         store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, "1790000100.000109", revision=2,
-                             question=confirm("c" * 22, "d" * 22, expires_from="1790000100.000100"))  # fmt: skip
+                             question=confirm("c" * 22, "d" * 22, expires_from=POST.ts))  # fmt: skip
     store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, "1790000100.000109", revision=2,
-                         question=confirm("c" * 22, "d" * 22))  # fmt: skip
-    assert [item.expires_from for item in store.questions(POST)] == [POST.ts, POST.ts]
-    assert plan_from(path) == [POST.ts]
+                         question=confirm("c" * 22, "d" * 22, expires_from=newest))  # fmt: skip
+    assert [item.expires_from for item in store.questions(POST)] == [newest, newest]
+    assert plan_from(path) == [newest]
 
 
 @pytest.mark.parametrize(

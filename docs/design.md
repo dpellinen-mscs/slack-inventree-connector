@@ -539,9 +539,8 @@ needs.
     is the author of the oldest message the dry run read, and expiry
     counts from the post's one plan time (`plan_from`, fixed by the first
     dry run from the newest message it read; migration 0015), the same as
-    its revisions. A click and a revision therefore agree on when a plan
-    has expired: an answer that is taken can still be acted on, and a post
-    that can still be revised has questions that can still be answered.
+    its revisions. A click and a revision therefore count a plan's expiry
+    from the same time.
     Questions asked in a revision before migration 0015 count from the
     post's own time, which is never later. The user must be an
     approver, or for a question that is not for approvers only, that
