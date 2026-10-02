@@ -31,6 +31,7 @@ from stockthread.core.questions import (
     question_json,
     tier_of,
 )
+from stockthread.core.resolve import SourcePick
 from stockthread.core.validate import TYPE_UNCLEAR
 
 SAM, LUIS = "U0SAM0001", "U0LUIS0005"
@@ -45,6 +46,7 @@ class View:
     source: Match | None
     destination: Match | None
     reasons: Sequence[ReviewReason]
+    stock: Sequence[SourcePick | None] = ()
 
 
 def view(kind: MovementType, *reasons: ReviewReason) -> View:
@@ -187,3 +189,56 @@ def test_the_type_question_is_in_the_type_tier() -> None:
     assert question.ask is Ask.MOVEMENT_TYPE
     assert tier_of(question) is Tier.TYPE
     assert not clears_on_yes(question)
+
+
+# The stock question (design section 4, "The stock question").
+
+CHOOSE_STOCK = Question(Ask.CHOOSE_STOCK, ReasonCode.STOCK_CHOICE, 0, 0, None, (41, 57))
+SPLIT = Question(Ask.CONFIRM_STOCK, ReasonCode.STOCK_CHOICE, 0, 0, None, (41, 57))
+AGAIN = Question(Ask.READ_STOCK_AGAIN, ReasonCode.QUANTITY_ABOVE_STOCK, 0, 0)
+
+
+def test_a_stock_item_picked_or_a_split_said_yes_to_names_the_lines_stock() -> None:
+    picked = replay([given(1, CHOOSE_STOCK, Choice("record", record=57))], [1], APPROVERS)
+    assert (picked.stock, picked.applied) == ({(0, 0): (57,)}, [1])
+    split = replay([given(1, SPLIT, Choice("yes"))], [1], APPROVERS)
+    assert split.stock == {(0, 0): (41, 57)}
+    none = replay([given(1, CHOOSE_STOCK, Choice("none"))], [1], APPROVERS)
+    assert none.stock == {(0, 0): ()}
+
+
+def test_a_stock_item_that_was_not_offered_changes_nothing() -> None:
+    effects = replay([given(1, CHOOSE_STOCK, Choice("record", record=60))], [1], APPROVERS)
+    assert (effects.stock, effects.ignored) == ({}, [1])
+    whole = Question(Ask.CHOOSE_STOCK, ReasonCode.STOCK_CHOICE, 0, None, None, (41,))
+    assert replay([given(1, whole, Choice("record", record=41))], [1], APPROVERS).ignored == [1]
+
+
+def test_drop_it_and_no_to_a_split_end_the_plan() -> None:
+    assert replay([given(1, AGAIN, Choice("no"))], [1], APPROVERS).rejected == 1
+    assert replay([given(1, SPLIT, Choice("no"))], [1], APPROVERS).rejected == 1
+    assert replay([given(1, CHOOSE_STOCK, Choice("no"))], [1], APPROVERS).rejected is None
+
+
+def test_read_the_stock_again_ends_the_lines_earlier_stock_answers_only() -> None:
+    other = Question(Ask.CHOOSE_STOCK, ReasonCode.STOCK_CHOICE, 0, 1, None, (60,))
+    part = Question(Ask.CHOOSE_PART, ReasonCode.PART_AMBIGUOUS, 0, 0, None, (4, 5))
+    effects = replay(
+        [
+            given(1, part, Choice("record", record=5)),
+            given(2, CHOOSE_STOCK, Choice("none")),
+            given(3, other, Choice("record", record=60)),
+            given(4, AGAIN, Choice("again")),
+        ],
+        [2],
+        APPROVERS,
+    )
+    assert effects.stock == {(0, 1): (60,)}
+    assert effects.parts[(0, 0)].record == 5
+    assert effects.applied == [1, 2, 3, 4]
+    later = replay(
+        [given(2, CHOOSE_STOCK, Choice("none")), given(4, AGAIN, Choice("again")), given(5, SPLIT, Choice("yes"))],
+        [1],
+        APPROVERS,
+    )
+    assert later.stock == {(0, 0): (41, 57)}

@@ -10,11 +10,15 @@ import pytest
 from stockthread.core.model import Operation, ReasonCode
 from stockthread.core.resolve import (
     DETAIL_BATCH,
+    DETAIL_CHOSEN_GONE,
+    DETAIL_CHOSEN_SERIALIZED,
+    DETAIL_CHOSEN_SHORT,
     DETAIL_COUNTED,
     DETAIL_EMPTIED,
     DETAIL_MIXED,
     DETAIL_NO_STOCK,
     DETAIL_NO_TARGET,
+    DETAIL_NONE_CHOSEN,
     DETAIL_SERIAL_COUNT,
     DETAIL_SERIAL_NOT_FOUND,
     DETAIL_SERIALIZED_TARGET,
@@ -23,6 +27,7 @@ from stockthread.core.resolve import (
     DETAIL_SHARED,
     DETAIL_SUPPLIER_PART,
     DETAIL_TOO_FEW,
+    MAX_OFFER,
     LineStock,
     StockItem,
     Take,
@@ -321,3 +326,107 @@ def test_a_counted_item_another_line_acts_on_is_for_a_human_on_both_lines() -> N
     assert codes(transfer) == [(ReasonCode.STOCK_CHOICE, DETAIL_COUNTED)]
     alone = resolve_lines([LineStock(COUNT, Decimal(4), stock), LineStock(TRANSFER, Decimal(1), [item(60, "3")])])
     assert all(pick.decided for pick in alone)
+
+
+# The stock question: what a pick offers, and the stock items a person chose (design section 4).
+
+
+def test_a_choice_that_matters_offers_the_items_that_cover_the_line_alone_oldest_first() -> None:
+    stock = [item(60, "5", batch="B"), item(57, "1", batch="A"), item(58, "4", batch="A"), item(59, "9", status=55)]
+    (pick,) = resolve_lines([LineStock(TRANSFER, Decimal(3), stock)])
+    assert codes(pick) == [(ReasonCode.STOCK_CHOICE, DETAIL_BATCH)]
+    assert [offered.pk for offered in pick.offer] == [58, 60]  # 57 is too small, 59 is not OK
+    assert pick.split == ()
+
+
+def test_a_choice_that_matters_without_a_covering_item_offers_the_rules_split() -> None:
+    stock = [item(57, "2", batch="A"), item(58, "2", batch="B"), item(59, "2", batch="B")]
+    (pick,) = resolve_lines([LineStock(REMOVE, Decimal(3), stock)])
+    assert pick.offer == ()
+    assert pick.split == pick.takes == takes((57, "2"), (58, "1"))
+
+
+def test_the_offer_is_at_most_max_offer_items() -> None:
+    stock = [item(pk, "5", batch=f"B{pk}") for pk in range(1, MAX_OFFER + 3)]
+    (pick,) = resolve_lines([LineStock(TRANSFER, Decimal(1), stock)])
+    assert [offered.pk for offered in pick.offer] == list(range(1, MAX_OFFER + 1))
+
+
+def test_the_offer_is_from_what_the_lines_before_left() -> None:
+    stock = [item(57, "5", batch="A"), item(58, "5", batch="B")]
+    first, second = resolve_lines([LineStock(TRANSFER, Decimal(3), stock), LineStock(TRANSFER, Decimal(3), stock)])
+    assert first.takes == takes((57, "3"))
+    assert [offered.pk for offered in second.offer] == [58]  # 57 has 2 left
+    assert second.offer[0].quantity == Decimal(5)
+
+
+def test_reasons_a_choice_cannot_settle_offer_nothing() -> None:
+    (short,) = resolve_lines([LineStock(TRANSFER, Decimal(9), [item(57, "2", batch="A"), item(58, "2", batch="B")])])
+    assert codes(short) == [(ReasonCode.QUANTITY_ABOVE_STOCK, DETAIL_TOO_FEW)]
+    assert (short.offer, short.split) == ((), ())
+    (serials,) = resolve_lines(
+        [LineStock(TRANSFER, Decimal(1), [item(57, "1", serial="1"), item(58, "1", serial="2")])]
+    )
+    assert codes(serials) == [(ReasonCode.STOCK_CHOICE, DETAIL_SERIALS_NEEDED)]
+    assert (serials.offer, serials.split) == ((), ())
+
+
+def test_several_targets_offer_the_unserialized_items_at_the_place() -> None:
+    stock = [item(60, "0", status=55, allocated="3"), item(57, "1", serial="X"), item(58, "4")]
+    (pick,) = resolve_lines([LineStock(COUNT, Decimal(3), stock)])
+    assert codes(pick) == [(ReasonCode.STOCK_CHOICE, DETAIL_SEVERAL_TARGETS)]
+    assert [offered.pk for offered in pick.offer] == [58, 60]  # status and allocation do not matter for a target
+
+
+def test_chosen_items_are_picked_from_without_asking_about_their_differences() -> None:
+    stock = [item(57, "5", batch="A"), item(58, "5", batch="B")]
+    (pick,) = resolve_lines([LineStock(TRANSFER, Decimal(3), stock, chosen=(58,))])
+    assert (pick.takes, pick.decided, pick.offer) == (takes((58, "3")), True, ())
+    (split,) = resolve_lines([LineStock(TRANSFER, Decimal(8), stock, chosen=(57, 58))])
+    assert (split.takes, split.decided) == (takes((57, "5"), (58, "3")), True)
+
+
+def test_chosen_items_that_no_longer_cover_the_line_ask_again_with_the_stock_as_it_is() -> None:
+    stock = [item(57, "2", batch="A"), item(58, "5", batch="B"), item(59, "4", batch="B")]
+    (pick,) = resolve_lines([LineStock(TRANSFER, Decimal(3), stock, chosen=(57,))])
+    assert (pick.takes, codes(pick)) == ((), [(ReasonCode.STOCK_CHOICE, DETAIL_CHOSEN_SHORT)])
+    assert [offered.pk for offered in pick.offer] == [58, 59]
+    (gone,) = resolve_lines([LineStock(TRANSFER, Decimal(3), stock, chosen=(41,))])
+    assert codes(gone) == [(ReasonCode.STOCK_CHOICE, DETAIL_CHOSEN_SHORT)]
+
+
+def test_chosen_items_an_earlier_line_takes_no_longer_cover_the_line() -> None:
+    stock = [item(57, "5", batch="A"), item(58, "5", batch="B")]
+    first, second = resolve_lines(
+        [LineStock(TRANSFER, Decimal(4), stock, chosen=(57,)), LineStock(TRANSFER, Decimal(3), stock, chosen=(57,))]
+    )
+    assert first.takes == takes((57, "4"))
+    assert (second.takes, codes(second)) == ((), [(ReasonCode.STOCK_CHOICE, DETAIL_CHOSEN_SHORT)])
+    assert [offered.pk for offered in second.offer] == [58]
+
+
+def test_none_of_these_leaves_the_line_without_a_pick_and_offers_nothing() -> None:
+    stock = [item(57, "5", batch="A"), item(58, "5", batch="B")]
+    for operation in (TRANSFER, COUNT):
+        (pick,) = resolve_lines([LineStock(operation, Decimal(3), stock, chosen=())])
+        assert (pick.takes, codes(pick)) == ((), [(ReasonCode.STOCK_CHOICE, DETAIL_NONE_CHOSEN)])
+        assert (pick.offer, pick.split) == ((), ())
+
+
+def test_a_chosen_target_is_acted_on_whatever_it_holds_while_it_is_at_the_place_and_unserialized() -> None:
+    stock = [item(57, "0", status=55), item(58, "4")]
+    (pick,) = resolve_lines([LineStock(COUNT, Decimal(3), stock, chosen=(57,))])
+    assert (pick.takes, pick.decided) == (takes((57, "3")), True)
+    (gone,) = resolve_lines([LineStock(ADD, Decimal(3), stock, chosen=(41,))])
+    assert codes(gone) == [(ReasonCode.STOCK_CHOICE, DETAIL_CHOSEN_GONE)]
+    assert [offered.pk for offered in gone.offer] == [57, 58]
+    serialized = [item(57, "1", serial="X"), item(58, "4")]
+    (now,) = resolve_lines([LineStock(ADD, Decimal(3), serialized, chosen=(57,))])
+    assert codes(now) == [(ReasonCode.STOCK_CHOICE, DETAIL_CHOSEN_SERIALIZED)]
+    assert [offered.pk for offered in now.offer] == [58]
+
+
+def test_several_items_named_for_a_target_are_not_an_answer() -> None:
+    stock = [item(57, "1"), item(58, "4")]
+    (pick,) = resolve_lines([LineStock(COUNT, Decimal(3), stock, chosen=(57, 58))])
+    assert codes(pick) == [(ReasonCode.STOCK_CHOICE, DETAIL_SEVERAL_TARGETS)]

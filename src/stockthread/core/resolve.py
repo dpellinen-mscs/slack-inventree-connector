@@ -15,6 +15,8 @@ quantity taken from each, by one documented rule:
   lines never take the same unit; only a shortage that the other lines cause says so. A count acts on an item as
   it is, so a counted item that another line also acts on is for a human: the result depends on the order. So is
   an add into an item that an earlier line takes in full: InvenTree moves (or deletes) an item taken whole.
+- Stock items a person chose in the thread replace the choice: the line acts on those only, and says so when they no
+  longer fit. A pick a choice can settle carries what the stock question offers.
 
 An add or a count needs a single existing stock item of the part at its location (`target_item`): v1.0 never
 creates stock items.
@@ -50,6 +52,24 @@ DETAIL_SERIALIZED_TARGET = "serialized stock: an add or a count does not change 
 DETAIL_SHARED = "other lines of the post take the same stock"
 DETAIL_COUNTED = "another line of the post acts on a counted stock item"
 DETAIL_EMPTIED = "an earlier line of the post takes all of the stock item an add acts on"
+DETAIL_CHOSEN_SHORT = "the chosen stock items no longer cover the quantity"
+DETAIL_CHOSEN_GONE = "the chosen stock item is no longer at the location"
+DETAIL_CHOSEN_SERIALIZED = "the chosen stock item is serialized now"
+DETAIL_NONE_CHOSEN = "none of the stock items offered is the one meant"
+CHOOSABLE = frozenset(
+    {
+        DETAIL_BATCH,
+        DETAIL_SUPPLIER_PART,
+        DETAIL_SEVERAL_TARGETS,
+        DETAIL_CHOSEN_SHORT,
+        DETAIL_CHOSEN_GONE,
+        DETAIL_CHOSEN_SERIALIZED,
+    }
+)
+"""The details of a pick that a choice of stock items in the thread can settle: a choice that matters, or a choice
+that no longer holds. Any other stock reason is fixed in InvenTree or by editing the post."""
+MAX_OFFER = 5
+"""At most this many stock items are offered as buttons (as `questions.MAX_CHOICES`)."""
 _SHORTAGE = (DETAIL_NO_STOCK, DETAIL_TOO_FEW, DETAIL_SERIAL_NOT_FOUND)
 
 
@@ -83,6 +103,13 @@ class SourcePick:
     """What the line takes from each stock item, oldest first. Empty when nothing could be picked."""
     reasons: tuple[ReviewReason, ...] = ()
     """Why a human must decide. A pick with reasons is a proposal, never a write."""
+    offer: tuple[StockItem, ...] = ()
+    """The stock items the line could act on alone, as the lines before it left them, oldest first, at most
+    MAX_OFFER: for a transfer or a remove those that cover its quantity, for an add or a count the unserialized
+    items at the place. Set only when a reason is in CHOOSABLE."""
+    split: tuple[Take, ...] = ()
+    """For a transfer or a remove that no single item covers: the rule's split of what is left. Set only when a
+    reason is in CHOOSABLE and `offer` is empty."""
 
     @property
     def decided(self) -> bool:
@@ -156,6 +183,9 @@ class LineStock:
     items: Sequence[StockItem]
     """The stock items of the line's part at its place, as read: before any line of the post."""
     serials: Sequence[str] = ()
+    chosen: tuple[int, ...] | None = None
+    """The stock items a person named for the line in the thread (design section 4, "The stock question"), or None
+    when nobody did. Empty: "None of these"."""
 
 
 def resolve_lines(lines: Sequence[LineStock]) -> list[SourcePick]:
@@ -164,7 +194,8 @@ def resolve_lines(lines: Sequence[LineStock]) -> list[SourcePick]:
     its reasons are those of the stock as read and of what is left, and DETAIL_SHARED; otherwise they are those of
     what is left (a choice among what is left is still a choice). An add into an item that the lines before it take
     in full gets DETAIL_EMPTIED. A line that acts on an item a count acts on, together with another line, gets
-    DETAIL_COUNTED."""
+    DETAIL_COUNTED. A line with `chosen` items acts on those only (`_chosen`). A pick that a choice can settle
+    carries what the stock question offers (`SourcePick.offer`, `SourcePick.split`)."""
     taken: dict[int, Decimal] = {}
     picks = []
     for line in lines:
@@ -173,21 +204,28 @@ def resolve_lines(lines: Sequence[LineStock]) -> list[SourcePick]:
                 replace(item, quantity=max(item.quantity - taken.get(item.pk, Decimal(0)), Decimal(0)))
                 for item in line.items
             ]
-            pick = pick_source(line.quantity, left, line.serials)
-            if not pick.decided and left != list(line.items):
-                as_read = pick_source(line.quantity, line.items, line.serials)
-                if _short(pick) - _short(as_read):
-                    pick = _shared(pick, as_read)
+            if line.chosen is not None:
+                pick = _chosen(line, line.chosen, left)
+            else:
+                pick = pick_source(line.quantity, left, line.serials)
+                if not pick.decided and left != list(line.items):
+                    as_read = pick_source(line.quantity, line.items, line.serials)
+                    if _short(pick) - _short(as_read):
+                        pick = _shared(pick, as_read)
             for take in pick.takes:
                 taken[take.item] = taken.get(take.item, Decimal(0)) + take.quantity
         else:
-            pick = resolve_line(line.operation, line.quantity, line.items, line.serials)
+            left = list(line.items)
+            if line.chosen is not None and len(line.chosen) <= 1:
+                pick = _chosen(line, line.chosen, left)
+            else:  # several items named for one target: not an answer an add or a count can take
+                pick = resolve_line(line.operation, line.quantity, line.items, line.serials)
             whole = {item.pk: item.quantity for item in line.items}
             if line.operation is Operation.ADD and any(
                 take.item in taken and taken[take.item] >= whole[take.item] for take in pick.takes
             ):
                 pick = replace(pick, reasons=(*pick.reasons, _reason(ReasonCode.STOCK_CHOICE, DETAIL_EMPTIED)))
-        picks.append(pick)
+        picks.append(_offered(line, left, pick))
     counted = {
         take.item
         for line, pick in zip(lines, picks, strict=True)
@@ -201,6 +239,44 @@ def resolve_lines(lines: Sequence[LineStock]) -> list[SourcePick]:
         else pick
         for pick in picks
     ]
+
+
+def _chosen(line: LineStock, chosen: tuple[int, ...], left: Sequence[StockItem]) -> SourcePick:
+    """What a line acts on when a person named its stock items. A transfer or a remove picks from the named items
+    only, by the rule, from what the lines before it left; their differences are not asked about again (a person
+    chose them), and a shortfall is DETAIL_CHOSEN_SHORT. An add or a count acts on the one named item while it is at
+    the place and unserialized, whatever it holds."""
+    if not chosen:
+        return SourcePick((), (_reason(ReasonCode.STOCK_CHOICE, DETAIL_NONE_CHOSEN),))
+    if line.operation in (Operation.TRANSFER, Operation.REMOVE):
+        named = [item for item in left if item.pk in chosen]
+        pick = pick_source(line.quantity, named, line.serials) if named else SourcePick(())
+        if pick.takes and all(reason.detail in (DETAIL_BATCH, DETAIL_SUPPLIER_PART) for reason in pick.reasons):
+            return SourcePick(pick.takes)
+        return SourcePick((), (_reason(ReasonCode.STOCK_CHOICE, DETAIL_CHOSEN_SHORT),))
+    item = next((item for item in left if item.pk == chosen[0]), None)
+    if item is None:
+        return SourcePick((), (_reason(ReasonCode.STOCK_CHOICE, DETAIL_CHOSEN_GONE),))
+    if item.serial:
+        return SourcePick((), (_reason(ReasonCode.STOCK_CHOICE, DETAIL_CHOSEN_SERIALIZED),))
+    return SourcePick((Take(item.pk, line.quantity),))
+
+
+def _offered(line: LineStock, left: Sequence[StockItem], pick: SourcePick) -> SourcePick:
+    """The pick with what the stock question offers, when a choice can settle one of its reasons."""
+    if not any(reason.detail in CHOOSABLE for reason in pick.reasons):
+        return pick
+    if line.operation not in (Operation.TRANSFER, Operation.REMOVE):
+        targets = sorted((item for item in left if not item.serial), key=lambda item: item.pk)
+        return replace(pick, offer=tuple(targets[:MAX_OFFER]))
+    pool = sorted((item for item in left if item.available and not item.serial), key=lambda item: item.pk)
+    covering = tuple(item for item in pool if item.quantity >= line.quantity)[:MAX_OFFER]
+    if covering:
+        return replace(pick, offer=covering)
+    rule = pick_source(line.quantity, left, line.serials)
+    if rule.takes and all(reason.detail in CHOOSABLE for reason in rule.reasons):
+        return replace(pick, split=rule.takes)
+    return pick
 
 
 def _short(pick: SourcePick) -> set[str]:

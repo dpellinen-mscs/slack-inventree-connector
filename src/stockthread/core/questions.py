@@ -18,6 +18,7 @@ from enum import IntEnum, StrEnum
 from typing import Any, Literal, Protocol
 
 from stockthread.core.model import CandidateMovement, Match, MatchStatus, MovementType, ReasonCode, ReviewReason
+from stockthread.core.resolve import CHOOSABLE, SourcePick
 from stockthread.core.validate import TYPE_UNCLEAR
 
 MAX_CHOICES = 5
@@ -45,6 +46,12 @@ class Ask(StrEnum):
     """Yes or no: is the loosely matched location the one meant."""
     SERIALS = "serials"
     """A thread reply: the serial numbers."""
+    CHOOSE_STOCK = "choose_stock"
+    """Buttons: one of the stock items the line could act on alone (design section 4, "The stock question")."""
+    CONFIRM_STOCK = "confirm_stock"
+    """Yes or no: the rule's split over these stock items (transfers and removes)."""
+    READ_STOCK_AGAIN = "read_stock_again"
+    """Buttons: read the stock again, or drop the plan. Nothing the thread can choose fixes the line's stock."""
 
 
 class Tier(IntEnum):
@@ -89,10 +96,10 @@ _BY_REASON: dict[ReasonCode, tuple[Tier, Ask, Side | None]] = {
     ReasonCode.LOCATION_UNMATCHED: (Tier.DESTINATION, Ask.CONFIRM, None),  # a match question names the side
     ReasonCode.LOCATION_AMBIGUOUS: (Tier.DESTINATION, Ask.CONFIRM, None),
     ReasonCode.SERIAL_UNCONFIRMED: (Tier.SERIALS, Ask.SERIALS, None),
-    # Resolve (source selection) will ask these as a choice of stock items; until then a human confirms.
-    ReasonCode.STOCK_CHOICE: (Tier.STOCK, Ask.CONFIRM, None),
-    ReasonCode.NO_TARGET_STOCK_ITEM: (Tier.STOCK, Ask.CONFIRM, None),
-    ReasonCode.QUANTITY_ABOVE_STOCK: (Tier.STOCK, Ask.CONFIRM, None),
+    # Asked from the line's pick (`_for_stock`): a choice of stock items when one can settle it.
+    ReasonCode.STOCK_CHOICE: (Tier.STOCK, Ask.READ_STOCK_AGAIN, None),
+    ReasonCode.NO_TARGET_STOCK_ITEM: (Tier.STOCK, Ask.READ_STOCK_AGAIN, None),
+    ReasonCode.QUANTITY_ABOVE_STOCK: (Tier.STOCK, Ask.READ_STOCK_AGAIN, None),
     ReasonCode.ACTOR_NOT_POSTER: (Tier.APPROVAL, Ask.CONFIRM, None),
     ReasonCode.QUANTITY_ABOVE_LIMIT: (Tier.APPROVAL, Ask.CONFIRM, None),
     ReasonCode.LATE_INGEST: (Tier.APPROVAL, Ask.CONFIRM, None),
@@ -127,6 +134,10 @@ class Reviewed(Protocol):
     def destination(self) -> Match | None: ...
     @property
     def reasons(self) -> Sequence[ReviewReason]: ...
+    @property
+    def stock(self) -> Sequence[SourcePick | None]:
+        """The pick of each line whose stock was read (None for the others), or empty."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -140,7 +151,8 @@ class Question:
     """Index of the line item, from 0, or None for the whole movement."""
     side: Side | None = None
     candidates: tuple[int, ...] = ()
-    """InvenTree primary keys to choose from (CHOOSE_*), or the one loosely matched record (CONFIRM_*)."""
+    """InvenTree primary keys to choose from (CHOOSE_*), the one loosely matched record (CONFIRM_PART,
+    CONFIRM_LOCATION), or the stock items of a split (CONFIRM_STOCK)."""
     approver_only: bool = False
     """Only an approver may answer: the poster cannot clear these reasons (design section 4, "Authorization")."""
     detail: str = ""
@@ -161,19 +173,41 @@ def pick_question(views: Sequence[Reviewed]) -> Question | None:
 def _from_reasons(index: int, view: Reviewed) -> list[tuple[Tier, int, Question]]:
     movement = view.movement
     found = []
+    stock: dict[int, tuple[SourcePick, list[ReviewReason]]] = {}
     for reason in view.reasons:
         tier, ask, side = _BY_REASON[reason.code]
+        line = reason_line(reason, movement)
+        pick = view.stock[line] if tier is Tier.STOCK and line is not None and line < len(view.stock) else None
+        if line is not None and pick is not None:
+            stock.setdefault(line, (pick, []))[1].append(reason)
+            continue
         if reason.code is ReasonCode.MOVEMENT_UNCLEAR and reason.detail == TYPE_UNCLEAR:
             tier, ask = Tier.TYPE, Ask.MOVEMENT_TYPE
         if reason.code is ReasonCode.PHOTO_ONLY and any((item.item_text or "").strip() for item in movement.line_items):
             tier, ask = Tier.READING, Ask.CONFIRM  # items were read from the photo: is that reading right
-        line = reason_line(reason, movement)
         order = _LAST if reason.code in _FROM_MATCHES else -1 if line is None else line
         question = Question(
             ask, reason.code, index, line, side, approver_only=tier is Tier.APPROVAL, detail=reason.detail
         )
         found.append((tier, order, question))
+    for line, (pick, reasons) in stock.items():
+        found.append((Tier.STOCK, line, _for_stock(index, line, reasons, pick)))
     return found
+
+
+def _for_stock(index: int, line: int, reasons: Sequence[ReviewReason], pick: SourcePick) -> Question:
+    """The stock question of one line (design section 4, "The stock question"): a choice of the stock items it
+    could act on, or yes or no to the rule's split, when every stock reason of the line is one a choice settles;
+    else "read the stock again", about the first reason no choice settles."""
+    fixed = [reason for reason in reasons if reason.detail.removeprefix(f"line {line + 1}: ") not in CHOOSABLE]
+    first = (fixed or list(reasons))[0]
+    if not fixed and pick.offer:
+        candidates = tuple(item.pk for item in pick.offer)
+        return Question(Ask.CHOOSE_STOCK, first.code, index, line, None, candidates, detail=first.detail)
+    if not fixed and pick.split:
+        candidates = tuple(take.item for take in pick.split)
+        return Question(Ask.CONFIRM_STOCK, first.code, index, line, None, candidates, detail=first.detail)
+    return Question(Ask.READ_STOCK_AGAIN, first.code, index, line, detail=first.detail)
 
 
 def tier_of(question: Question) -> Tier:
@@ -247,9 +281,9 @@ def _for_match(match: Match, index: int, line: int | None, side: Side | None) ->
 class Choice:
     """One button of a question. A question asked as a thread reply has none."""
 
-    kind: Literal["yes", "no", "record", "none", "type"]
+    kind: Literal["yes", "no", "record", "none", "type", "again"]
     record: int | None = None
-    """The part or location (`record`), else None."""
+    """The part, location or stock item (`record`), else None."""
     movement_type: MovementType | None = None
     """The movement type (`type`), else None."""
 
@@ -259,11 +293,13 @@ _TYPES = tuple(kind for kind in MovementType if kind is not MovementType.UNCLEAR
 
 def choices(question: Question) -> tuple[Choice, ...]:
     """The buttons of a question, in order. Every button stands for exactly one answer."""
-    if question.ask in (Ask.CONFIRM, Ask.CONFIRM_PART, Ask.CONFIRM_LOCATION):
+    if question.ask in (Ask.CONFIRM, Ask.CONFIRM_PART, Ask.CONFIRM_LOCATION, Ask.CONFIRM_STOCK):
         return (Choice("yes"), Choice("no"))
     if question.ask is Ask.MOVEMENT_TYPE:
         return tuple(Choice("type", movement_type=kind) for kind in _TYPES)
-    if question.ask in (Ask.CHOOSE_PART, Ask.CHOOSE_LOCATION):
+    if question.ask is Ask.READ_STOCK_AGAIN:
+        return (Choice("again"), Choice("no"))  # "no": drop it
+    if question.ask in (Ask.CHOOSE_PART, Ask.CHOOSE_LOCATION, Ask.CHOOSE_STOCK):
         return (*(Choice("record", record=pk) for pk in question.candidates), Choice("none"))
     return ()
 
@@ -323,7 +359,7 @@ def choice_from_json(stored: Mapping[str, Any]) -> Choice:
         kind, record, kind_of = stored["kind"], stored["record"], stored["movement_type"]
     except KeyError as error:
         raise ValueError("not a choice") from error
-    if kind not in ("yes", "no", "record", "none", "type"):
+    if kind not in ("yes", "no", "record", "none", "type", "again"):
         raise ValueError("not a choice")
     record = None if record is None else _index(record)
     kind_of = None if kind_of is None else MovementType(kind_of)

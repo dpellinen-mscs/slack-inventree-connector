@@ -95,7 +95,7 @@ The quickstart reaches the first dry-run in about 15 minutes.
 - [ ] Source selection: choose concrete stock items for each line, serials included
   - [x] The pick rule: OK and unallocated items only, one covering item before a split, oldest first, serials, differing batch or supplier part asks (`core/resolve.py`)
   - [x] In the dry run: read each line's stock once its part, place and quantity are settled, show the pick, and raise its reasons
-  - [ ] Ask the stock question as a choice of stock items
+  - [x] Ask the stock question as a choice of stock items, yes or no to a split, or read the stock again (by button)
 - [ ] Plan expiry
   - [x] A question whose plan expired is taken out of its reply, says so, and takes no answer (migration 0014)
   - [x] One expiry time per post for its questions and its revisions (migration 0015, #74)

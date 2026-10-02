@@ -22,6 +22,15 @@ from stockthread.core.model import (
     ReviewReason,
 )
 from stockthread.core.questions import _BY_REASON, MAX_CHOICES, Ask, Question, pick_question
+from stockthread.core.resolve import (
+    DETAIL_BATCH,
+    DETAIL_SHARED,
+    DETAIL_SUPPLIER_PART,
+    DETAIL_TOO_FEW,
+    SourcePick,
+    StockItem,
+    Take,
+)
 from stockthread.core.validate import TYPE_UNCLEAR, validate
 from stockthread.slack.replies import gate_reasons
 
@@ -33,6 +42,7 @@ class View:
     source: Match | None
     destination: Match | None
     reasons: Sequence[ReviewReason]
+    stock: Sequence[SourcePick | None] = ()
 
 
 EXACT = Match(MatchStatus.MATCHED, MatchRule.EXACT, 1)
@@ -266,3 +276,61 @@ def test_approval_questions_are_for_approvers_only() -> None:
         assert pick_question([view(take(), code)]).approver_only  # type: ignore[union-attr]
     assert not pick_question([view(take(), ReasonCode.CONTRADICTION)]).approver_only  # type: ignore[union-attr]
     assert not pick_question([view(take(), ReasonCode.IMPLIED_SOURCE)]).approver_only  # type: ignore[union-attr]
+
+
+# The stock question: asked from the line's pick (design section 4, "The stock question").
+
+
+def stock_view(pick: SourcePick, *details: str) -> View:
+    reasons = tuple(
+        ReviewReason(
+            ReasonCode.QUANTITY_ABOVE_STOCK if detail == DETAIL_TOO_FEW else ReasonCode.STOCK_CHOICE,
+            ReasonSource.RULE,
+            f"line 1: {detail}",
+        )
+        for detail in details
+    )
+    return View(take(), (EXACT,), EXACT, EXACT, reasons, (pick,))
+
+
+def stocked(pk: int) -> StockItem:
+    return StockItem(pk, Decimal(5), 10, Decimal(0), batch=f"B{pk}")
+
+
+def test_a_choice_that_matters_is_asked_as_a_choice_of_the_stock_items_offered() -> None:
+    pick = SourcePick((Take(41, Decimal(2)),), (), offer=(stocked(41), stocked(57)))
+    question = pick_question([stock_view(pick, DETAIL_BATCH, DETAIL_SUPPLIER_PART)])
+    assert question == Question(
+        Ask.CHOOSE_STOCK, ReasonCode.STOCK_CHOICE, 0, 0, None, (41, 57), detail=f"line 1: {DETAIL_BATCH}"
+    )
+
+
+def test_a_choice_without_a_covering_item_is_yes_or_no_to_the_split() -> None:
+    split = (Take(41, Decimal(1)), Take(57, Decimal(1)))
+    question = pick_question([stock_view(SourcePick(split, (), split=split), DETAIL_BATCH)])
+    assert question is not None
+    assert (question.ask, question.candidates, question.line) == (Ask.CONFIRM_STOCK, (41, 57), 0)
+
+
+@pytest.mark.parametrize("details", [(DETAIL_TOO_FEW,), (DETAIL_BATCH, DETAIL_SHARED), (DETAIL_BATCH,)])
+def test_stock_that_no_choice_settles_asks_to_read_the_stock_again(details: tuple[str, ...]) -> None:
+    offer = (stocked(41),) if DETAIL_SHARED in details else ()  # an offer does not settle a shortage
+    question = pick_question([stock_view(SourcePick((), (), offer=offer), *details)])
+    assert question is not None
+    assert (question.ask, question.line, question.candidates) == (Ask.READ_STOCK_AGAIN, 0, ())
+    assert question.detail.removeprefix("line 1: ") == (details[1] if len(details) > 1 else details[0])
+
+
+def test_the_stock_question_comes_after_the_serials_and_before_approval() -> None:
+    pick = SourcePick((), (), offer=(stocked(41),))
+    stock = stock_view(pick, DETAIL_BATCH)
+    late = ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE)
+    serial = ReviewReason(ReasonCode.SERIAL_UNCONFIRMED, ReasonSource.RULE)
+    with_late = View(stock.movement, stock.items, EXACT, EXACT, (late, *stock.reasons), stock.stock)
+    asked = pick_question([with_late])
+    assert asked is not None
+    assert asked.ask is Ask.CHOOSE_STOCK
+    with_serial = View(stock.movement, stock.items, EXACT, EXACT, (*stock.reasons, serial), stock.stock)
+    asked = pick_question([with_serial])
+    assert asked is not None
+    assert asked.ask is Ask.SERIALS
