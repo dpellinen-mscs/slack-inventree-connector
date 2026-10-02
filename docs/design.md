@@ -322,10 +322,12 @@ needs.
     that, not that the thread changed. The rule-based extractor declines
     every post of more than one message, so without an LLM extractor the first thread reply under an
     answered post takes its reply back. That is the safe reading: the
-    reply may have changed the movement. A post whose first message is
-    older than `plan_expiry_hours` is not revised at all, whatever the age
-    of the new message: its reply has expired with its plan, so there is
-    nothing to take back. The message is kept in the post. This also
+    reply may have changed the movement. A post whose plan is older than
+    `plan_expiry_hours` is not revised at all, whatever the age of the new
+    message: its reply has expired with its plan, so there is nothing to
+    take back. A post's plan expires from one time, fixed by its first dry
+    run (`posts.plan_from`, migration 0015): the newest message that dry
+    run read, which is what its question counts from too. The message is kept in the post. This also
     bounds what each step reads.
   - **An edit or a deletion alone** after the dry run starts a revision
     too. Every dry run also records the newest noted edit or deletion of
@@ -535,9 +537,12 @@ needs.
     answer and when the plan expires are stored with the question when it
     is asked (migration 0011), because both could move later: the poster
     is the author of the oldest message the dry run read, and expiry
-    counts from the same time as the post's revisions (the newest message
-    for a first dry run, the post's own time for a revision), so a click
-    and a revision agree on when a plan has expired. The user must be an
+    counts from the post's one plan time (`plan_from`, fixed by the first
+    dry run from the newest message it read; migration 0015), the same as
+    its revisions. A click and a revision therefore count a plan's expiry
+    from the same time.
+    Questions asked in a revision before migration 0015 count from the
+    post's own time, which is never later. The user must be an
     approver, or for a question that is not for approvers only, that
     poster. The answer (the button's position and choice) and who gave it
     are recorded once, as a compare-and-set on the open question, with an
@@ -1192,7 +1197,7 @@ and needs no extra service.
 | Table | Content |
 | --- | --- |
 | `slack_events` | Raw events with a processing status, unique on `event_id` |
-| `posts` | One row per post, unique on post key |
+| `posts` | One row per post, unique on post key, and the time its plan expires from, fixed by its first dry run (migration 0015) |
 | `post_messages` | Which post each message belongs to, unique on `(workspace, channel, ts)`: ids, author and thread, never text (migration 0003) |
 | `revised_messages` | Message keys that were edited or deleted, in any arrival order: ids only (migration 0004) |
 | `dry_run_revisions` | Revisions 2, 3, ... of a post's dry run: what each read through, its outcome, record and posted reply (migration 0007) |

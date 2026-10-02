@@ -584,8 +584,10 @@ class Worker:
         changes = self.store.post_changes_through(key)
         answers = self.store.post_answers_through(key)
         age = now - seconds(post.newest_ts)
-        # A revision's movement is as old as the post: a new reply does not make a week-old movement current.
-        since = seconds(post.key.ts) if post.revision > 1 else seconds(post.newest_ts)
+        # The first dry run fixes when the plan expires (stored as the post's `plan_from`): a revision's movement is
+        # as old as the post as first read, and a new reply does not make a week-old movement current.
+        plan_from = post.newest_ts if post.revision == 1 else post.plan_from or post.key.ts
+        since = seconds(plan_from)
         read: tuple[Sequence[MessageInput], str, bool] | None = None
         if now - since > self.settings.slack.plan_expiry_hours * 3600:
             why = "too_old"  # for a revision, the reply above has expired: there is nothing to take back
@@ -693,7 +695,7 @@ class Worker:
                     question.approver_only,
                     [(button_id, choice_json(choice)) for button_id, choice in zip(ids, buttons, strict=True)],
                     poster=poster,
-                    expires_from=post.key.ts if post.revision > 1 else post.newest_ts,  # as `since` above
+                    expires_from=plan_from,  # the plan's one expiry, as `since` above
                 )
         except Exception as error:
             _log_failure("question", key.ts, error)
