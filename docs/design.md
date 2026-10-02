@@ -455,8 +455,8 @@ needs.
   5. the source, then 6. the destination, the same way as parts (an
      implied place or an unmapped vehicle is named in a reply);
   7. serial numbers: a reply;
-  8. stock (several stock items, none, or too few): yes or no until
-     source selection asks it as a choice of stock items;
+  8. stock (a choice that matters, none, or too few): a choice of
+     stock items, or "read the stock again" (below);
   9. reasons only an approver clears (late, above the limit, someone
      else as the actor, stock changed): yes or no.
 
@@ -750,6 +750,51 @@ needs.
       becomes no alias: the person typed a name, not a new way to say it.
       A typed name the matcher found only loosely is confirmed by the next
       question first, as above, and the alias is still the post's text.
+  - **The stock question (designed, not built).** Tier 8 asks about the
+    stock a line acts on, once its part, place and quantity are settled
+    and its stock was read (section 5, "Stock items, not parts"). What
+    the thread can settle depends on why the pick is not decided:
+    - *A choice that matters* (`stock_choice`: the items differ in batch
+      or supplier part; or an add or a count with several items at the
+      place). Buttons, one per stock item that alone covers the line,
+      oldest first, at most 5, then "None of these". A label names the
+      item by its InvenTree id, what is on hand, and its batch or
+      supplier part (`#57 · 5 on hand · batch B-1`); these words come
+      from InvenTree, never from the post. When no single item covers the
+      line, the rule's split is offered as it stands, yes or no ("Take 1
+      from #41 and 1 from #57?").
+    - *Nothing the thread can choose* (no stock item, too few, serialized
+      stock without serials, mixed serialized and unserialized stock, a
+      serialized target). Two buttons: "Read the stock again" and "Drop
+      it". The question says what is wrong and that it is fixed in
+      InvenTree or by editing the post (a missing serial number: by
+      editing the post until answers by thread reply are built).
+    - *Effects.* An answer names the stock items the line takes from: the
+      one picked, or the items of the split said yes to. It is a fact
+      about the reading, replayed like any other answer, and stored as
+      primary keys only. Each revision reads stock again and picks only
+      from the named items, by the same rule, without asking about their
+      differences again (a person chose them). If they no longer cover
+      the line (sold, moved, allocated since), the line gets the reason
+      `stock_choice` with the detail "the chosen stock items no longer
+      cover the quantity", and the question is asked again with the
+      stock as it is now. "Read the stock again" changes no fact: it
+      makes the post due for a revision, which reads stock afresh. A line
+      whose stock was fixed in InvenTree then resolves by the rule, and
+      one that was not asks the same question once more. "None of these"
+      leaves the line without a pick, and the next question is "Read the
+      stock again" or "Drop it": the stock in InvenTree is not what the
+      person sees, and is fixed there. "Drop it", and "no" to a split,
+      end the plan like any "no".
+    - *Stored.* `choose_stock` (candidates: the stock item ids offered),
+      `confirm_stock` (candidates: the ids of the split) and
+      `read_stock_again`, with the line they name. The choices are
+      `record` (one stock item), `yes`, `no`, `none` and a new `again`.
+      Nothing of a label is stored.
+    - *Limits.* As for every answer, a choice never authorizes a write:
+      the write gate of M3 reads the stock again before the write and
+      refuses a pick that no longer holds. The poster or an approver may
+      answer.
 - **Authorization.** The Slack user id in the payload is checked against
   the configured approvers. An empty approver list means nobody can
   approve. Display names are never trusted. Only the poster or an approver
