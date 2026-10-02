@@ -328,7 +328,14 @@ needs.
     take back. A post's plan expires from one time, fixed by its first dry
     run (`posts.plan_from`, migration 0015): the newest message that dry
     run read, which is what its question counts from too. The message is kept in the post. This also
-    bounds what each step reads.
+    bounds what each step reads. One exception: an answer taken just
+    before the plan expired whose revision runs after it (it waited
+    behind another reply, the model, or downtime). That revision posts a
+    notice once, "The answer came as its plan expired: nothing of it
+    will be applied", so the thread never shows an answer that nothing
+    came of (issue #75). Such posts are found from the answer side: each
+    answered question that the post's dry runs have not read yet, looked
+    up by the post's records (by index).
   - **An edit or a deletion alone** after the dry run starts a revision
     too. Every dry run also records the newest noted edit or deletion of
     its post it was decided with (`changes_through`, a

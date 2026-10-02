@@ -226,6 +226,7 @@ RETRACTION_REASONS = {
     "silent": "As it reads now, I can no longer read this thread as a movement.",
     "failed": "Reading this thread again failed.",
     "unread": "I could not read this thread again: the language model gave no answer.",
+    "too_late": "The answer came as its plan expired: nothing of it will be applied.",
 }
 
 

@@ -613,3 +613,28 @@ def test_the_upgrade_fixes_each_plan_from_its_first_question_or_the_post(
     Store.open(path).close()
     # The first question's time, the post's own time, and none yet for a post without its dry run.
     assert plan_from(path) == ["1790000005.000100", keys[1].ts, None]
+
+
+def test_an_answer_no_dry_run_read_is_listed_however_old_the_post(store: Store) -> None:
+    # Issue #75: taken while the plan stood, its revision says it came too late.
+    later = Decimal("1800000000")  # long past the post's plan
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, question=confirm())
+    assert store.posts_waiting_for_dry_run(revisable_since=later) == []
+    first = store.button(YES)
+    assert first is not None
+    store.answer_question(OWNER, first, "U0SAM0001")
+    [waiting] = store.posts_waiting_for_dry_run(revisable_since=later)
+    assert (waiting.key, waiting.revision) == (POST, 2)
+    assert store.post_answers_read(POST) == 0
+    answered = store.post_answers_through(POST)
+    store.finish_dry_run(
+        OWNER, POST, DryRunOutcome.REPLIED, "1790000100.000109", revision=2, answers=answered,
+        question=confirm("c" * 22, "d" * 22),
+    )  # fmt: skip
+    assert store.post_answers_read(POST) == answered
+    assert store.posts_waiting_for_dry_run(revisable_since=later) == []  # read by revision 2
+    second = store.button("c" * 22)
+    assert second is not None
+    store.answer_question(OWNER, second, "U0SAM0001")
+    [waiting] = store.posts_waiting_for_dry_run(revisable_since=later)
+    assert waiting.revision == 3  # newer than what revision 2 read

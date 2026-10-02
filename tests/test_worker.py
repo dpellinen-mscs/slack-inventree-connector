@@ -2625,6 +2625,48 @@ def test_a_click_after_the_plan_expired_answers_nothing(
     assert notes(worker) == [(SAM, CLICK_FEEDBACK["answered"] if outcome == "answered" else expected)]
 
 
+def test_an_answer_taken_as_the_plan_expires_says_once_that_it_came_too_late(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    # Issue #75: the click is taken at the last instant, and its revision is judged after the plan expired.
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    expiry = 1790000000 + worker.settings.slack.plan_expiry_hours * 3600
+    clock.at(f"{expiry}.000100")  # the post is at .000100: a click still answers
+    clicked(store, click_on(reply, ts, 0, SAM), "1")
+    worker.drain()  # the click alone; the revision waits (behind another reply, or the model)
+    assert last_status(path) == ("done", "answered")
+    clock.at(f"{expiry + 60}.000000")
+    worker.step()
+    assert revisions(path) == [(2, "retracted", True)]
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    notice = slack.posted[-1]
+    assert notice["thread_ts"] == ROOT
+    assert "came as its plan expired: nothing of it will be applied" in reply_text(notice)
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert (record.result["retracted"], record.result["withheld"]) == ("too_late", "too_old")
+    posts = len(slack.posted)
+    clock.at(f"{expiry + 600}.000000")
+    worker.step()
+    assert len(slack.posted) == posts  # once
+    assert store.posts_waiting_for_dry_run(revisable_since=Decimal(expiry + 600)) == []
+
+
+def test_an_expired_post_without_a_new_answer_stays_quiet(store: Store, clock: Clock, path: Path) -> None:
+    worker = asked(store, clock)
+    expiry = 1790000000 + worker.settings.slack.plan_expiry_hours * 3600
+    clock.at(f"{expiry + 60}.000000")
+    worker.step()
+    assert revisions(path) == []
+    assert store.posts_waiting_for_dry_run(revisable_since=Decimal(expiry + 60)) == []
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    assert len(slack.posted) == 1  # the reply above, and nothing since
+
+
 def test_the_plan_of_a_reply_answered_without_its_root_expires_from_the_reply(
     store: Store, clock: Clock, path: Path
 ) -> None:

@@ -804,8 +804,12 @@ class Worker:
         answers: int | None = None,
     ) -> None:
         """Finish a post that gets no dry-run reply. A revision whose post had a reply standing posts a notice
-        that it no longer does, except when the post is too old: its reply has expired by then."""
+        that it no longer does, except when the post is too old: its reply has expired by then. A post too old
+        with an answer no dry run read (taken just before the plan expired) says once that it came too late, so
+        the thread never shows an answer that nothing came of."""
         reason = why or ("silent" if outcome is DryRunOutcome.SILENT else "failed")
+        if reason == "too_old" and answers is not None and answers > self.store.post_answers_read(post.key):
+            reason = "too_late"
         if reason == "too_old" or self._standing(post) is None:
             self._finish(post.key, outcome, extractor, result, post.revision, read, changes, answers)
             return

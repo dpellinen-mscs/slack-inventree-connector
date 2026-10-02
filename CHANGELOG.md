@@ -13,6 +13,8 @@ Nothing is released yet. The connector cannot write stock in this state.
 - A question and the revisions of its post now expire at the same time, fixed by the post's first dry run
   (migration 0015). Before, an answer given late to a thread whose root was older than its newest message was
   recorded but never acted on.
+- An answer taken just before its plan expired, whose revision ran after it, was shown as answered and then
+  nothing came of it. That revision now posts one notice that the answer came too late (issue #75).
 
 ### Added
 
