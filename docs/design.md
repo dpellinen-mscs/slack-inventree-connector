@@ -789,7 +789,7 @@ needs.
   documented rule: oldest first, and a single item that covers the quantity
   is preferred over a split. If the candidates differ in batch, status or
   supplier part, the choice is a review reason. Built as a pure step
-  (`core/resolve.py`, not yet in the dry run): "oldest" is the lowest
+  (`core/resolve.py`): "oldest" is the lowest
   stock item id, "allocated" is the list row's `allocated` quantity
   (sales order allocations included, measured on the pinned versions), and
   a row without it is an error, never "none allocated". A choice exists only
@@ -798,6 +798,18 @@ needs.
   pick of every serialized item is decided. Stock of one part that is
   partly serialized is for a human. An add or a count needs exactly one
   stock item of the part at its location.
+  In the dry run (built), the worker reads stock last: after the answers
+  are applied, so a part picked by button is the part whose stock is
+  read, and outside the reading that answers are kept for, so a change
+  in stock does not drop them. A line's stock is read once its part, the
+  place its operation acts at (the source for a transfer or a remove,
+  the destination for an add or a count) and its quantity are settled:
+  matched by a rule that can authorize a write or by an answer, and with
+  no quantity doubt on that line. The reply shows the stock item ids the
+  line would act on; the record keeps them per line (`stock`, only once
+  read, so older records digest as before). The pick's reasons name
+  their line. A failed or malformed stock read is an outage: the post
+  waits, as for the catalog. A rejected reading reads no stock.
 - **Movement type to API operation.** Every dry-run shows the operation.
 
   | Movement type | Operation |

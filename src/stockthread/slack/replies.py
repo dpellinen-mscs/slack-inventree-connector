@@ -13,8 +13,18 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from stockthread.core.model import CandidateMovement, Match, MatchStatus, MovementType, ReasonCode, ReviewReason
+from stockthread.core.model import (
+    CandidateMovement,
+    Match,
+    MatchStatus,
+    MovementType,
+    Operation,
+    ReasonCode,
+    ReviewReason,
+    operation_for,
+)
 from stockthread.core.questions import Ask, Choice, Question, choices
+from stockthread.core.resolve import SourcePick
 
 MAX_SECTION = 2900
 """Slack allows 3000 characters in a section block. Longer text is cut, with a marker."""
@@ -67,7 +77,7 @@ REASONS = {
     ReasonCode.FUZZY_MATCH: "A part or location was found by a loose match and needs a check.",
     ReasonCode.VEHICLE_NOT_MAPPED: "The poster has no vehicle mapped.",
     ReasonCode.STOCK_CHOICE: "Stock has to be picked from several stock items.",
-    ReasonCode.NO_TARGET_STOCK_ITEM: "There is no stock of this part at the source.",
+    ReasonCode.NO_TARGET_STOCK_ITEM: "No usable stock item of this part is at the place.",
     ReasonCode.EXTRACTORS_DISAGREE: "The two extractors read the post differently.",
     ReasonCode.LATE_INGEST: "The post was read late: the connector was down, disconnected or waiting.",
     ReasonCode.PRECONDITION_FAILED: "Stock changed since the plan was made.",
@@ -84,10 +94,15 @@ class MovementView:
     source: Match | None
     destination: Match | None
     reasons: Sequence[ReviewReason]
+    stock: Sequence[SourcePick | None] = ()
+    """The stock items each line acts on, as read from InvenTree (None: that line's stock was not read). Empty:
+    no line's stock was read."""
 
     def __post_init__(self) -> None:
         if len(self.items) != len(self.movement.line_items):
             raise ValueError("one match per line item")
+        if self.stock and len(self.stock) != len(self.items):
+            raise ValueError("one stock pick per line item, or none")
 
 
 def escape(text: str) -> str:
@@ -114,12 +129,29 @@ def _named(text: str | None, match: Match | None, names: Mapping[int, str], what
     return f"{written}: no {what} found"
 
 
-def _line(movement: CandidateMovement, index: int, match: Match, parts: Mapping[int, str]) -> str:
+def _line(view: MovementView, index: int, parts: Mapping[int, str]) -> str:
+    movement = view.movement
     item = movement.line_items[index]
     quantity = "?" if item.quantity is None else _number(item.quantity)
     unit = f" {escape(item.unit)}" if item.unit else ""
     pack = f" of {_number(item.pack_size)}" if item.pack_size is not None else ""
-    return f"• {quantity}{unit}{pack} \N{MULTIPLICATION SIGN} {_named(item.item_text, match, parts, 'part')}"
+    named = _named(item.item_text, view.items[index], parts, "part")
+    pick = view.stock[index] if view.stock else None
+    return f"• {quantity}{unit}{pack} \N{MULTIPLICATION SIGN} {named}{_stock(movement, pick)}"
+
+
+def _stock(movement: CandidateMovement, pick: SourcePick | None) -> str:
+    """The stock items a line acts on, by InvenTree id: what a write would send, so a person can check it there."""
+    if pick is None or not pick.takes:
+        return ""
+    operation = operation_for(movement.movement_type)
+    if operation in (Operation.ADD, Operation.COUNT):
+        verb = "into" if operation is Operation.ADD else "counts"
+        return f" ({verb} stock item #{pick.takes[0].item})"
+    if len(pick.takes) == 1:
+        return f" (from stock item #{pick.takes[0].item})"
+    split = ", ".join(f"#{take.item}: {_number(take.quantity)}" for take in pick.takes)
+    return f" (from stock items {split})"
 
 
 _NEEDS_SOURCE = frozenset(MovementType) - {MovementType.RECEIVE, MovementType.COUNT}
@@ -197,7 +229,7 @@ def dry_run_reply(
         heading = TYPE_LABELS[movement.movement_type]
         if len(views) > 1:
             heading = f"{number}. {heading}"
-        lines = [_line(movement, i, match, parts) for i, match in enumerate(view.items)]
+        lines = [_line(view, i, parts) for i in range(len(view.items))]
         places = (
             f"From {_named(movement.source_text, view.source, locations, 'location')}"
             f" to {_named(movement.destination_text, view.destination, locations, 'location')}"

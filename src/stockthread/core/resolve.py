@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from stockthread.core.model import ReasonCode, ReasonSource, ReviewReason
+from stockthread.core.model import Operation, ReasonCode, ReasonSource, ReviewReason
 
 STATUS_OK = 10
 """InvenTree's stock status code for OK (`StockStatus.OK`)."""
@@ -125,6 +125,17 @@ def target_item(items: Sequence[StockItem]) -> tuple[int | None, tuple[ReviewRea
     if items[0].serial:  # InvenTree answers success and changes nothing (design section 5, "Serialized stock")
         return None, (_reason(ReasonCode.STOCK_CHOICE, DETAIL_SERIALIZED_TARGET),)
     return items[0].pk, ()
+
+
+def resolve_line(
+    operation: Operation, quantity: Decimal, items: Sequence[StockItem], serials: Sequence[str] = ()
+) -> SourcePick:
+    """What one line acts on: for a transfer or a remove the items it takes from (`pick_source`), for an add or a
+    count the one item it changes, by `quantity`."""
+    if operation in (Operation.TRANSFER, Operation.REMOVE):
+        return pick_source(quantity, items, serials)
+    pk, reasons = target_item(items)
+    return SourcePick(() if pk is None else (Take(pk, quantity),), reasons)
 
 
 def _pick_serialized(quantity: Decimal, pool: Sequence[StockItem], serials: Sequence[str]) -> SourcePick:

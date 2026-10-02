@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from stockthread.core.model import ReasonCode
+from stockthread.core.model import Operation, ReasonCode
 from stockthread.core.resolve import (
     DETAIL_BATCH,
     DETAIL_MIXED,
@@ -23,6 +23,7 @@ from stockthread.core.resolve import (
     StockItem,
     Take,
     pick_source,
+    resolve_line,
     stock_items,
     target_item,
 )
@@ -193,3 +194,22 @@ def test_a_row_without_its_allocation_raises() -> None:
     del row["allocated"]
     with pytest.raises(ValueError, match="allocated"):
         stock_items([row])
+
+
+@pytest.mark.parametrize("operation", [Operation.TRANSFER, Operation.REMOVE])
+def test_a_transfer_or_a_remove_picks_its_source(operation: Operation) -> None:
+    items = [item(1, "1"), item(2, "5")]
+    assert resolve_line(operation, Decimal(2), items) == pick_source(Decimal(2), items)
+    serialized = [item(3, "1", serial="A1"), item(4, "1", serial="A2")]
+    assert resolve_line(operation, Decimal(1), serialized, ["A2"]).takes == (Take(4, Decimal(1)),)
+
+
+@pytest.mark.parametrize("operation", [Operation.ADD, Operation.COUNT])
+def test_an_add_or_a_count_acts_on_its_one_item_by_the_quantity(operation: Operation) -> None:
+    picked = resolve_line(operation, Decimal(4), [item(7, "1", allocated="1")])
+    assert (picked.takes, picked.reasons, picked.decided) == ((Take(7, Decimal(4)),), (), True)
+    assert resolve_line(operation, Decimal(0), [item(7)]).takes == (Take(7, Decimal(0)),)
+    several = resolve_line(operation, Decimal(4), [item(7), item(8)])
+    assert (several.takes, [r.detail for r in several.reasons]) == ((), [DETAIL_SEVERAL_TARGETS])
+    none = resolve_line(operation, Decimal(4), [])
+    assert (none.takes, [r.detail for r in none.reasons]) == ((), [DETAIL_NO_TARGET])
