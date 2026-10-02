@@ -798,7 +798,7 @@ needs.
   documented rule: oldest first, and a single item that covers the quantity
   is preferred over a split. If the candidates differ in batch, status or
   supplier part, the choice is a review reason. Built as a pure step
-  (`core/resolve.py`, not yet in the dry run): "oldest" is the lowest
+  (`core/resolve.py`): "oldest" is the lowest
   stock item id, "allocated" is the list row's `allocated` quantity
   (sales order allocations included, measured on the pinned versions), and
   a row without it is an error, never "none allocated". A choice exists only
@@ -806,7 +806,34 @@ needs.
   nothing. Serialized stock moves by serial number; without serials only a
   pick of every serialized item is decided. Stock of one part that is
   partly serialized is for a human. An add or a count needs exactly one
-  stock item of the part at its location.
+  stock item of the part at its location. The lines of one post, across
+  all its movements and in the post's order, share the stock that was
+  read: a transfer or a remove picks from what the lines before it left,
+  so "took 2 and 3" from an item holding 3 is a review reason ("other
+  lines of the post take the same stock"), never two picks from one
+  item. That reason is raised only for a shortage the other lines cause;
+  a line that still has enough left gets the reasons of what is left
+  (a choice that matters among what is left is a choice, not a
+  shortage). An add does not add to what later lines may take (the stock
+  read is the stock before the post), but an add into an item that the
+  lines before it take in full is a review reason ("an earlier line of
+  the post takes all of the stock item an add acts on"): InvenTree moves
+  an item that is transferred whole, and may delete one removed to zero.
+  A count sets an item as it is, so a counted item that another line also
+  acts on is a review reason on each of those lines: the result would
+  depend on the order.
+  In the dry run (built), the worker reads stock last: after the answers
+  are applied, so a part picked by button is the part whose stock is
+  read, and outside the reading that answers are kept for, so a change
+  in stock does not drop them. A line's stock is read once its part, the
+  place its operation acts at (the source for a transfer or a remove,
+  the destination for an add or a count) and its quantity are settled:
+  matched by a rule that can authorize a write or by an answer, and with
+  no quantity doubt on that line. The reply shows the stock item ids the
+  line would act on; the record keeps them per line (`stock`, only once
+  read, so older records digest as before). The pick's reasons name
+  their line. A failed or malformed stock read is an outage: the post
+  waits, as for the catalog. A rejected reading reads no stock.
 - **Movement type to API operation.** Every dry-run shows the operation.
 
   | Movement type | Operation |

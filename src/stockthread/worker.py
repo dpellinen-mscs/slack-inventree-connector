@@ -70,13 +70,16 @@ from stockthread.core.model import (
     MatchStatus,
     MessageInput,
     MovementType,
+    Operation,
     PostFlag,
     PostKey,
     ReasonCode,
     ReasonSource,
     ReviewReason,
+    operation_for,
 )
 from stockthread.core.questions import choice_json, choices, pick_question, question_json, reason_line
+from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.validate import photo_not_read, validate
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.catchup import is_catch_up
@@ -258,6 +261,20 @@ class _Sent:
     """The question the reply asks, stored with its buttons once the reply is posted."""
 
 
+StockReader = Callable[[Sequence[tuple[int, int]]], Mapping[tuple[int, int], Sequence[StockItem]]]
+"""(part, location) pairs -> the stock items of that part in that location itself, in stock (`stock_items`)."""
+
+_QUANTITY_UNSETTLED = frozenset(
+    {
+        ReasonCode.QUANTITY_MISSING,
+        ReasonCode.QUANTITY_VAGUE,
+        ReasonCode.PACK_UNIT_AMBIGUOUS,
+        ReasonCode.QUANTITY_FROM_PHOTO,
+    }
+)
+"""A line with one of these has no quantity to pick stock for yet: its question comes first (design section 4)."""
+
+
 @dataclass
 class Worker:
     settings: Settings
@@ -269,6 +286,9 @@ class Worker:
     """The current catalog snapshot. A failure here is an outage: it propagates, and the post waits."""
     clock: Callable[[], datetime]
     """Must return an aware datetime."""
+    stock: StockReader | None = None
+    """Reads the stock items of (part, location) pairs, for source selection. None: no line's stock is read. A
+    failure is an outage, as for the catalog: it propagates, and the post waits."""
     stopping: Callable[[], bool] = lambda: False
     """Checked between posts, so a stop request does not wait for a whole backlog."""
     llm: PostExtractor | None = None
@@ -666,6 +686,14 @@ class Worker:
             reading = _digest(record(views, late))
             effects = self._replay(key, history, reading, answers, views)
             views = self._answered(views, effects, extraction, messages, late)
+        except Exception as error:
+            self._broken(post, now, error, extraction.extractor, read=seen, changes=changes, answers=answers)
+            return True
+        # Stock is read last, for the parts and places as answered, and is not part of the reading: answers stay
+        # with a post whose stock changed. Outside the `try`: a failed read is an outage, and the post waits.
+        stock = self._read_stock(views) if effects.rejected is None else {}
+        try:
+            views = _with_stock(views, stock)
             decided = {
                 **record(views, late),
                 "reading": reading,  # before the answers: what a later reading is compared with
@@ -962,6 +990,15 @@ class Worker:
             for movement in extraction.movements
         ]
 
+    def _read_stock(self, views: Sequence[MovementView]) -> Mapping[tuple[int, int], Sequence[StockItem]]:
+        """The stock items of every (part, location) pair a settled line acts on (`_stock_lines`)."""
+        pairs = sorted({(part, place) for view in views for _, _, part, place, _ in _stock_lines(view)})
+        if self.stock is None or not pairs:
+            return {}
+        found = self.stock(pairs)
+        self.beat()  # a stock read can take a while
+        return found
+
     def _reasons(
         self, movement: CandidateMovement, extraction: Extraction, messages: Sequence[MessageInput], late: bool
     ) -> tuple[ReviewReason, ...]:
@@ -1138,6 +1175,65 @@ def _location(text: str | None, catalog: Catalog, poster: str) -> Match | None:
     return match_location(text, catalog, poster) if text else None
 
 
+def _stock_lines(view: MovementView) -> list[tuple[int, Operation, int, int, Decimal]]:
+    """The lines whose stock can be read: (line, operation, part, location, quantity). A line qualifies once its
+    part, the place its operation acts at (the source for a transfer or a remove, the destination for an add or a
+    count) and its quantity are settled; anything less would pick stock for a guess."""
+    movement = view.movement
+    operation = operation_for(movement.movement_type)
+    if operation is None:
+        return []
+    place = view.source if operation in (Operation.TRANSFER, Operation.REMOVE) else view.destination
+    if place is None or not place.can_authorize_a_write or place.record is None:
+        return []
+    unsettled = {reason_line(reason, movement) for reason in view.reasons if reason.code in _QUANTITY_UNSETTLED}
+    if None in unsettled:
+        return []  # a quantity doubt that names no line: none is settled
+    found = []
+    for line, (item, part) in enumerate(zip(movement.line_items, view.items, strict=True)):
+        if line in unsettled or item.quantity is None or not part.can_authorize_a_write or part.record is None:
+            continue
+        if item.quantity < 0 or (item.quantity == 0 and operation is not Operation.COUNT):
+            continue  # the validator raises its own reason
+        found.append((line, operation, part.record, place.record, item.quantity))
+    return found
+
+
+def _with_stock(
+    views: Sequence[MovementView], found: Mapping[tuple[int, int], Sequence[StockItem]]
+) -> list[MovementView]:
+    """The views with the stock items each settled line acts on, and the reasons the picks raise, each naming its
+    line (`core/resolve.py`). The lines of every movement of the post share the stock, in the post's order. Lines
+    whose stock was not read are left as they are."""
+    lines = [
+        (index, entry)
+        for index, view in enumerate(views)
+        for entry in _stock_lines(view)
+        if (entry[2], entry[3]) in found
+    ]
+    resolved = resolve_lines(
+        [
+            LineStock(operation, quantity, found[(part, place)], views[index].movement.line_items[line].serials)
+            for index, (line, operation, part, place, quantity) in lines
+        ]
+    )
+    picks: dict[int, list[SourcePick | None]] = {}
+    added: dict[int, list[ReviewReason]] = {}
+    for (index, (line, *_)), pick in zip(lines, resolved, strict=True):
+        picks.setdefault(index, [None] * len(views[index].items))[line] = pick
+        added.setdefault(index, []).extend(
+            replace(reason, detail=f"line {line + 1}: {reason.detail}") for reason in pick.reasons
+        )
+    return [
+        replace(view, reasons=(*view.reasons, *added[index]), stock=tuple(picks[index])) if index in picks else view
+        for index, view in enumerate(views)
+    ]
+
+
+def _picked(pick: SourcePick) -> list[dict[str, Any]]:
+    return [{"item": take.item, "quantity": _number(take.quantity)} for take in pick.takes]
+
+
 def _match(match: Match | None) -> dict[str, Any] | None:
     if match is None:
         return None
@@ -1191,8 +1287,12 @@ def _record(
                         "pack_size": _number(item.pack_size),
                         "serials": list(item.serials),
                         "part": _match(part),
+                        # Only once stock was read: a record without it digests as records did before.
+                        **({"stock": None if pick is None else _picked(pick)} if view.stock else {}),
                     }
-                    for item, part in zip(view.movement.line_items, view.items, strict=True)
+                    for item, part, pick in zip(
+                        view.movement.line_items, view.items, view.stock or [None] * len(view.items), strict=True
+                    )
                 ],
                 "reasons": [
                     {"code": reason.code.value, "source": reason.source.value, "detail": reason.detail}

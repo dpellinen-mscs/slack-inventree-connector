@@ -18,6 +18,7 @@ from stockthread.core.model import (
     ReasonSource,
     ReviewReason,
 )
+from stockthread.core.resolve import SourcePick, Take
 from stockthread.slack.ingest import DropReason
 from stockthread.slack.replies import (
     APPROVERS_ONLY,
@@ -72,6 +73,24 @@ def test_a_clean_movement() -> None:
     assert "2 \N{MULTIPLICATION SIGN} *Norvane Disc 40 Access Point* (“Disc 40”)" in shown
     assert "From *Warehouse/Main Stock* (“main stock”) to *Vehicles/Truck 1* (“my truck”)" in shown
     assert "Nothing needs a human" in shown
+
+
+def test_the_stock_a_line_acts_on_is_shown_by_its_inventree_id() -> None:
+    one = SourcePick((Take(57, Decimal(2)),))
+    split = SourcePick((Take(41, Decimal(1)), Take(57, Decimal("1.5"))))
+    assert "*Norvane Disc 40 Access Point* (“Disc 40”) (from stock item #57)" in text_of(
+        dry_run_reply([view(stock=(one,))], PARTS, LOCATIONS)
+    )
+    assert "(from stock items #41: 1, #57: 1.5)" in text_of(dry_run_reply([view(stock=(split,))], PARTS, LOCATIONS))
+    received = CandidateMovement(MovementType.RECEIVE, (LineItem("Disc 40", Decimal(2)),), None, "main stock")
+    assert "(into stock item #57)" in text_of(dry_run_reply([view(movement=received, stock=(one,))], PARTS, LOCATIONS))
+    for unread in ((), (None,), (SourcePick((), (ReviewReason(ReasonCode.STOCK_CHOICE, ReasonSource.RULE),)),)):
+        assert "stock item" not in text_of(dry_run_reply([view(stock=unread)], PARTS, LOCATIONS))
+
+
+def test_a_view_has_one_stock_pick_per_line_or_none() -> None:
+    with pytest.raises(ValueError, match="one stock pick per line"):
+        view(stock=(None, None))
 
 
 def test_every_reason_is_listed_once_in_words() -> None:

@@ -15,10 +15,10 @@ import logging
 import ssl
 import threading
 import time
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 import certifi
 from slack_sdk import WebClient
@@ -28,6 +28,7 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import Settings
 from stockthread.core.matching import Catalog
+from stockthread.core.resolve import StockItem, stock_items
 from stockthread.inventree import InvenTreeError, InvenTreeReader, check_version
 from stockthread.llm.extract import LLMExtractor, WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
@@ -37,7 +38,7 @@ from stockthread.slack.http_server import HttpServer, ServeError
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
 from stockthread.store.db import posters_seen
-from stockthread.worker import PosterBusy, PostStillRunning, Worker
+from stockthread.worker import PosterBusy, PostStillRunning, StockReader, Worker
 
 log = logging.getLogger(__name__)
 
@@ -196,6 +197,25 @@ def inventree_catalog(settings: Settings) -> Callable[[], Catalog]:
     return with_vehicles(lambda: read_within(read, limit), settings)
 
 
+def inventree_stock(settings: Settings) -> StockReader:
+    """Read the stock items of each (part, location) pair, within the same time limit as a catalog read. A row
+    that is not a valid stock item is an outage like a failed read: no pick is made from a partial list."""
+    limit = (lock_stale_after(settings) - timedelta(seconds=CATALOG_MARGIN_SECONDS)).total_seconds()
+
+    def read(pairs: Sequence[tuple[int, int]]) -> dict[tuple[int, int], list[StockItem]]:
+        async def rows() -> dict[tuple[int, int], list[dict[str, Any]]]:
+            async with InvenTreeReader(settings.inventree, settings.secrets.inventree_token) as reader:
+                return {pair: await reader.stock_items(*pair) for pair in pairs}
+
+        found = read_within(rows, limit, "stock")
+        try:
+            return {pair: stock_items(listed) for pair, listed in found.items()}
+        except ValueError as error:
+            raise InvenTreeError(f"a stock item from InvenTree is not valid ({error})") from None
+
+    return read
+
+
 def with_vehicles(load: Callable[[], Catalog], settings: Settings) -> Callable[[], Catalog]:
     """Every snapshot gets the vehicles from the `[vehicles]` settings. A person whose vehicle is not a stock
     location in the snapshot is named in the log, once until the list changes."""
@@ -217,13 +237,16 @@ def with_vehicles(load: Callable[[], Catalog], settings: Settings) -> Callable[[
     return read
 
 
-def read_within(read: Callable[[], Coroutine[Any, Any, Catalog]], limit: float) -> Catalog:
-    async def limited() -> Catalog:
+_T = TypeVar("_T")
+
+
+def read_within(read: Callable[[], Coroutine[Any, Any, _T]], limit: float, what: str = "catalog") -> _T:
+    async def limited() -> _T:
         try:
             return await asyncio.wait_for(read(), limit)
         except TimeoutError:
             raise InvenTreeError(
-                f"the catalog read took longer than {limit:.0f} s; raise inventree.timeout_seconds"
+                f"the {what} read took longer than {limit:.0f} s; raise inventree.timeout_seconds"
             ) from None
 
     return asyncio.run(limited())
@@ -314,6 +337,7 @@ def run(
     *,
     slack_client: WebClient | None = None,
     catalog: Callable[[], Catalog] | None = None,
+    stock: StockReader | None = None,
     check: Callable[[Settings], str] = check_inventree,
     connect: Callable[[Any, Settings], Connection] = serve,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -399,6 +423,7 @@ def run(
             log.error("cannot start: %s reaching Slack", type(error).__name__)
             return 2
         worker.slack, worker.catalog = DeadlinePoster(client), cache
+        worker.stock = stock or inventree_stock(settings)
         provider = llm_provider(settings)
         alive: Callable[[], bool] = getattr(connection, "alive", lambda: True)
         if provider is None or settings.llm is None:

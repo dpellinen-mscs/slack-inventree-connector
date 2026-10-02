@@ -7,6 +7,7 @@ import logging
 import sqlite3
 import time
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -16,22 +17,31 @@ from typing import Any
 import pytest
 from slack_sdk.errors import SlackApiError
 
+from stockthread import worker as worker_module
 from stockthread.config import Settings, parse_settings
-from stockthread.core import extract_rules
+from stockthread.core import extract_rules, resolve
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.core.model import (
     CandidateMovement,
     Extraction,
     LineItem,
+    Match,
+    MatchRule,
+    MatchStatus,
     MessageInput,
     MovementType,
+    Operation,
     PostKey,
     ReasonCode,
+    ReasonSource,
+    ReviewReason,
 )
+from stockthread.core.resolve import STATUS_OK, StockItem
+from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.ingest import Drop, Revised
 from stockthread.slack.listener import Listener
-from stockthread.slack.replies import APPROVERS_ONLY, CLICK_FEEDBACK, NO_APPROVERS
+from stockthread.slack.replies import APPROVERS_ONLY, CLICK_FEEDBACK, NO_APPROVERS, MovementView
 from stockthread.store import DryRunOutcome, LockLost, NewQuestion, StateConflict, Store
 from stockthread.store import db as store_db
 from stockthread.worker import (
@@ -49,6 +59,9 @@ from stockthread.worker import (
     PosterBusy,
     PostStillRunning,
     Worker,
+    _digest,
+    _stock_lines,
+    _with_stock,
 )
 
 OWNER = "instance-a"
@@ -3484,3 +3497,293 @@ def test_yes_to_one_line_above_the_limit_leaves_the_other_line_to_ask(store: Sto
     assert ("quantity_above_limit", "line 2") in reasons
     [_, following] = store.questions(KEY)
     assert (following.question["reason"], following.question["line"]) == ("quantity_above_limit", 1)
+
+
+# Source selection in the dry run (design section 5, "Stock items, not parts").
+
+
+class FakeStock:
+    """Stock items by (part, location); every read is recorded. An exception in `outage` is raised once."""
+
+    def __init__(self, items: dict[tuple[int, int], list[StockItem]] | None = None) -> None:
+        self.items = items or {}
+        self.reads: list[list[tuple[int, int]]] = []
+        self.outage: Exception | None = None
+
+    def __call__(self, pairs: Sequence[tuple[int, int]]) -> dict[tuple[int, int], list[StockItem]]:
+        self.reads.append(list(pairs))
+        if self.outage is not None:
+            error, self.outage = self.outage, None
+            raise error
+        return {pair: self.items.get(pair, []) for pair in pairs}
+
+
+def ok(pk: int, quantity: int, batch: str | None = None) -> StockItem:
+    return StockItem(pk, Decimal(quantity), STATUS_OK, Decimal(0), batch=batch)
+
+
+def stocked(store: Store, clock: Clock, stock: FakeStock, text: str = TAKE, catalog: Catalog = CATALOG) -> Worker:
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: catalog, clock, stock=stock)
+    enqueue(store, message(ROOT, text))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    return worker
+
+
+def first_movement(store: Store) -> dict[str, Any]:
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    movement: dict[str, Any] = record.result["movements"][0]
+    return movement
+
+
+def test_a_clear_transfer_shows_and_records_the_stock_item_it_takes_from(store: Store, clock: Clock) -> None:
+    stock = FakeStock({(1, 10): [ok(41, 1), ok(57, 5)]})
+    worker = stocked(store, clock, stock)
+    assert stock.reads == [[(1, 10)]]  # the part at the source, once
+    reply, _ = posted(worker)
+    assert "(from stock item #57)" in reply_text(reply)  # one item that covers 2, before a split
+    assert "this could apply" in reply_text(reply)
+    movement = first_movement(store)
+    assert movement["items"][0]["stock"] == [{"item": 57, "quantity": "2"}]
+    assert movement["reasons"] == []
+    assert store.questions(KEY) == []
+
+
+def test_a_split_is_shown_item_by_item(store: Store, clock: Clock) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(41, 1), ok(57, 1), ok(60, 1)]}))
+    reply, _ = posted(worker)
+    assert "(from stock items #41: 1, #57: 1)" in reply_text(reply)
+    assert first_movement(store)["items"][0]["stock"] == [{"item": 41, "quantity": "1"}, {"item": 57, "quantity": "1"}]
+
+
+@pytest.mark.parametrize(
+    ("items", "code", "detail"),
+    [
+        ([], "no_target_stock_item", "line 1: no stock item at the source"),
+        ([ok(41, 1)], "quantity_above_stock", "line 1: fewer at the source than the quantity"),
+        ([ok(41, 5, "B1"), ok(57, 5, "B2")], "stock_choice", "line 1: the items differ in batch"),
+    ],
+)
+def test_stock_that_does_not_settle_the_pick_is_a_reason_and_asks_the_stock_question(
+    store: Store, clock: Clock, items: list[StockItem], code: str, detail: str
+) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): items}))
+    reply, _ = posted(worker)
+    assert "this could apply" not in reply_text(reply)
+    movement = first_movement(store)
+    assert movement["reasons"] == [{"code": code, "source": "rule", "detail": detail}]
+    assert [code, detail] in movement["gate"]
+    [item] = store.questions(KEY)
+    assert (item.question["ask"], item.question["reason"], item.question["line"]) == ("confirm", code, 0)
+
+
+@pytest.mark.parametrize(("held", "could"), [(3, False), (5, True)])
+def test_two_lines_of_one_part_share_its_stock(store: Store, clock: Clock, held: int, could: bool) -> None:
+    text = "took 2 Disc 40 and 3 Disc 40 from main stock to truck 1"
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(57, held)]}), text=text)
+    reply, _ = posted(worker)
+    assert ("this could apply" in reply_text(reply)) is could
+    movement = first_movement(store)
+    assert movement["items"][0]["stock"] == [{"item": 57, "quantity": "2"}]
+    if could:
+        assert movement["items"][1]["stock"] == [{"item": 57, "quantity": "3"}]
+        assert movement["reasons"] == []
+    else:  # 5 promised from 3
+        assert movement["items"][1]["stock"] == []
+        shared = ["quantity_above_stock", "line 2: other lines of the post take the same stock"]
+        assert movement["reasons"] == [{"code": shared[0], "source": "rule", "detail": shared[1]}]
+        assert shared in movement["gate"]
+
+
+@pytest.mark.parametrize(
+    ("text", "shown"),
+    [
+        ("received 4 Disc 40 into main stock", "(into stock item #70)"),
+        ("count: 4 Disc 40 at main stock", "(counts stock item #70)"),
+    ],
+)
+def test_a_receive_or_a_count_acts_on_the_one_stock_item_at_its_place(
+    store: Store, clock: Clock, text: str, shown: str
+) -> None:
+    stock = FakeStock({(1, 10): [ok(70, 3)]})
+    worker = stocked(store, clock, stock, text=text)
+    assert stock.reads == [[(1, 10)]]
+    reply, _ = posted(worker)
+    assert shown in reply_text(reply)
+    assert first_movement(store)["items"][0]["stock"] == [{"item": 70, "quantity": "4"}]
+
+
+def test_a_receive_with_two_stock_items_at_its_place_asks(store: Store, clock: Clock) -> None:
+    stocked(store, clock, FakeStock({(1, 10): [ok(70, 3), ok(71, 3)]}), text="received 4 Disc 40 into main stock")
+    movement = first_movement(store)
+    assert movement["items"][0]["stock"] == []
+    assert movement["reasons"] == [
+        {"code": "stock_choice", "source": "rule", "detail": "line 1: several stock items of the part at the location"}
+    ]
+
+
+def test_a_stock_outage_makes_the_post_wait_like_a_catalog_outage(store: Store, clock: Clock, path: Path) -> None:
+    stock = FakeStock({(1, 10): [ok(57, 5)]})
+    stock.outage = InvenTreeError("GET /api/stock/ returned HTTP 503")
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock)
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at("1790000030.000000")
+    with pytest.raises(InvenTreeError):
+        worker.step()
+    assert replies(path) == [(ROOT, None, False)]  # not finished: it waits, with no record of a failure
+    worker.step()
+    reply, _ = posted(worker)
+    assert "(from stock item #57)" in reply_text(reply)
+
+
+def test_a_line_whose_part_place_or_quantity_is_not_settled_reads_no_stock(store: Store, clock: Clock) -> None:
+    stock = FakeStock()
+    stocked(store, clock, stock, catalog=TWO_DISCS)  # "Disc 40" fits two parts
+    assert stock.reads == []
+    assert "stock" not in first_movement(store)["items"][0]
+
+
+def test_stock_is_read_for_the_part_picked_by_button_and_does_not_change_the_reading(
+    store: Store, clock: Clock
+) -> None:
+    stock = FakeStock({(2, 10): [ok(57, 5)]})
+    worker = stocked(store, clock, stock, catalog=TWO_DISCS)
+    reply, ts = posted(worker)
+    first = store.dry_run(KEY)
+    assert first is not None
+    assert first.result is not None
+    clicked(store, click_on(reply, ts, 1, SAM), "1")  # Disc 40 Lite, part 2
+    worker.step()
+    assert stock.reads == [[(2, 10)]]
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["movements"][0]["items"][0]["stock"] == [{"item": 57, "quantity": "2"}]
+    assert record.result["reading"] == _digest(first.result)  # stock is read after the answers, not digested
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    assert "(from stock item #57)" in reply_text(slack.posted[1])
+
+
+def test_the_reading_is_the_same_with_or_without_a_stock_reader(store: Store, clock: Clock, tmp_path: Path) -> None:
+    stocked(store, clock, FakeStock({(1, 10): [ok(57, 5)]}))
+    with_stock = first_movement(store)
+    other = Store.open(tmp_path / "other.db")
+    other.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
+    try:
+        stocked(other, Clock("1790000000.000000"), None)  # type: ignore[arg-type]
+        without = first_movement(other)
+    finally:
+        other.close()
+    assert "stock" not in without["items"][0]  # as records were before source selection
+    assert {k: v for k, v in with_stock["items"][0].items() if k != "stock"} == without["items"][0]
+
+
+EXACT_PART, EXACT_PLACE = (
+    Match(MatchStatus.MATCHED, MatchRule.EXACT, 1),
+    Match(MatchStatus.MATCHED, MatchRule.EXACT, 10),
+)
+
+
+def stock_view(
+    kind: MovementType = MovementType.TRANSFER,
+    quantities: Sequence[Decimal | None] = (Decimal(2), Decimal(3)),
+    reasons: Sequence[ReviewReason] = (),
+    place: Match = EXACT_PLACE,
+) -> MovementView:
+    lines = tuple(LineItem(f"item {n}", quantity) for n, quantity in enumerate(quantities))
+    movement = CandidateMovement(kind, lines, "main stock", "main stock")
+    return MovementView(movement, [EXACT_PART] * len(lines), place, place, tuple(reasons))
+
+
+def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
+    return ReviewReason(code, ReasonSource.RULE, detail)
+
+
+def test_only_lines_whose_quantity_is_settled_read_stock() -> None:
+    assert [line for line, *_ in _stock_lines(stock_view())] == [0, 1]
+    pack = _rule(ReasonCode.PACK_UNIT_AMBIGUOUS, "line 1")
+    assert [line for line, *_ in _stock_lines(stock_view(reasons=[pack]))] == [1]
+    assert _stock_lines(stock_view(reasons=[_rule(ReasonCode.QUANTITY_VAGUE, "vague quantity word in the text")])) == []
+    assert [line for line, *_ in _stock_lines(stock_view(quantities=(None, Decimal(1))))] == [1]
+    assert [line for line, *_ in _stock_lines(stock_view(quantities=(Decimal(0), Decimal(1))))] == [1]
+    # Not quantity doubts: the stock is still read, and the reasons stay to be asked.
+    assert len(_stock_lines(stock_view(reasons=[_rule(ReasonCode.LATE_INGEST)]))) == 2
+
+
+def test_the_movements_of_a_post_share_the_stock_in_the_post_s_order() -> None:
+    views = [stock_view(quantities=(Decimal(2),)), stock_view(MovementType.CONSUME, quantities=(Decimal(2),))]
+    [first, second] = _with_stock(views, {(1, 10): [ok(57, 3)]})
+    assert first.stock is not None
+    assert second.stock is not None
+    [first_pick], [second_pick] = first.stock, second.stock
+    assert first_pick is not None
+    assert first_pick.decided
+    assert second_pick is not None
+    assert second_pick.takes == ()
+    assert [reason.detail for reason in second.reasons] == ["line 1: other lines of the post take the same stock"]
+    assert first.reasons == ()
+    unread = stock_view(MovementType.CONSUME, quantities=(None,))
+    assert _with_stock([unread, views[0]], {(1, 10): [ok(57, 3)]})[0] is unread
+
+
+def test_a_count_of_zero_reads_stock_and_the_place_depends_on_the_operation() -> None:
+    assert [line for line, *_ in _stock_lines(stock_view(MovementType.COUNT, (Decimal(0),)))] == [0]
+    fuzzy = Match(MatchStatus.MATCHED, MatchRule.FUZZY, 10)
+    assert _stock_lines(stock_view(place=fuzzy)) == []
+    assert _stock_lines(stock_view(MovementType.UNCLEAR)) == []
+    source_only = replace(stock_view(MovementType.CONSUME), destination=None)
+    assert [(op, place) for _, op, _, place, _ in _stock_lines(source_only)] == [(Operation.REMOVE, 10)] * 2
+    receive = replace(stock_view(MovementType.RECEIVE), source=None)
+    assert [(op, place) for _, op, _, place, _ in _stock_lines(receive)] == [(Operation.ADD, 10)] * 2
+
+
+def test_a_rejected_reading_reads_no_stock(store: Store, clock: Clock) -> None:
+    stock = FakeStock({(1, 10): [ok(57, 5)]})
+    llm = FakeLLM(unclear(MovementType.TRANSFER))
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, llm=llm, stock=stock)
+    enqueue(store, message(ROOT, SHUFFLED))
+    read_and_answered(worker, clock)
+    reply, ts = posted(worker)
+    [item] = store.questions(KEY)
+    assert item.question["ask"] == "confirm"
+    reads = len(stock.reads)
+    clicked(store, click_on({**reply, "channel": CHANNEL}, ts, 1, SAM), "1")  # no
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["rejected"] == item.id
+    assert len(stock.reads) == reads
+
+
+def test_a_pick_that_breaks_fails_its_post_alone(
+    store: Store, clock: Clock, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+    real = resolve.resolve_lines
+
+    def resolve_lines(*args: Any) -> Any:
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("a bug in the pick")
+        return real(*args)
+
+    monkeypatch.setattr(worker_module, "resolve_lines", resolve_lines)
+    stock = FakeStock({(1, 10): [ok(57, 5)], (2, 10): [ok(60, 5)]})
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock)
+    enqueue(store, message("1790000000.000100", TAKE))
+    enqueue(store, message("1790000000.000200", "took 1 ONT 100 from main stock to truck 1", user=LUIS))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()  # does not raise
+    assert [(ts, done) for ts, _, done in replies(path)] == [("1790000000.000100", True), ("1790000000.000200", True)]
+    assert "dry_run_failed" in audit(path)
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    [reply] = slack.posted
+    assert "(from stock item #60)" in reply_text(reply)

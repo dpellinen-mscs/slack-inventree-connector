@@ -14,7 +14,7 @@ import sqlite3
 import ssl
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -34,6 +34,7 @@ from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import InvenTreeSettings, Settings, parse_settings
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.core.model import PostKey
+from stockthread.core.resolve import StockItem
 from stockthread.inventree import InvenTreeError, InvenTreeReader
 from stockthread.llm.extract import WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
@@ -153,6 +154,11 @@ def stop() -> Iterator[threading.Event]:
     timer.cancel()
 
 
+def one_item(pairs: Sequence[tuple[int, int]]) -> dict[tuple[int, int], list[StockItem]]:
+    """Stock for every pair: one OK item of 50 (its id is the part's times 100)."""
+    return {(part, place): [StockItem(part * 100, Decimal(50), 10, Decimal(0))] for part, place in pairs}
+
+
 def test_a_queued_post_gets_its_dry_run_then_the_lock_is_released(tmp_path: Path, stop: threading.Event) -> None:
     database = tmp_path / "stockthread.db"
     queued_message(database, "1790000000.000100", "took 2 Disc 40 from main stock to truck 1")
@@ -163,6 +169,7 @@ def test_a_queued_post_gets_its_dry_run_then_the_lock_is_released(tmp_path: Path
         stop,
         slack_client=client,
         catalog=lambda: CATALOG,
+        stock=one_item,
         check=lambda _: "InvenTree 1.5.6 (API 530) is tested.",
         connect=lambda app, token: connection,
         clock=lambda: datetime.fromtimestamp(1790000030, UTC),
@@ -170,6 +177,7 @@ def test_a_queued_post_gets_its_dry_run_then_the_lock_is_released(tmp_path: Path
     assert code == 0
     assert [reply["thread_ts"] for reply in client.posted] == ["1790000000.000100"]
     assert "*Disc 40*" in json.dumps(client.posted[0]["blocks"])
+    assert "(from stock item #100)" in json.dumps(client.posted[0]["blocks"])  # the stock reader given to run
     assert connection.calls == ["connect", "close"]
     # Nothing may sleep for Slack's Retry-After inside a call, and a call is short: the lock outlives both.
     assert not any(isinstance(handler, RateLimitErrorRetryHandler) for handler in client.retry_handlers)
@@ -187,6 +195,7 @@ def test_a_second_instance_on_the_same_database_refuses_to_start(tmp_path: Path,
         stop,
         slack_client=FakeClient(stop),
         catalog=lambda: CATALOG,
+        stock=one_item,
         check=lambda _: "",
         connect=lambda app, token: connection,
     )
@@ -224,6 +233,7 @@ def test_startup_checks_stop_before_connecting_and_free_the_lock(
         stop,
         slack_client=client,
         catalog=catalog,
+        stock=one_item,
         check=check,
         connect=lambda app, token: connection,
     )
@@ -273,6 +283,7 @@ def test_a_post_delivered_over_http_gets_its_dry_run(tmp_path: Path, stop: threa
                 stop,
                 slack_client=client,
                 catalog=lambda: CATALOG,
+                stock=one_item,
                 check=lambda _: "",
                 clock=lambda: datetime.fromtimestamp(1790000030, UTC),
             )
@@ -310,6 +321,7 @@ def test_http_mode_stops_with_exit_2_when_the_port_is_taken(tmp_path: Path, stop
             stop,
             slack_client=FakeClient(stop),
             catalog=lambda: CATALOG,
+            stock=one_item,
             check=lambda _: "",
         )
     assert code == 2
@@ -408,6 +420,7 @@ def run_with(database: Path, stop: threading.Event, connection: FakeConnection, 
     arguments: dict[str, Any] = {
         "slack_client": FakeClient(stop),
         "catalog": lambda: CATALOG,
+        "stock": one_item,
         "check": lambda _: "",
         "connect": lambda app, token: connection,
         "clock": lambda: datetime.fromtimestamp(1790000030, UTC),
@@ -843,6 +856,7 @@ def test_a_post_the_rules_decline_is_sent_to_the_configured_model(
         stop,
         slack_client=client,
         catalog=lambda: CATALOG,
+        stock=one_item,
         check=lambda _: "InvenTree 1.5.6 (API 530) is tested.",
         connect=lambda app, token: FakeConnection(),
         clock=lambda: datetime.fromtimestamp(1790000030, UTC),
@@ -979,6 +993,7 @@ def test_my_truck_in_a_post_is_the_posters_vehicle_and_nobody_elses(
         stop,
         slack_client=client,
         catalog=with_vehicles(lambda: CATALOG, configured),
+        stock=one_item,
         check=lambda _: "InvenTree 1.5.6 (API 530) is tested.",
         connect=lambda app, token: FakeConnection(),
         clock=lambda: datetime.fromtimestamp(1790000030, UTC),
@@ -1055,6 +1070,7 @@ def test_a_first_run_reads_no_history_and_with_zero_hours_no_run_does(tmp_path: 
         stop,
         slack_client=client,
         catalog=lambda: CATALOG,
+        stock=one_item,
         check=lambda _: "",
         connect=lambda app, token: FakeConnection(),
         clock=lambda: datetime.fromtimestamp(1790000030, UTC),

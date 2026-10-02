@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from corpus import cases, corpus_views, eval_catalog
 
+from stockthread.core import resolve
 from stockthread.core.model import CandidateMovement, LineItem, Match, MatchRule, MatchStatus, MovementType, ReasonCode
 from stockthread.core.questions import (
     Ask,
@@ -39,6 +40,7 @@ LONG_PATH = "Region/" * 20 + "Shelf A"
 EXACT = Match(MatchStatus.MATCHED, MatchRule.EXACT, 1)
 _KINDS = "|".join(kind.value for kind in MovementType)
 _RULES = "|".join(rule.value for rule in MatchRule)
+_STOCK_DETAILS = [value for name, value in vars(resolve).items() if name.startswith("DETAIL_")]
 _DETAILS = (
     r"line \d+",
     r"line \d+: (above policy\.max_quantity|serial count differs from the quantity|serial not in the text)",
@@ -51,6 +53,7 @@ _DETAILS = (
     f"a ({_KINDS}) whose destination is a vehicle|take_to_vehicle whose destination names no vehicle",
     "a receive has no source location|zero quantity outside a count|source and destination are the same",
     f"(part|location) found by the ({_RULES}) rule",
+    rf"line \d+: ({'|'.join(re.escape(d) for d in _STOCK_DETAILS)})",
 )
 RULE_DETAIL = re.compile("|".join(f"({detail})" for detail in _DETAILS))
 """Every detail the rules write (core/validate.py, Match.review_reason): fixed words, never words of the post."""
