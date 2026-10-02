@@ -762,7 +762,10 @@ needs.
       or supplier part (`#57 · 5 on hand · batch B-1`); these words come
       from InvenTree, never from the post. When no single item covers the
       line, the rule's split is offered as it stands, yes or no ("Take 1
-      from #41 and 1 from #57?").
+      from #41 and 1 from #57?"). Both are computed from what the lines
+      before it left, so a later line of a post that still has enough
+      left gets this choice, never the shared-stock reason below (that
+      reason is raised only for a shortage the other lines cause).
     - *A choice of target, for an add or a count* (`stock_choice`: several
       stock items of the part at the place). A receipt or a count acts on
       one item whatever it holds, so nothing here is about coverage and
@@ -772,8 +775,9 @@ needs.
       same, with what is on hand for information only.
     - *Nothing the thread can choose* (no stock item, too few, serialized
       stock without serials, mixed serialized and unserialized stock, a
-      serialized target, other lines of the post take the same stock, a
-      counted item another line acts on). Two buttons: "Read the stock
+      serialized target, other lines of the post take the same stock so
+      that too few are left, an add into an item an earlier line takes in
+      full, a counted item another line acts on). Two buttons: "Read the stock
       again" and "Drop it". The question says what is wrong and that it
       is fixed in InvenTree or by editing the post (a missing serial
       number, or lines that ask for more than there is: by editing the
@@ -792,15 +796,20 @@ needs.
       the question is asked again with the stock as it is now. For an add
       or a count, the line acts on the one named item if it is still at
       the place and still unserialized, whatever it holds; if it is not,
-      the line gets `stock_choice` with "the chosen stock item is no
-      longer at the location", and the question is asked again.
-      "Read the stock again" changes no fact: it
-      makes the post due for a revision, which reads stock afresh. A line
-      whose stock was fixed in InvenTree then resolves by the rule, and
-      one that was not asks the same question once more. "None of these"
-      leaves the line without a pick, and the next question is "Read the
-      stock again" or "Drop it": the stock in InvenTree is not what the
-      person sees, and is fixed there. "Drop it", and "no" to a split,
+      the line gets `stock_choice` with a detail for the cause ("the
+      chosen stock item is no longer at the location" or "the chosen
+      stock item is serialized now"), and the question is asked again.
+      "None of these" leaves the line without a pick, and the next
+      question is "Read the stock again" or "Drop it": the stock in
+      InvenTree is not what the person sees, and is fixed there.
+      "Read the stock again" (`again`) makes the post due for a revision,
+      which reads stock afresh, and it ends the line's earlier stock
+      answers: replay skips every `choose_stock` and `confirm_stock`
+      answer about that line that is older than its latest `again`
+      (including a "None of these"). So a line whose stock was fixed in
+      InvenTree then resolves by the rule, and one that was not asks the
+      stock question once more, about the stock as it is now. Answers
+      about the line's part, place or quantity are not touched. "Drop it", and "no" to a split,
       end the plan like any "no".
     - *Stored.* `choose_stock` (candidates: the stock item ids offered;
       the line's operation decides whether it is a source or a target),
