@@ -114,9 +114,9 @@ payloads whose channel or message does not fit the stored id.
 
 ## M3: apply, verify, receipt and undo
 
-- [ ] Request builder for transfer, remove, add and count
+- [x] Request builder for transfer, remove, add and count
   - [x] The request of one movement: path and body for each operation, checked strictly (`core/write_request.py`; accepted by both pinned versions in `tests/integration/test_built_requests.py`)
-  - [ ] A decided plan becomes its requests, one per movement, in the post's order
+  - [x] A decided plan becomes its requests, one per movement, in the post's order (`plan.py`)
 - [ ] Write gate: switch, policy and deterministic validation must all pass, at approval and again before the write
 - [ ] Apply protocol: writer lock, marker check, snapshot, single write, read-back
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human

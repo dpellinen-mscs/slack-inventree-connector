@@ -953,6 +953,16 @@ needs.
   marker, the Slack user id and the https link to the message, nothing
   else (`write_notes`). Each body is posted to every pinned version in
   `tests/integration/test_built_requests.py`.
+- **A plan's requests** (built: `plan.py`, nothing calls it yet). A
+  decided plan becomes one request per movement, in the post's order, each
+  with its own apply marker. The lines of a movement that take from one
+  stock item become one line of its request, their quantities added; two
+  lines that count one item are refused. The plan is refused whole when
+  any movement is not decided: a reason the dry run shows, no operation,
+  a place or part without a record that can authorize a write, a
+  transfer to its own source, a line whose stock was not read or whose
+  pick has reasons, takes that do not add up to the line's quantity, or
+  an add or a count on more than one item. No movement is left out.
 - **Splits.** A partial transfer splits the stock item. The source keeps
   its id with a lower quantity, and a new stock item appears at the
   destination. For stock that is not serialized, verification and undo
