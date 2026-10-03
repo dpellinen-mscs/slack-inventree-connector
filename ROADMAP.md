@@ -78,7 +78,7 @@ The quickstart reaches the first dry-run in about 15 minutes.
 
 ## M2: review and clarification
 
-- [ ] Review items with explicit reasons, stored in the audit trail
+- [x] Review items with explicit reasons, stored in the audit trail (every reason in each dry run's record, the question with its reason code; `stockthread trail` prints them for one post)
 - [ ] One focused question per post in the thread, with buttons for short candidate lists
   - [x] Which question: `core/questions.py` picks one per post by tier (design section 4, "Questions")
   - [x] The question in the thread, with buttons and a stored button row (in the dry-run reply; migration 0010)
@@ -88,9 +88,9 @@ The quickstart reaches the first dry-run in about 15 minutes.
   - [x] The clicker is told why a click did nothing (stale, expired, not allowed): an ephemeral note in the thread
   - [x] The answer updates the candidate, re-runs validation, and asks the next question (by button)
   - [x] Which part, which place, how many and which serials are answered by a thread reply that reads cleanly (#85)
-- [ ] Authorization: who may answer and who may approve, by button and by thread reply
+- [x] Authorization: who may answer and who may approve, by button and by thread reply
   - [x] Poster or approver, approvers only for approval questions, by button and by thread reply (#85)
-  - [ ] The "poster or approver only" note for a clean thread reply from someone else
+  - [x] The "poster or approver only" note for a clean thread reply from someone else (#86)
 - [ ] Plan revisions: an edit, a deletion or a new thread message makes a plan stale
   - [x] A new message after the dry run gets a revised dry run, or a notice that the reply no longer stands
   - [x] An edit or a deletion after the dry run starts a revision by itself

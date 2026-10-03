@@ -15,6 +15,8 @@ from stockthread.config import ConfigError, load_settings
 from stockthread.inventree import InvenTreeError
 from stockthread.run import check_setup, run
 from stockthread.setup_check import exit_code
+from stockthread.store import SchemaTooNew, SchemaTooOld, Store
+from stockthread.trail import TrailError, message_key, post_trail
 
 DEFAULT_CONFIG = "stockthread.toml"
 
@@ -49,6 +51,19 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("STOCKTHREAD_CONFIG", DEFAULT_CONFIG)),
         help=f"settings file (default: $STOCKTHREAD_CONFIG or {DEFAULT_CONFIG})",
     )
+    trail = commands.add_parser(
+        "trail",
+        help="print what the connector saw and decided about one post, and who answered what (reads the database)",
+    )
+    trail.add_argument("message", help="a Slack link to any message of the post, or its channel id")
+    trail.add_argument("ts", nargs="?", help="the message timestamp, when MESSAGE is a channel id")
+    trail.add_argument("--text", action="store_true", help="also print the words each line was read from")
+    trail.add_argument(
+        "--config",
+        type=Path,
+        default=Path(os.environ.get("STOCKTHREAD_CONFIG", DEFAULT_CONFIG)),
+        help=f"settings file (default: $STOCKTHREAD_CONFIG or {DEFAULT_CONFIG})",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "check-config":
@@ -57,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
         return check_setup_command(args.config)
     if args.command == "run":
         return run_command(args.config)
+    if args.command == "trail":
+        return trail_command(args.config, args.message, args.ts, text=args.text)
     parser.print_help()
     return 0
 
@@ -117,6 +134,33 @@ def check_setup_command(path: Path) -> int:
     for finding in findings:
         print(f"{finding.level.value.upper():5} {finding.text}")
     return exit_code(findings)
+
+
+def trail_command(path: Path, reference: str, ts: str | None, *, text: bool) -> int:
+    """Print the trail of the post that holds the message; 1 when there is none, 2 when it cannot be read."""
+    try:
+        settings = load_settings(path, os.environ)
+    except ConfigError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    try:
+        key = message_key(settings.slack.workspace_id, reference, ts)
+        store = Store.open_read_only(settings.storage.database)
+    except (TrailError, FileNotFoundError, SchemaTooNew, SchemaTooOld, sqlite3.Error) as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    try:
+        lines = post_trail(store, key, text=text)
+    except TrailError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    except sqlite3.Error as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    finally:
+        store.close()
+    print("\n".join(lines))
+    return 0
 
 
 if __name__ == "__main__":

@@ -1368,7 +1368,13 @@ configurable, and expiry replaces the text while keeping the row.
 
 An operator can answer three questions from the trail: what did the
 connector see, why did it decide what it decided, and what exactly did it
-send to InvenTree.
+send to InvenTree. `stockthread trail <message link>` prints one post's
+trail without changing the database (a read-only connection that refuses a
+schema it does not write): each dry run with its matches, picks and every
+review reason (the write gate: the reasons the rules and the model raised,
+with who raised them, and those the matches and missing fields show), each
+question with its answer and who gave it, and the post's audit log rows.
+It prints ids and codes; the words of the post only with `--text`.
 
 ## 9. Extraction
 

@@ -18,6 +18,9 @@ Nothing is released yet. The connector cannot write stock in this state.
 
 ### Added
 
+- `stockthread trail <message link>`: one post's dry runs with every review reason and who raised it, its
+  questions with their answers and who gave them, and its audit log. It only reads the database, and prints
+  ids and codes unless `--text` is given.
 - Source selection rule (`core/resolve.py`): which stock items a line takes. It considers only items that are
   OK and unallocated, prefers one item that covers the quantity, otherwise splits oldest first, moves
   serialized stock by serial number, and gives a review reason when batches or supplier parts differ.
