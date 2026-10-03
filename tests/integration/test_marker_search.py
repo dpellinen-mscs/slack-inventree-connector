@@ -64,3 +64,20 @@ async def test_finds_every_attempt_of_one_request_and_nothing_that_only_quotes_i
     assert all(entry.marker.marker_id == marker_id for entry in found)
     assert len({entry.pk for entry in found}) == 2
     assert nothing == []
+
+
+async def test_char_a_later_split_does_not_copy_the_marked_entry(api: RawApi, scratch: Scratch) -> None:
+    """A split of a marked item after the write leaves the marker on the item it was written to only.
+
+    Measured so a marker found on another item can be treated as unexplained (design section 7, "The marker").
+    """
+    item = scratch.stock(10)
+    marker_id = new_marker_id()
+    send(api, Operation.REMOVE, [Take(item["pk"], Decimal(2))], Marker(marker_id, AttemptKind.APPLY, 1))
+    response = api.post(
+        "/api/stock/transfer/", {"items": [{"pk": item["pk"], "quantity": 3}], "location": scratch.other, "notes": "s"}
+    )
+    assert response.status_code == 201, response.text[:500]
+    async with make_reader() as reader:
+        found = await reader.marker_entries(marker_id)
+    assert [entry.item for entry in found] == [item["pk"]]

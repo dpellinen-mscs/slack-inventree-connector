@@ -298,9 +298,10 @@ def history_pages(rows: list[dict[str, object]]) -> Handler:
 
 async def test_marker_entries_reads_every_page_and_keeps_only_whole_markers_of_the_id() -> None:
     filler = [{"pk": n, "item": 7, "notes": f"see [sic:{MARKER_ID}:a01]", "deltas": {}} for n in range(PAGE_SIZE)]
-    ours = [
+    ours: list[dict[str, object]] = [
         {"pk": 500, "item": 7, "notes": f"[sic:{MARKER_ID}:a01] U0SAM0001", "deltas": {"removed": 2}},
         {"pk": 501, "item": 8, "notes": f"[sic:{MARKER_ID}:u01] U0LUIS001", "deltas": None},
+        {"pk": 503, "item": None, "notes": f"[sic:{MARKER_ID}:a02]", "deltas": {"removed": 1}},  # item deleted
         {"pk": 502, "item": 9, "notes": f"[sic:{MARKER_ID}x:a01] U0SAM0001", "deltas": {}},
     ]
     client, recorder = reader(history_pages(filler + ours))
@@ -309,6 +310,7 @@ async def test_marker_entries_reads_every_page_and_keeps_only_whole_markers_of_t
     assert found == [
         MarkedEntry(500, 7, Marker(MARKER_ID, AttemptKind.APPLY, 1), {"removed": 2}),
         MarkedEntry(501, 8, Marker(MARKER_ID, AttemptKind.UNDO, 1), {}),
+        MarkedEntry(503, None, Marker(MARKER_ID, AttemptKind.APPLY, 2), {"removed": 1}),
     ]
     assert len(recorder.requests) == 2
 
@@ -325,6 +327,7 @@ async def test_marker_entries_refuses_an_id_that_is_not_one_without_asking() -> 
     "row",
     [
         {"pk": "1", "item": 7, "deltas": {}},
+        {"pk": True, "item": 7, "deltas": {}},
         {"pk": 1, "item": "7", "deltas": {}},
         {"pk": 1, "item": 7, "deltas": [1]},
     ],
@@ -333,4 +336,18 @@ async def test_marker_entries_refuses_an_entry_of_ours_it_cannot_read(row: dict[
     client, _ = reader(history_pages([{**row, "notes": f"[sic:{MARKER_ID}:a01]"}]))
     async with client:
         with pytest.raises(InvenTreeError, match="no valid pk, item or deltas"):
+            await client.marker_entries(MARKER_ID)
+
+
+async def test_marker_entries_refuses_an_entry_that_comes_back_twice() -> None:
+    rows = [{"pk": n, "notes": "x"} for n in range(PAGE_SIZE)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        offset = int(request.url.params["offset"])
+        page = rows if offset == 0 else [rows[-1]]  # the order shifted: the last row again, another one skipped
+        return httpx.Response(200, json={"count": PAGE_SIZE + 1, "results": page})
+
+    client, _ = reader(handler)
+    async with client:
+        with pytest.raises(InvenTreeError, match="came back twice"):
             await client.marker_entries(MARKER_ID)
