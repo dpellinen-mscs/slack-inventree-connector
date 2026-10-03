@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -14,6 +15,7 @@ from stockthread.core.write_request import NOTES_LIMIT, PATHS, build_request, wr
 MARKER = Marker("k7m2q9x4t1b8w3n6p5r0zd", AttemptKind.APPLY, 1)
 LINK = "https://acme-fiber.slack.com/archives/C0ACME001/p1790000000000100"
 NOTES = write_notes(MARKER, "U0SAM0001", LINK)
+BY: dict[str, Any] = {"marker": MARKER, "user": "U0SAM0001", "link": LINK}
 
 
 def test_notes_put_the_marker_first_then_the_user_then_the_link() -> None:
@@ -38,9 +40,7 @@ def test_notes_that_could_say_more_than_ids_or_not_fit_are_refused(user: str, li
 
 
 def test_a_transfer_moves_each_item_to_its_destination_without_merging() -> None:
-    request = build_request(
-        Operation.TRANSFER, [Take(44, Decimal(3)), Take(45, Decimal("2.50"))], notes=NOTES, location=11
-    )
+    request = build_request(Operation.TRANSFER, [Take(44, Decimal(3)), Take(45, Decimal("2.50"))], **BY, location=11)
     assert request.path == "/api/stock/transfer/"
     assert request.body == {
         "items": [{"pk": 44, "quantity": "3", "merge": False}, {"pk": 45, "quantity": "2.5", "merge": False}],
@@ -51,20 +51,16 @@ def test_a_transfer_moves_each_item_to_its_destination_without_merging() -> None
 
 @pytest.mark.parametrize("operation", [Operation.REMOVE, Operation.ADD, Operation.COUNT])
 def test_the_other_operations_act_where_the_items_are(operation: Operation) -> None:
-    request = build_request(operation, [Take(44, Decimal("1E+2"))], notes=NOTES)
+    request = build_request(operation, [Take(44, Decimal("1E+2"))], **BY)
     assert request.path == PATHS[operation] == f"/api/stock/{operation.value}/"
     assert request.body == {"items": [{"pk": 44, "quantity": "100"}], "notes": NOTES}
 
 
 def test_a_count_may_set_zero_and_nothing_else_may() -> None:
-    assert build_request(Operation.COUNT, [Take(44, Decimal(0))], notes=NOTES).body["items"] == [
-        {"pk": 44, "quantity": "0"}
-    ]
+    assert build_request(Operation.COUNT, [Take(44, Decimal(0))], **BY).body["items"] == [{"pk": 44, "quantity": "0"}]
     for operation in (Operation.TRANSFER, Operation.REMOVE, Operation.ADD):
         with pytest.raises(ValueError, match="positive"):
-            build_request(
-                operation, [Take(44, Decimal(0))], notes=NOTES, location=11 if operation == "transfer" else None
-            )
+            build_request(operation, [Take(44, Decimal(0))], **BY, location=11 if operation == "transfer" else None)
 
 
 @pytest.mark.parametrize(
@@ -84,11 +80,11 @@ def test_a_count_may_set_zero_and_nothing_else_may() -> None:
 )
 def test_takes_inventree_would_misread_are_refused(takes: list[Take], message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        build_request(Operation.REMOVE, takes, notes=NOTES)
+        build_request(Operation.REMOVE, takes, **BY)
 
 
 def test_the_largest_and_finest_quantities_inventree_stores_are_sent_as_they_are() -> None:
-    request = build_request(Operation.ADD, [Take(44, Decimal("9999999999.99999"))], notes=NOTES)
+    request = build_request(Operation.ADD, [Take(44, Decimal("9999999999.99999"))], **BY)
     assert request.body["items"] == [{"pk": 44, "quantity": "9999999999.99999"}]
 
 
@@ -105,19 +101,28 @@ def test_the_largest_and_finest_quantities_inventree_stores_are_sent_as_they_are
 )
 def test_only_a_transfer_has_a_destination(operation: Operation, location: int | None, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        build_request(operation, [Take(44, Decimal(1))], notes=NOTES, location=location)
+        build_request(operation, [Take(44, Decimal(1))], **BY, location=location)
+
+
+def test_the_notes_of_a_request_are_exactly_marker_user_and_link() -> None:
+    assert build_request(Operation.REMOVE, [Take(44, Decimal(1))], **BY).body["notes"] == NOTES
+    without = build_request(Operation.REMOVE, [Take(44, Decimal(1))], marker=MARKER, user="U0SAM0001")
+    assert without.body["notes"] == "[sic:k7m2q9x4t1b8w3n6p5r0zd:a01] U0SAM0001"
 
 
 @pytest.mark.parametrize(
-    ("notes", "message"),
+    ("user", "link", "message"),
     [
-        ("U0SAM0001 [sic:k7m2q9x4t1b8w3n6p5r0zd:a01]", "not a marker"),  # the marker is not first
-        ("[sic:k7m2q9x4t1b8w3n6p5r0zd:a01]x U0SAM0001", "not a marker"),
-        ("", "not a marker"),
-        ("[sic:k7m2q9x4t1b8w3n6p5r0zd:a01] " + "n" * NOTES_LIMIT, "one line under"),
-        ("[sic:k7m2q9x4t1b8w3n6p5r0zd:a01] U0SAM0001\nmore", "one line under"),
+        ("U0SAM0001 [sic:a7m2q9x4t1b8w3n6p5r0zd:u03]", LINK, "user id"),  # a second marker never gets in
+        ("U0SAM0001", LINK + "\x00", "https"),
+        ("U0SAM0001", LINK + " ", "https"),  # the server would trim it: the stored notes would differ
     ],
 )
-def test_notes_must_open_with_a_whole_marker_and_fit(notes: str, message: str) -> None:
+def test_a_request_takes_no_other_text_into_its_notes(user: str, link: str, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        build_request(Operation.REMOVE, [Take(44, Decimal(1))], notes=notes)
+        build_request(Operation.REMOVE, [Take(44, Decimal(1))], marker=MARKER, user=user, link=link)
+
+
+def test_a_count_to_negative_zero_is_sent_as_zero() -> None:
+    request = build_request(Operation.COUNT, [Take(44, Decimal("-0E-7"))], **BY)
+    assert request.body["items"] == [{"pk": 44, "quantity": "0"}]

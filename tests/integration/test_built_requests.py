@@ -17,13 +17,11 @@ if TYPE_CHECKING:
 LINK = "https://acme-fiber.slack.com/archives/C0ACME001/p1790000000000100"
 
 
-def notes() -> str:
-    return write_notes(Marker(new_marker_id(), AttemptKind.APPLY, 1), "U0SAM0001", LINK)
-
-
 def send(api: RawApi, operation: Operation, takes: list[Take], location: int | None = None) -> str:
-    written = notes()
-    request = build_request(operation, takes, notes=written, location=location)
+    marker = Marker(new_marker_id(), AttemptKind.APPLY, 1)
+    written = write_notes(marker, "U0SAM0001", LINK)
+    request = build_request(operation, takes, marker=marker, user="U0SAM0001", link=LINK, location=location)
+    assert request.body["notes"] == written
     response = api.post(request.path, dict(request.body))
     assert response.status_code == 201, response.text[:500]
     return written
@@ -55,6 +53,8 @@ def test_a_built_transfer_does_not_merge_into_stock_at_the_destination(api: RawA
     send(api, Operation.TRANSFER, [Take(moving["pk"], Decimal(3))], location=scratch.other)
     assert quantity(scratch, waiting["pk"]) == 4
     assert scratch.item(moving["pk"])["location"] == scratch.other  # moved whole, still its own item
+    # This shows the built body does not merge; it cannot show that `merge: false` is what prevents it: a line
+    # without `merge` does not merge either (test_char_transfer_merge_setting_on). The unit tests pin the flag.
 
 
 def test_built_remove_add_and_count_change_the_item_by_exactly_what_they_say(api: RawApi, scratch: Scratch) -> None:

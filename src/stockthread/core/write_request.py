@@ -4,7 +4,13 @@ could ever send is built and checked here, before any network code sees it.
 One request per movement: its lines share one operation and, for a transfer, one destination. Each line acts on
 the stock items its pick took (`core/resolve.py`). The builder never repairs a plan. Anything it would have to
 guess (a duplicate item, a quantity InvenTree would round, a transfer without a destination, notes that would
-not fit) is a ValueError, and nothing is sent.
+not fit) is a ValueError, and nothing is sent. The notes are built here too, from the marker, the user id and the
+link, so no other text can reach them.
+
+Not checked here: whether an item is serialized (a `Take` carries only its key). InvenTree answers an add, a
+remove or a count on a serialized item with success and changes nothing (design section 5, "Serialized stock"), so
+the step that turns a plan into requests must never ask for one. `core/resolve.py` does pick serialized items for
+a remove (a consume): that step has to settle it before any write.
 """
 
 from __future__ import annotations
@@ -59,10 +65,16 @@ def write_notes(marker: Marker, user: str, link: str | None = None) -> str:
 
 
 def build_request(
-    operation: Operation, takes: Sequence[Take], *, notes: str, location: int | None = None
+    operation: Operation,
+    takes: Sequence[Take],
+    *,
+    marker: Marker,
+    user: str,
+    link: str | None = None,
+    location: int | None = None,
 ) -> WriteRequest:
     """The request that applies `takes` by `operation`. A transfer moves them to `location`; the other operations
-    act where the items are, so they take no location.
+    act where the items are, so they take no location. The notes are `write_notes(marker, user, link)`.
 
     Each take is a stock item and a quantity: what a transfer moves or a remove takes out, what an add puts in,
     or what a count sets (zero allowed). Every transfer line carries `merge: false` (design section 5, "No merge").
@@ -76,10 +88,7 @@ def build_request(
         raise ValueError("a request acts on each stock item once")
     for take in takes:
         _check_quantity(take.quantity, zero_allowed=operation is Operation.COUNT)
-    first = notes.split(" ", 1)[0]
-    Marker.parse(first)  # raises ValueError: the marker comes first, whole
-    if len(notes) >= NOTES_LIMIT or "\n" in notes:
-        raise ValueError(f"notes are one line under {NOTES_LIMIT} characters")
+    notes = write_notes(marker, user, link)
     if operation is Operation.TRANSFER:
         if location is None or isinstance(location, bool) or not isinstance(location, int) or location < 1:
             raise ValueError("a transfer needs the primary key of its destination")
@@ -113,4 +122,4 @@ def _check_quantity(quantity: Decimal, *, zero_allowed: bool) -> None:
 
 def _decimal(quantity: Decimal) -> str:
     """`Decimal("2.50")` as "2.5", `Decimal("1E+2")` as "100": never exponent notation."""
-    return format(quantity.normalize(), "f")
+    return "0" if quantity == 0 else format(quantity.normalize(), "f")  # never "-0"
