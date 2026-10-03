@@ -2,8 +2,8 @@
 
 The connector reads parts, locations and stock through this client. It can
 only send GET: it has no method for anything else, and a request hook refuses
-any other method before it leaves the process. Stock writes will get their own
-client behind the write gate (design section 6).
+any other method before it leaves the process. Stock writes have their own
+client, `writer.py`, sent only behind the write gate (design section 6).
 
 Errors never repeat a response body or the token. A body can hold inventory or
 customer data, and the token is a secret.
