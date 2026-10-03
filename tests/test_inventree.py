@@ -6,12 +6,14 @@ import pytest
 from pydantic import SecretStr
 
 from stockthread.config import InvenTreeSettings
+from stockthread.core.marker import AttemptKind, Marker
 from stockthread.inventree import (
     MAX_API_VERSION,
     MIN_API_VERSION,
     PAGE_SIZE,
     InvenTreeError,
     InvenTreeReader,
+    MarkedEntry,
     ReadOnlyViolation,
     ServerInfo,
     check_version,
@@ -279,3 +281,56 @@ def test_the_token_is_not_in_the_reader_repr() -> None:
     client = InvenTreeReader(SETTINGS, SecretStr(TOKEN))
     assert TOKEN not in repr(client)
     assert TOKEN not in json.dumps(vars(client), default=repr)
+
+
+MARKER_ID = "k7m2q9x4t1b8w3n6p5r0zd"
+
+
+def history_pages(rows: list[dict[str, object]]) -> Handler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/api/stock/track/")
+        assert request.url.params["search"] == MARKER_ID
+        offset, limit = int(request.url.params["offset"]), int(request.url.params["limit"])
+        return httpx.Response(200, json={"count": len(rows), "results": rows[offset : offset + limit]})
+
+    return handler
+
+
+async def test_marker_entries_reads_every_page_and_keeps_only_whole_markers_of_the_id() -> None:
+    filler = [{"pk": n, "item": 7, "notes": f"see [sic:{MARKER_ID}:a01]", "deltas": {}} for n in range(PAGE_SIZE)]
+    ours = [
+        {"pk": 500, "item": 7, "notes": f"[sic:{MARKER_ID}:a01] U0SAM0001", "deltas": {"removed": 2}},
+        {"pk": 501, "item": 8, "notes": f"[sic:{MARKER_ID}:u01] U0LUIS001", "deltas": None},
+        {"pk": 502, "item": 9, "notes": f"[sic:{MARKER_ID}x:a01] U0SAM0001", "deltas": {}},
+    ]
+    client, recorder = reader(history_pages(filler + ours))
+    async with client:
+        found = await client.marker_entries(MARKER_ID)
+    assert found == [
+        MarkedEntry(500, 7, Marker(MARKER_ID, AttemptKind.APPLY, 1), {"removed": 2}),
+        MarkedEntry(501, 8, Marker(MARKER_ID, AttemptKind.UNDO, 1), {}),
+    ]
+    assert len(recorder.requests) == 2
+
+
+async def test_marker_entries_refuses_an_id_that_is_not_one_without_asking() -> None:
+    client, recorder = reader(respond(body={"count": 0, "results": []}))
+    async with client:
+        with pytest.raises(ValueError, match="not a marker id"):
+            await client.marker_entries("x")
+    assert recorder.requests == []
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"pk": "1", "item": 7, "deltas": {}},
+        {"pk": 1, "item": "7", "deltas": {}},
+        {"pk": 1, "item": 7, "deltas": [1]},
+    ],
+)
+async def test_marker_entries_refuses_an_entry_of_ours_it_cannot_read(row: dict[str, object]) -> None:
+    client, _ = reader(history_pages([{**row, "notes": f"[sic:{MARKER_ID}:a01]"}]))
+    async with client:
+        with pytest.raises(InvenTreeError, match="no valid pk, item or deltas"):
+            await client.marker_entries(MARKER_ID)

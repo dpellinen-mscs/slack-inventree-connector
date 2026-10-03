@@ -1236,7 +1236,10 @@ request shares it.
   id, and they stay under 200 characters. The server stores notes in a
   `varchar(512)`, which PostgreSQL enforces (`test_char_notes_length`).
 - The search for a marker reads every page of results and compares the
-  whole token, because the server search matches substrings.
+  whole token, because the server search matches substrings (built:
+  `InvenTreeReader.marker_entries`, nothing calls it yet). An entry is
+  the request's only when its notes start with a whole marker of the id;
+  an entry that quotes the marker later in its notes is not.
 - **A marker that is found proves the write happened. A marker that is not
   found proves nothing.** On 1.4.3 the marker of a removal that deleted
   its stock item cannot be found (section 5, Depletion), an admin can

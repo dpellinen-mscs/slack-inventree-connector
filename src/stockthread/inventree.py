@@ -23,6 +23,7 @@ import httpx
 from pydantic import SecretStr
 
 from stockthread.config import InvenTreeSettings
+from stockthread.core.marker import Marker, is_marker_id, marked
 
 MIN_API_VERSION = 511
 """InvenTree 1.4.3, the oldest release CI tests. (1.4.4 has the same API version but no Docker image.)"""
@@ -162,6 +163,29 @@ class InvenTreeReader:
                 return results
         raise InvenTreeError(f"GET {path} returned more than {MAX_PAGES} pages")
 
+    async def marker_entries(self, marker_id: str) -> list[MarkedEntry]:
+        """Every stock history entry written by any attempt (apply or undo) of the request with `marker_id`.
+
+        Reads every page, and compares the whole marker because the server search matches substrings (design
+        section 7, "The marker"). A found entry proves the write happened; an empty list proves nothing.
+        """
+        if not is_marker_id(marker_id):
+            raise ValueError("not a marker id")
+        found: list[MarkedEntry] = []
+        for row in await self.list_all("/api/stock/track/", {"search": marker_id}):
+            marker = marked(row.get("notes"), marker_id)
+            if marker is None:
+                continue
+            pk, item, deltas = row.get("pk"), row.get("item"), row.get("deltas")
+            if (
+                type(pk) is not int
+                or (item is not None and type(item) is not int)
+                or (deltas is not None and not isinstance(deltas, dict))
+            ):
+                raise InvenTreeError("a stock history entry has no valid pk, item or deltas")
+            found.append(MarkedEntry(pk, item, marker, deltas or {}))
+        return found
+
     async def user_roles(self) -> dict[str, Any]:
         """The roles of the token's user (`roles`: role name -> permissions or null, `is_staff`, `is_superuser`)."""
         data = await self.get("/api/user/roles/")
@@ -179,6 +203,17 @@ class InvenTreeReader:
         """Stock items of one part in one location, without its sub-locations, that are in stock."""
         params = {"part": part, "location": location, "cascade": False, "in_stock": True}
         return await self.list_all("/api/stock/", params)
+
+
+@dataclass(frozen=True)
+class MarkedEntry:
+    """One stock history entry whose notes lead with a marker of the searched id."""
+
+    pk: int
+    item: int | None
+    """The stock item the entry belongs to (None if the server did not say)."""
+    marker: Marker
+    deltas: Mapping[str, Any]
 
 
 def _retry_after(response: httpx.Response, attempt: int) -> float:
