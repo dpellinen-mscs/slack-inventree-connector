@@ -1298,6 +1298,15 @@ connector never has two InvenTree writes in flight and cannot race itself.
    answers 500 after the stock change is committed, and no entry carries
    the marker (`test_char_overlong_notes_write_without_history`). That is
    why a 5xx is an unknown outcome and recovery compares quantities.
+   Built: `InvenTreeWriter.send` (`writer.py`) sends one request once and
+   answers `accepted`, `refused` or `unknown` by the rule of the next
+   section: `accepted` only for a 201 that repeats the request's notes,
+   `refused` only for InvenTree's own error shapes. It refuses, before
+   anything is sent, a body that is not exactly what `build_request`
+   makes (so the notes lead with a marker and fit), and its request hook
+   lets out only a marked POST to the four stock paths of the configured
+   server, with no proxy from the environment
+   (`tests/integration/test_sent_writes.py`).
 5. **Read back.** Three checks, and any failure means `verify_failed`:
    - the history entries that carry the marker have the deltas of the
      plan;
@@ -1328,8 +1337,12 @@ detected, and it also cannot corrupt the connector's movement.
 
 ### Unknown outcomes and recovery
 
-An outcome is **known** only when InvenTree itself answered: a 2xx status,
-or a 4xx status with a JSON body in InvenTree's error format. A known 4xx
+An outcome is **known** only when InvenTree itself answered: a 201 whose
+JSON body repeats the request's notes, or a 4xx with a JSON body in
+InvenTree's error format (a 400 naming only the endpoint's fields, or a
+`detail` alone on 401, 403, 404 or 405). Any other 2xx or 4xx (a cut-off
+body, a proxy's or a gateway's answer) is unknown too: recovery then
+finds the marker if the write ran. A known 4xx
 moves the request to `failed`. Everything else is **unknown**: timeouts,
 connection errors, every 5xx, the statuses 408, 429 and 499, and any answer
 whose body does not come from InvenTree, such as a proxy error page. A
