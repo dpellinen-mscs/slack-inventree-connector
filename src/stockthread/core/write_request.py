@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from typing import Any
 
 from stockthread.core.marker import Marker
@@ -113,7 +113,7 @@ def _check_quantity(quantity: Decimal, *, zero_allowed: bool) -> None:
         raise ValueError("a quantity is a finite Decimal")
     if quantity < 0 or (quantity == 0 and not zero_allowed):
         raise ValueError("a quantity is positive (a count may set zero)")
-    exponent = quantity.normalize().as_tuple().exponent
+    exponent = _normal(quantity).as_tuple().exponent
     if isinstance(exponent, int) and exponent < -QUANTITY_PLACES:
         raise ValueError(f"InvenTree would round a quantity with more than {QUANTITY_PLACES} decimal places")
     if quantity >= Decimal(10) ** (QUANTITY_DIGITS - QUANTITY_PLACES):
@@ -122,4 +122,10 @@ def _check_quantity(quantity: Decimal, *, zero_allowed: bool) -> None:
 
 def _decimal(quantity: Decimal) -> str:
     """`Decimal("2.50")` as "2.5", `Decimal("1E+2")` as "100": never exponent notation."""
-    return "0" if quantity == 0 else format(quantity.normalize(), "f")  # never "-0"
+    return "0" if quantity == 0 else format(_normal(quantity), "f")  # never "-0"
+
+
+def _normal(quantity: Decimal) -> Decimal:
+    """`quantity` without trailing zeros, never rounded: `normalize` rounds to the context's precision (28 digits)."""
+    with localcontext(prec=max(28, len(quantity.as_tuple().digits))):
+        return quantity.normalize()
