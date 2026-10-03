@@ -20,6 +20,7 @@ Current version: see [`VERSION`](VERSION).
 | `catalog/locations.json` | The synthetic stock locations, as a path tree |
 | `catalog/users.json` | Slack users and the vehicle assigned to each |
 | `catalog/aliases.json` | Aliases a human has already confirmed, in normalized form |
+| `questions.json` | The one question each case's dry run asks, by case id (`null`: none), reviewed by hand. A corpus change that changes a question updates it in the same change, with the reason in the PR |
 | `schema/case-file.schema.json` | JSON Schema for a case file, with the lists of types, flags and tags |
 | `tools/validate_corpus.py` | Corpus checker, standard library only |
 | `tools/score.py` | Reference scorer, standard library only |
