@@ -941,6 +941,18 @@ needs.
   v1.0 never creates stock items or locations. When an add or a count has
   no single target stock item, that is a review reason, and a human creates
   the item in InvenTree.
+- **Request bodies** (built: `core/write_request.py`, pure). One request
+  per movement: `POST /api/stock/<transfer|remove|add|count>/` with
+  `items` (one `{pk, quantity}` per stock item the pick took, quantities as
+  decimal strings, `merge: false` on every transfer line), `notes`, and a
+  `location` for a transfer only. The builder refuses rather than repairs:
+  no item twice, a quantity InvenTree would round (more than 5 decimal
+  places) or cannot store, zero except for a count, a transfer without a
+  destination or another operation with one, and notes that do not open
+  with a whole marker or would reach 200 characters. The notes are the
+  marker, the Slack user id and the https link to the message, nothing
+  else (`write_notes`). Each body is posted to every pinned version in
+  `tests/integration/test_built_requests.py`.
 - **Splits.** A partial transfer splits the stock item. The source keeps
   its id with a lower quantity, and a new stock item appears at the
   destination. For stock that is not serialized, verification and undo
