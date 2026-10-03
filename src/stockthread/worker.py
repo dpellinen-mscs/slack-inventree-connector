@@ -58,7 +58,7 @@ from typing import Any, Protocol
 
 from stockthread.config import Settings
 from stockthread.core import extract_rules
-from stockthread.core.answers import Effects, Given, replay
+from stockthread.core.answers import Effects, Given, Typed, replay
 from stockthread.core.grouping import seconds
 from stockthread.core.matching import Catalog, match_location, match_part
 from stockthread.core.model import (
@@ -78,8 +78,17 @@ from stockthread.core.model import (
     ReviewReason,
     operation_for,
 )
-from stockthread.core.questions import choice_json, choices, pick_question, question_json, reason_line
+from stockthread.core.questions import (
+    Question,
+    choice_json,
+    choices,
+    pick_question,
+    question_from_json,
+    question_json,
+    reason_line,
+)
 from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
+from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
 from stockthread.core.validate import photo_not_read, validate
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.catchup import is_catch_up
@@ -293,9 +302,10 @@ class Worker:
     """Checked between posts, so a stop request does not wait for a whole backlog."""
     llm: PostExtractor | None = None
     """Reads the posts the rule-based extractor declines. None: those posts get no reply."""
-    _llm_read: dict[PostKey, tuple[tuple[MessageInput, ...], Extraction]] = field(default_factory=dict)
+    _llm_read: dict[PostKey, dict[tuple[MessageInput, ...], Extraction]] = field(default_factory=dict)
     """What the model read, and the messages as it read them, kept until the post is finished: a reply that is
-    tried again is not read again. A post that has gained, lost or changed a message since is."""
+    tried again is not read again. A post that has gained, lost or changed a message since is. A post is read with
+    and without its answer messages (answers by thread reply), so each set read is kept."""
     _llm_quiet_until: Decimal = Decimal(0)
     """The provider gave no answer: it is not asked again, for any post, before this time."""
     _llm_failed: int = 0
@@ -611,7 +621,7 @@ class Worker:
         # as old as the post as first read, and a new reply does not make a week-old movement current.
         plan_from = post.newest_ts if post.revision == 1 else post.plan_from or post.key.ts
         since = seconds(plan_from)
-        read: tuple[Sequence[MessageInput], str, bool] | None = None
+        read: tuple[Sequence[MessageInput], str, bool, Mapping[str, str]] | None = None
         if now - since > self.settings.slack.plan_expiry_hours * 3600:
             why = "too_old"  # for a revision, the reply above has expired: there is nothing to take back
         else:
@@ -633,62 +643,105 @@ class Worker:
                 answers=answers,
             )
             return True
-        messages, poster, caught_up = read
-        seen = tuple(message.ts for message in messages)
+        all_messages, poster, caught_up, authors = read
+        everything = tuple(message.ts for message in all_messages)
         history = self.store.dry_run_history(key) if post.revision > 1 else []
+        # Answers by thread reply: a message counted as the answer to a question of the reading that stands is kept
+        # out of what the extractor reads. A new message may be one (`candidate`); it is judged on that reading.
+        # Then the post is read with it, then with every answer message: the reading differs, answers start over.
         try:
-            # Only answers are new: the post reads as it did, so the reading that stands is kept rather than
-            # asked for again (a model may read the same words otherwise, and the answers would no longer fit).
-            kept = _kept_reading(history, seen, changes)
-            extraction, unheard = (kept, "") if kept is not None else self._extract(key, messages, now, ask)
+            typed = self._typed(key, history, all_messages, answers)
+            candidate = self._candidate(key, history, all_messages, authors, typed, changes)
         except LockLost:
             raise
-        except Exception as error:
-            self._broken(post, now, error, read=seen, changes=changes, answers=answers)
+        except Exception as error:  # a stored record or question that cannot be read: this post only
+            self._broken(post, now, error, read=everything, changes=changes, answers=answers)
             return True
-        if extraction is None:
-            return False  # waits for the LLM provider, or for the queue to be drained after its call
-
-        def record(views: Sequence[MovementView], late: bool) -> dict[str, Any]:
-            return _record(
-                extraction,
-                views,
-                late=late,
-                poster=poster,
-                messages=messages,
-                max_quantity=self.settings.policy.max_quantity,
-                llm_unavailable=unheard == _UNAVAILABLE,
-                llm_no_reading=unheard == _NO_READING,
-            )
-
-        if extraction.declined or not extraction.movements:
-            log.info("post %s: no reply (%s)", key.ts, "declined" if extraction.declined else "not a movement")
-            # A model that did not answer, or gave no reading, says nothing about the thread: the notice says so.
-            unread = "unread" if unheard else None
-            self._conclude(
-                post,
-                now,
-                DryRunOutcome.SILENT,
-                extraction.extractor,
-                record((), False),
-                why=unread,
-                read=seen,
-                changes=changes,
-                answers=answers,
-            )
-            return True
-        catalog = self.catalog()
-        self.beat()  # a catalog read can take a while
+        tries: list[dict[int, MessageInput]] = [{**typed, candidate[0].id: candidate[1]}] if candidate else []
+        tries += [typed, {}] if typed else [{}]
+        catalog: Catalog | None = None
         late = caught_up or age > LATE_AFTER_SECONDS
         standing = self._standing(post)
-        try:
-            views = self._views(extraction, messages, poster, catalog, late)
-            reading = _digest(record(views, late))
-            effects = self._replay(key, history, reading, answers, views)
-            views = self._answered(views, effects, extraction, messages, late)
-        except Exception as error:
-            self._broken(post, now, error, extraction.extractor, read=seen, changes=changes, answers=answers)
-            return True
+        for answering in tries:
+            kept_out = {message.ts for message in answering.values()}
+            messages = [message for message in all_messages if message.ts not in kept_out]
+            seen = tuple(message.ts for message in messages)
+            try:
+                # Only answers are new: the post reads as it did, so the reading that stands is kept rather than
+                # asked for again (a model may read the same words otherwise, and the answers would no longer fit).
+                kept = _kept_reading(history, seen, changes)
+                extraction, unheard = (kept, "") if kept is not None else self._extract(key, messages, now, ask)
+            except LockLost:
+                raise
+            except Exception as error:
+                self._broken(post, now, error, read=everything, changes=changes, answers=answers)
+                return True
+            if extraction is None:
+                return False  # waits for the LLM provider, or for the queue to be drained after its call
+
+            def record(
+                views: Sequence[MovementView],
+                late: bool,
+                extraction: Extraction = extraction,
+                messages: Sequence[MessageInput] = messages,
+                unheard: str = unheard,
+            ) -> dict[str, Any]:
+                return _record(
+                    extraction,
+                    views,
+                    late=late,
+                    poster=poster,
+                    messages=messages,
+                    max_quantity=self.settings.policy.max_quantity,
+                    llm_unavailable=unheard == _UNAVAILABLE,
+                    llm_no_reading=unheard == _NO_READING,
+                )
+
+            unread = extraction.declined or not extraction.movements
+            if answering and unread:
+                continue  # the post reads otherwise without its answer messages: answers start over
+            if unread:
+                log.info("post %s: no reply (%s)", key.ts, "declined" if extraction.declined else "not a movement")
+                # A model that did not answer, or gave no reading, says nothing about the thread: the notice says so.
+                self._conclude(
+                    post,
+                    now,
+                    DryRunOutcome.SILENT,
+                    extraction.extractor,
+                    record((), False),
+                    why="unread" if unheard else None,
+                    read=everything,
+                    changes=changes,
+                    answers=answers,
+                )
+                return True
+            if catalog is None:
+                catalog = self.catalog()
+                self.beat()  # a catalog read can take a while
+            try:
+                views = self._views(extraction, messages, poster, catalog, late)
+                reading = _digest(record(views, late))
+                if answering and reading != _row(history)[0]:
+                    continue  # the post reads otherwise: answers start over
+                effects = self._replay(key, history, reading, answers, views, answering, catalog, poster)
+                if candidate and candidate[0].id in answering:
+                    author = authors[candidate[1].ts]
+                    taken = self._take_answer(
+                        candidate, views, effects, extraction, all_messages, late, catalog, poster, author
+                    )
+                    if not taken:
+                        continue  # not an answer: a thread message, read with the post
+                    answers = self.store.post_answers_through(key)
+                    effects = self._replay(key, history, reading, answers, views, answering, catalog, poster)
+                views = self._answered(views, effects, extraction, all_messages, late)
+            except LockLost:
+                raise
+            except Exception as error:
+                self._broken(post, now, error, extraction.extractor, read=everything, changes=changes, answers=answers)
+                return True
+            break
+        if extraction is None or catalog is None:  # the last try reads every message and always ends the loop
+            raise RuntimeError("no reading after every try")
         # Stock is read last, for the parts and places as answered, and is not part of the reading: answers stay
         # with a post whose stock changed. Outside the `try`: a failed read is an outage, and the post waits.
         stock = self._read_stock(views) if effects.rejected is None else {}
@@ -709,7 +762,7 @@ class Worker:
             else:
                 body = dry_run_reply(views, parts, locations, revised=standing is not None, answered=kept is not None)
         except Exception as error:
-            self._broken(post, now, error, extraction.extractor, read=seen, changes=changes, answers=answers)
+            self._broken(post, now, error, extraction.extractor, read=everything, changes=changes, answers=answers)
             return True
         # The one question the post needs goes in the reply, with buttons whose ids are stored with it. A
         # question that cannot be put is left out: the reply still says what needs a human. A rejected reading
@@ -733,7 +786,7 @@ class Worker:
         if standing is not None and _same_reading(standing, decided):
             log.info("post %s: revision %d reads as the reply that stands", key.ts, post.revision)
             self._finish(
-                key, DryRunOutcome.UNCHANGED, extraction.extractor, decided, post.revision, seen, changes, answers
+                key, DryRunOutcome.UNCHANGED, extraction.extractor, decided, post.revision, everything, changes, answers
             )
             return True
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
@@ -742,7 +795,7 @@ class Worker:
         self._post(
             key,
             now,
-            _Sent(extraction.extractor, decided, body, post.revision, seen, changes, answers, question=asked),
+            _Sent(extraction.extractor, decided, body, post.revision, everything, changes, answers, question=asked),
         )
         return True
 
@@ -753,10 +806,15 @@ class Worker:
         reading: str,
         through: int,
         views: Sequence[MovementView],
+        typed: Mapping[int, MessageInput],
+        catalog: Catalog,
+        poster: str,
     ) -> Effects:
         """The effects of the answers given about this reading: those to questions asked by the newest dry runs
         in a row that read the post the same way, up to the newest answer known when the post was read. A dry run
-        that read it otherwise (or did not read it) ends the row: answers before it are kept, and not applied."""
+        that read it otherwise (or did not read it) ends the row: answers before it are kept, and not applied.
+        An answer by thread reply counts only while its message is kept out of the reading (`typed`, by question)
+        and is not deleted; it is read as the message is now."""
         same: set[int] = set()
         for found in reversed(history):
             if found.outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or not found.result:
@@ -764,18 +822,129 @@ class Worker:
             if _digest(found.result) != reading:
                 break
             same.add(found.revision)
-        given: list[Given] = []
+        shape = [len(view.movement.line_items) for view in views]
+        stored: list[Given | tuple[int, Question, MessageInput, str, str | None]] = []
         unreadable: list[int] = []
         for item, answer, by in self.store.answers(key, through) if same else ():
             if item.revision not in same:
                 continue
             try:
-                given.append(Given.stored(item.id, item.question, answer, by))
+                if "message" not in answer:
+                    stored.append(Given.stored(item.id, item.question, answer, by))
+                    continue
+                question = question_from_json(item.question)
+                message = typed.get(item.id)
+                if message is None or message.deleted or question.movement >= len(views):
+                    unreadable.append(item.id)  # deleted, edited since, or read with the post: asked again
+                else:
+                    stored.append((item.id, question, message, by, item.poster_id))
             except ValueError:
                 unreadable.append(item.id)
-        effects = replay(given, [len(view.movement.line_items) for view in views], self.settings.slack.approvers)
+        # A typed answer is read on the movement as the buttons left it, as it was judged: a "0" typed for a count
+        # is a quantity only once the type picked is a count.
+        types = replay([entry for entry in stored if isinstance(entry, Given)], shape, self.settings.slack.approvers)
+        given: list[Given | Typed] = []
+        for entry in stored:
+            if isinstance(entry, Given):
+                given.append(entry)
+                continue
+            item_id, question, message, by, asked_poster = entry
+            movement = views[question.movement].movement
+            if question.movement in types.types:
+                movement = replace(movement, movement_type=types.types[question.movement])
+            says = replay_typed(message.text, question, movement, catalog, poster)
+            if says is None:
+                unreadable.append(item_id)
+            else:
+                given.append(Typed(item_id, question, says, message.text, by, asked_poster))
+        effects = replay(given, shape, self.settings.slack.approvers)
         effects.ignored = sorted([*effects.ignored, *unreadable])
         return effects
+
+    def _typed(
+        self, key: PostKey, history: Sequence[DryRunRecord], messages: Sequence[MessageInput], through: int
+    ) -> dict[int, MessageInput]:
+        """The messages counted as answers to questions of the reading that stands (the newest dry runs in a row
+        that read the post the same way), by question. A message edited since it was judged is not one: it is a
+        thread message from then on, read with the post. A deleted one stays out of the reading, and its question
+        is asked again."""
+        row = _row(history)[1]
+        if not row:
+            return {}
+        by_ts = {message.ts: message for message in messages}
+        found: dict[int, MessageInput] = {}
+        for item, answer, _ in self.store.answers(key, through):
+            ts = answer.get("message")
+            message = by_ts.get(ts) if isinstance(ts, str) and item.revision in row else None
+            if message is not None and message.edited_ts == answer.get("edited"):
+                found[item.id] = message
+        return found
+
+    def _candidate(
+        self,
+        key: PostKey,
+        history: Sequence[DryRunRecord],
+        messages: Sequence[MessageInput],
+        authors: Mapping[str, str],
+        typed: Mapping[int, MessageInput],
+        changes: int,
+    ) -> tuple[ReviewItem, MessageInput, Question] | None:
+        """The open question and the message that may answer it by thread reply: the question takes one, and the
+        post is as its newest dry run read it except for this one message, posted after the reply that asked, by
+        someone who may answer. Two new messages, or an edit, and the thread is read with the post as before."""
+        item = self.store.open_question(key)
+        last = history[-1] if history else None
+        if item is None or item.message_ts is None or last is None or not last.result:
+            return None
+        if last.outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or last.changes_through != changes:
+            return None
+        try:
+            question = question_from_json(item.question)
+        except ValueError:
+            return None
+        if not takes_typed_answer(question):
+            return None
+        kept_out = {message.ts for message in typed.values()}
+        read = last.result.get("messages") or []
+        new = [message for message in messages if message.ts not in kept_out and message.ts not in read]
+        if len(new) != 1 or [m.ts for m in messages if m.ts not in kept_out and m is not new[0]] != read:
+            return None
+        message = new[0]
+        if message.deleted or not message.text.strip() or seconds(message.ts) <= seconds(item.message_ts):
+            return None
+        author = authors.get(message.ts)
+        allowed = author in self.settings.slack.approvers or (
+            not item.approver_only and item.poster_id is not None and author == item.poster_id
+        )
+        return (item, message, question) if allowed else None
+
+    def _take_answer(
+        self,
+        candidate: tuple[ReviewItem, MessageInput, Question],
+        views: Sequence[MovementView],
+        effects: Effects,
+        extraction: Extraction,
+        messages: Sequence[MessageInput],
+        late: bool,
+        catalog: Catalog,
+        poster: str,
+        author: str,
+    ) -> bool:
+        """Whether the candidate message reads cleanly as the answer to its question, judged on the reading that
+        stands with the answers given so far, and was recorded as that answer."""
+        item, message, question = candidate
+        answered = self._answered(views, effects, extraction, messages, late)
+        if not 0 <= question.movement < len(answered):
+            return False
+        movement = answered[question.movement].movement
+        if read_typed_answer(message.text, question, movement, catalog, poster) is None:
+            return False
+        result = self.store.answer_by_message(self.owner, item, message.ts, message.edited_ts, author)
+        if result is not Answered.ANSWERED:
+            log.info("post %s: thread reply not taken as an answer (%s)", item.post.ts, result.value)
+            return False
+        log.info("post %s: question answered by thread reply", item.post.ts)
+        return True
 
     def _answered(
         self,
@@ -786,12 +955,21 @@ class Worker:
         late: bool,
     ) -> list[MovementView]:
         """The views with the answers' effects: a picked type is validated again, a picked or confirmed record
-        replaces its match, and a cleared reason is left out."""
+        replaces its match, and a cleared reason is left out. A quantity or serials typed in the thread replace the
+        line's own; validation then runs again on that movement, with the answer messages' text in the post."""
         found = []
         for n, view in enumerate(views):
             movement, reasons = view.movement, view.reasons
             if n in effects.types:
                 movement = replace(movement, movement_type=effects.types[n])
+            if n in effects.retyped:
+                movement = replace(
+                    movement,
+                    line_items=tuple(
+                        _typed_line(effects, n, line, item) for line, item in enumerate(movement.line_items)
+                    ),
+                )
+            if n in effects.types or n in effects.retyped:
                 reasons = self._reasons(movement, extraction, messages, late)
             found.append(
                 MovementView(
@@ -803,7 +981,9 @@ class Worker:
                         reason
                         for reason in reasons
                         if (n, reason_line(reason, movement), reason.code, reason.detail) not in effects.cleared
+                        and (n, reason_line(reason, movement), reason.code) not in effects.settled
                     ),
+                    named={key[1]: text for key, text in effects.named.items() if key[0] == n},
                 )
             )
         return found
@@ -876,9 +1056,9 @@ class Worker:
             self._llm_waiting.pop(key, None)
             return by_rule, ""
         sent = tuple(messages)
-        earlier = self._llm_read.get(key)
-        if earlier is not None and earlier[0] == sent:
-            return earlier[1], ""
+        earlier = self._llm_read.get(key, {}).get(sent)
+        if earlier is not None:
+            return earlier, ""
         waiting = self._llm_waiting.setdefault(key, _Waiting(first=now))
         last_try = waiting.first + RETRY_FOR_SECONDS
         if not ask:
@@ -912,7 +1092,7 @@ class Worker:
             return None, ""
         self._llm_failed, self._llm_quiet_until = 0, Decimal(0)
         self._llm_waiting.pop(key, None)
-        self._llm_read[key] = (sent, read)
+        self._llm_read.setdefault(key, {})[sent] = read
         self.beat()
         # The call took a while, and an edit of this post may have come in: the reply is posted from what is
         # kept, in the next step, after the queue has been drained.
@@ -1080,11 +1260,13 @@ class Worker:
             answers=answers,
         )
 
-    def _messages(self, key: PostKey, changes: int) -> tuple[Sequence[MessageInput], str, bool] | str:
+    def _messages(
+        self, key: PostKey, changes: int
+    ) -> tuple[Sequence[MessageInput], str, bool, Mapping[str, str]] | str:
         """The post's messages as the extractor takes them, each as it is after the noted changes up to
-        `changes`, the author of the first one, and whether any of them was not delivered by Slack but found in
-        the channel history (slack/catchup.py), or edited as the history showed. A deleted message is kept,
-        marked deleted, with no text.
+        `changes`, the author of the first one, whether any of them was not delivered by Slack but found in
+        the channel history (slack/catchup.py), or edited as the history showed, and the author of each, by
+        timestamp. A deleted message is kept, marked deleted, with no text.
 
         A post is never read with a message left out or read from its original text. "unreadable" when a
         message cannot be read again (its body expired, it was grouped before the worker kept the link, or the
@@ -1110,7 +1292,7 @@ class Worker:
             return "unreadable"
         if noted or all(message.deleted for message in messages):
             return "changed"  # an edit of a thread root that is not in the post, or nothing left to read
-        return messages, authors[0], caught_up
+        return messages, authors[0], caught_up, dict(zip((m.ts for m in messages), authors, strict=True))
 
     def _decision(self, body: str | None) -> Decision | None:
         """A stored event, through the ingest checks with the current settings. None when it cannot be read."""
@@ -1165,6 +1347,38 @@ def _closed_already(blocks: Sequence[Any], closing: Mapping[str, Any]) -> bool:
         return False
     first = last["elements"][0]
     return isinstance(first, Mapping) and first.get("text") == closing["elements"][0]["text"]
+
+
+def _row(history: Sequence[DryRunRecord]) -> tuple[str | None, set[int]]:
+    """The reading that stands and the revisions of the newest dry runs in a row that read the post that way; None
+    and no revisions when the newest record kept no reading (a notice, a silent or failed one, an expired record)."""
+    reading: str | None = None
+    row: set[int] = set()
+    for found in reversed(history):
+        if found.outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or not found.result:
+            break
+        digest = _digest(found.result)
+        if reading is not None and digest != reading:
+            break
+        reading = digest
+        row.add(found.revision)
+    return reading, row
+
+
+def _typed_line(effects: Effects, movement: int, line: int, item: LineItem) -> LineItem:
+    """A line item with the quantity and serials typed for it in the thread. A quantity typed for a pack-unit
+    question counts pieces: the line's unit is the piece and its pack size is dropped. A line the post named no item
+    for takes the typed name as its item text, so "items missing" moves on to the next line without one."""
+    key = (movement, line)
+    if key in effects.named and not (item.item_text or "").strip():
+        item = replace(item, item_text=effects.named[key])
+    if key in effects.quantities:
+        item = replace(item, quantity=effects.quantities[key])
+    if key in effects.pieces:
+        item = replace(item, unit=None, pack_size=None)
+    if key in effects.serials:
+        item = replace(item, serials=effects.serials[key])
+    return item
 
 
 def _part(text: str | None, catalog: Catalog, poster: str) -> Match:
@@ -1289,6 +1503,7 @@ def _record(
                 "source": _match(view.source),
                 "destination_text": view.movement.destination_text,
                 "destination": _match(view.destination),
+                **{f"{side}_named": view.named[side] for side in ("source", "destination") if side in view.named},
                 "items": [
                     {
                         "item_text": item.item_text,
@@ -1297,11 +1512,12 @@ def _record(
                         "pack_size": _number(item.pack_size),
                         "serials": list(item.serials),
                         "part": _match(part),
+                        **({"named": view.named[line]} if line in view.named else {}),
                         # Only once stock was read: a record without it digests as records did before.
                         **({"stock": None if pick is None else _picked(pick)} if view.stock else {}),
                     }
-                    for item, part, pick in zip(
-                        view.movement.line_items, view.items, view.stock or [None] * len(view.items), strict=True
+                    for line, (item, part, pick) in enumerate(
+                        zip(view.movement.line_items, view.items, view.stock or [None] * len(view.items), strict=True)
                     )
                 ],
                 "reasons": [

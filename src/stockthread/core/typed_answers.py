@@ -136,3 +136,27 @@ def _own_unit(word: str, unit: str | None) -> bool:
     if unit is None or CONTAINER_WORDS.fullmatch(unit):
         return False
     return LENGTH_UNITS.get(word, word) == LENGTH_UNITS.get(unit.lower(), unit.lower())
+
+
+def replay_typed(
+    text: str, question: Question, movement: CandidateMovement, catalog: Catalog, poster: str
+) -> TypedAnswer | None:
+    """What a message already counted as the answer to `question` says now. Whether it counted was judged once,
+    when it was first read: a typed name is matched again against the catalog as it is now, and whatever that
+    finds is the answer (no part now: the line is unmatched, and the next question says so). A quantity or serials
+    are read as they were judged. None when the question takes no typed answer, or names a line the movement does
+    not have."""
+    if not takes_typed_answer(question):
+        return None
+    if question.ask is Ask.NAME_LOCATION:
+        return TypedAnswer(question.ask, match=match_location(text, catalog, poster))
+    if question.line is None or not 0 <= question.line < len(movement.line_items):
+        return None
+    if question.ask is Ask.NAME_PART:
+        return TypedAnswer(question.ask, match=match_part(text, catalog, poster))
+    if question.ask is Ask.QUANTITY:
+        unit = movement.line_items[question.line].unit
+        quantity = read_quantity(text, unit, zero=movement.movement_type is MovementType.COUNT)
+        return None if quantity is None else TypedAnswer(question.ask, quantity=quantity)
+    serials = tuple(token for token in _SEPARATORS.split(text.strip()) if token)
+    return TypedAnswer(question.ask, serials=serials) if serials else None

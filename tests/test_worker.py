@@ -6,7 +6,7 @@ import json
 import logging
 import sqlite3
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -24,6 +24,7 @@ from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.core.model import (
     CandidateMovement,
     Extraction,
+    Flag,
     LineItem,
     Match,
     MatchRule,
@@ -42,7 +43,7 @@ from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.slack.ingest import Drop, Revised
 from stockthread.slack.listener import Listener
 from stockthread.slack.replies import APPROVERS_ONLY, CLICK_FEEDBACK, NO_APPROVERS, MovementView
-from stockthread.store import DryRunOutcome, LockLost, NewQuestion, StateConflict, Store
+from stockthread.store import Answered, DryRunOutcome, LockLost, NewQuestion, StateConflict, Store
 from stockthread.store import db as store_db
 from stockthread.worker import (
     DRAIN_BATCH,
@@ -3906,3 +3907,334 @@ def test_a_pick_that_breaks_fails_its_post_alone(
     assert isinstance(slack, FakeSlack)
     [reply] = slack.posted
     assert "(from stock item #60)" in reply_text(reply)
+
+
+# Answers by thread reply (design section 4): the four questions without buttons are answered by writing in the
+# thread. The reply that asked is posted at 1790009999.000001 (FakeSlack), so answers come after it.
+GIZMO = "took 2 Gizmo from main stock to truck 1"  # no such part: "Which part?"
+AFTER_ASK = "1790010000.000100"
+
+
+def typed_in(store: Store, clock: Clock, worker: Worker, text: str, *, user: str = SAM, ts: str = AFTER_ASK) -> None:
+    enqueue(store, message(ts, text, user=user, thread_ts=ROOT))
+    clock.at(f"{int(Decimal(ts)) + 60}.000000")
+    worker.step()
+
+
+def newest_result(store: Store) -> Mapping[str, Any]:
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    return record.result
+
+
+def test_a_part_named_in_the_thread_answers_which_part_and_is_kept_out_of_the_reading(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    [item] = store.questions(KEY)
+    assert item.question["ask"] == "name_part"
+    typed_in(store, clock, worker, "Disc 40")
+    [item] = store.questions(KEY)
+    assert item.status.value == "answered"
+    assert store.answer(item.id) == ({"message": AFTER_ASK, "edited": None}, SAM)  # the ts, never the text
+    result = newest_result(store)
+    assert result["messages"] == [ROOT]  # the extractor never read the answer
+    assert result["answers"] == [item.id]
+    line = result["movements"][0]["items"][0]
+    assert line["item_text"] == "Gizmo"  # the post's own words stay
+    assert line["named"] == "Disc 40"
+    assert line["part"] == {"status": "matched", "rule": "exact", "record": 1, "candidates": []}
+    revised = worker.slack.posted[-1]  # type: ignore[attr-defined]
+    assert "a question was answered" in reply_text(revised)
+    assert "named in the thread as" in reply_text(revised)
+    assert "this could apply" in reply_text(revised)
+    worker.step()
+    assert len(worker.slack.posted) == 2  # type: ignore[attr-defined]  # applied once
+    with sqlite3.connect(path) as raw:
+        assert raw.execute("SELECT actor FROM audit_log WHERE event = 'question_answered'").fetchall() == [("human",)]
+
+
+def test_a_quantity_typed_in_the_thread_replaces_a_vague_one_and_clears_its_reason(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, "took a few Disc 40 from main stock to truck 1")
+    [item] = store.questions(KEY)
+    assert item.question["ask"] == "quantity"
+    typed_in(store, clock, worker, "3 pcs")
+    movement = newest_result(store)["movements"][0]
+    assert movement["items"][0]["quantity"] == "3"
+    assert movement["reasons"] == []
+    assert "this could apply" in reply_text(worker.slack.posted[-1])  # type: ignore[attr-defined]
+
+
+def test_a_place_named_in_the_thread_answers_where_from(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, "took 2 Disc 40 to truck 1")
+    [item] = store.questions(KEY)
+    assert (item.question["ask"], item.question["side"]) == ("name_location", "source")
+    typed_in(store, clock, worker, "main stock")
+    movement = newest_result(store)["movements"][0]
+    assert movement["source_text"] is None
+    assert movement["source_named"] == "main stock"
+    assert movement["source"]["record"] == 10
+    assert movement["reasons"] == []
+
+
+@pytest.mark.parametrize(
+    ("text", "user"),
+    [
+        ("Disc 40", RIVER),  # reads cleanly, but neither the poster nor an approver wrote it
+        ("ok thanks", SAM),  # does not read cleanly as a part
+        ("Disc 40 and ONT 100", SAM),  # nor does a list
+    ],
+)
+def test_a_message_that_is_not_an_answer_is_read_with_the_post(
+    store: Store, clock: Clock, text: str, user: str
+) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    typed_in(store, clock, worker, text, user=user)
+    [item] = store.questions(KEY)
+    assert item.status.value == "stale"  # the rules decline the thread as it reads now: the reply is taken back
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.outcome is DryRunOutcome.RETRACTED
+
+
+def test_an_approver_may_answer_by_thread_reply(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    typed_in(store, clock, worker, "ONT 100", user=LUIS)
+    [item] = store.questions(KEY)
+    assert store.answer(item.id) == ({"message": AFTER_ASK, "edited": None}, LUIS)
+    assert newest_result(store)["movements"][0]["items"][0]["part"]["record"] == 2
+
+
+def test_a_typed_answer_counts_only_from_someone_who_is_an_approver_when_it_is_applied(
+    store: Store, clock: Clock
+) -> None:
+    worker = asked(store, clock, CATALOG, "took 2 Gizmo and 3 Gadget from main stock to truck 1")
+    typed_in(store, clock, worker, "ONT 100", user=LUIS)  # taken while Luis is an approver
+    [first, second] = store.questions(KEY)
+    assert first.status.value == "answered"
+    assert second.question["ask"] == "name_part"
+    worker.settings = settings()  # Luis is an approver no longer
+    typed_in(store, clock, worker, "Disc 40", ts="1790010400.000100")  # the poster answers the next one
+    result = newest_result(store)
+    assert result["answers"] == [second.id]
+    assert result["ignored"] == [first.id]
+    [line, other] = result["movements"][0]["items"]
+    assert line["part"]["record"] is None  # which part is asked again
+    assert other["part"]["record"] == 1
+    [*_, again] = store.questions(KEY)
+    assert (again.question["ask"], again.question["line"], again.status.value) == ("name_part", 0, "open")
+
+
+def test_two_new_messages_at_once_are_read_with_the_post(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    enqueue(store, message("1790010000.000050", "one sec", thread_ts=ROOT))
+    typed_in(store, clock, worker, "Disc 40")
+    [item] = store.questions(KEY)
+    assert item.status.value == "stale"
+
+
+def test_an_edited_answer_is_a_thread_message_from_then_on(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    typed_in(store, clock, worker, "Disc 40")
+    [item] = store.questions(KEY)
+    enqueue(store, edit_of(AFTER_ASK, "1790010200.000100", "Disc 40", "ONT 100"))
+    clock.at("1790010300.000000")
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.outcome is DryRunOutcome.RETRACTED  # read with the post, which the rules then decline
+    assert record.result is not None
+    assert record.result["messages"] == [ROOT, AFTER_ASK]
+    assert store.answer(item.id) is not None  # the answer stays in the audit trail
+
+
+def test_a_deleted_answer_is_no_answer_and_its_question_is_asked_again(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    typed_in(store, clock, worker, "Disc 40")
+    [first] = store.questions(KEY)
+    enqueue(store, deletion_of(AFTER_ASK, "1790010200.000100"))
+    clock.at("1790010300.000000")
+    worker.step()
+    result = newest_result(store)
+    assert result["answers"] == []
+    assert result["ignored"] == [first.id]
+    assert result["movements"][0]["items"][0]["part"]["status"] == "unmatched"
+    _, second = store.questions(KEY)
+    assert (second.status.value, second.question["ask"]) == ("open", "name_part")
+
+
+def test_a_question_with_buttons_takes_no_typed_answer(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock)  # "Which of these parts?" with buttons
+    typed_in(store, clock, worker, "Disc 40 Pro")
+    [item] = store.questions(KEY)
+    assert item.status.value == "stale"
+
+
+def test_an_answer_then_a_part_named_again_answers_the_next_question(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, "took 2 Gizmo and 3 Doohickey from main stock to truck 1")
+    first_ask = store.questions(KEY)[0].question
+    assert (first_ask["ask"], first_ask["line"]) == ("name_part", 0)
+    typed_in(store, clock, worker, "Disc 40")
+    _, second = store.questions(KEY)
+    assert (second.question["ask"], second.question["line"]) == ("name_part", 1)
+    typed_in(store, clock, worker, "ONT 100", ts="1790020000.000100")
+    result = newest_result(store)
+    assert result["messages"] == [ROOT]
+    assert [line["part"]["record"] for line in result["movements"][0]["items"]] == [1, 2]
+    assert len(result["answers"]) == 2
+
+
+def test_a_quantity_typed_for_a_pack_unit_question_counts_pieces(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, "took 2 boxes of Disc 40 from main stock to truck 1")
+    [item] = store.questions(KEY)
+    assert (item.question["ask"], item.question["reason"]) == ("quantity", "pack_unit_ambiguous")
+    typed_in(store, clock, worker, "24")
+    line = newest_result(store)["movements"][0]["items"][0]
+    assert (line["quantity"], line["unit"], line["pack_size"]) == ("24", None, None)
+    assert newest_result(store)["movements"][0]["reasons"] == []
+    assert "24 box" not in reply_text(worker.slack.posted[-1])  # type: ignore[attr-defined]
+
+
+def serial_reading() -> Extraction:
+    movement = CandidateMovement(
+        MovementType.TAKE_TO_VEHICLE,
+        (LineItem("ONT 100", Decimal(2), serials=("SN-1", "SN-2")),),
+        "main stock",
+        "truck 1",
+        frozenset({Flag.SERIAL_UNCONFIRMED}),
+    )
+    return Extraction(MODEL, (movement,))
+
+
+def test_serials_typed_in_the_thread_replace_unconfirmed_ones(store: Store, clock: Clock) -> None:
+    llm = FakeLLM(serial_reading())
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, llm=llm)
+    enqueue(store, message(ROOT, "shuffled 2 ONT 100 from main stock to truck 1"))
+    for at in ("1790000030.000000", "1790000040.000000", "1790000050.000000"):
+        clock.at(at)
+        worker.step()
+    [item] = store.questions(KEY)
+    assert item.question["ask"] == "serials"
+    typed_in(store, clock, worker, "SN-0001A, SN-0002B")
+    assert len(llm.calls) == 1  # the reading that stands is kept: the model never reads the answer
+    line = newest_result(store)["movements"][0]["items"][0]
+    assert line["serials"] == ["SN-0001A", "SN-0002B"]
+    assert all(reason["code"] != "serial_unconfirmed" for reason in newest_result(store)["movements"][0]["reasons"])
+
+
+def vague_reading() -> Extraction:
+    movement = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", None),), "main stock", "truck 1")
+    return Extraction(MODEL, (movement,))
+
+
+def test_a_message_that_reads_the_same_leaves_the_question_open_for_a_later_answer(store: Store, clock: Clock) -> None:
+    # "one sec, checking" is read with the post, which reads as before; then "3" answers. A "thanks" after the
+    # answer is read with the post too, without the answer message, and the answer stands.
+    llm = FakeLLM(vague_reading(), vague_reading(), vague_reading())
+    slack = FakeSlack()
+    worker = Worker(approving(), store, OWNER, slack, lambda: CATALOG, clock, llm=llm)
+    enqueue(store, message(ROOT, "shuffled some Disc 40 from main stock to truck 1"))
+    for at in ("1790000030.000000", "1790000040.000000", "1790000050.000000"):
+        clock.at(at)
+        worker.step()
+    [item] = store.questions(KEY)
+    assert item.question["ask"] == "quantity"
+    for ts, text in (("1790010000.000100", "one sec, checking"), ("1790010100.000100", "3")):
+        enqueue(store, message(ts, text, thread_ts=ROOT))
+        for later in (60, 70, 80):
+            clock.at(f"{int(Decimal(ts)) + later}.000000")
+            worker.step()
+    [item] = store.questions(KEY)
+    assert store.answer(item.id) == ({"message": "1790010100.000100", "edited": None}, SAM)
+    assert newest_result(store)["movements"][0]["items"][0]["quantity"] == "3"
+    assert len(slack.posted) == 2  # "one sec" changed nothing; the answer revised the reply
+    enqueue(store, message("1790010200.000100", "thanks", thread_ts=ROOT))
+    for later in (60, 70, 80):
+        clock.at(f"{1790010200 + later}.000000")
+        worker.step()
+    assert llm.calls[-1] == ["shuffled some Disc 40 from main stock to truck 1", "one sec, checking", "thanks"]
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.outcome is DryRunOutcome.UNCHANGED
+    assert newest_result(store)["answers"] == [item.id]
+    assert len(slack.posted) == 2
+
+
+def test_a_thread_reply_answer_is_refused_when_another_message_joined(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    [item] = store.questions(KEY)
+    enqueue(store, message(AFTER_ASK, "Disc 40", thread_ts=ROOT))
+    enqueue(store, message("1790010000.000200", "ok", thread_ts=ROOT))
+    worker.drain()
+    assert store.answer_by_message(OWNER, item, AFTER_ASK, None, SAM) is Answered.POST_CHANGED
+    assert store.answer_by_message(OWNER, item, "1790010000.000200", None, SAM) is Answered.POST_CHANGED
+
+
+def test_a_thread_reply_answer_is_recorded_once(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    [item] = store.questions(KEY)
+    enqueue(store, message(AFTER_ASK, "Disc 40", thread_ts=ROOT))
+    worker.drain()
+    assert store.answer_by_message(OWNER, item, AFTER_ASK, None, SAM) is Answered.ANSWERED
+    assert store.answer_by_message(OWNER, item, AFTER_ASK, None, SAM) is Answered.NOT_OPEN
+
+
+def test_once_the_post_reads_otherwise_the_answer_message_is_read_with_it_again(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    typed_in(store, clock, worker, "Disc 40")
+    enqueue(store, edit_of(ROOT, "1790010200.000100", GIZMO, "took 3 Gizmo from main stock to truck 1"))
+    clock.at("1790010300.000000")
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["messages"] == [ROOT, AFTER_ASK]  # answers start over: "Disc 40" is a thread message
+    assert record.outcome is DryRunOutcome.RETRACTED  # which the rules then decline
+
+
+def llm_asked(store: Store, clock: Clock, reading: Extraction, text: str = SHUFFLED) -> tuple[Worker, FakeSlack]:
+    slack = FakeSlack()
+    worker = Worker(approving(), store, OWNER, slack, lambda: CATALOG, clock, llm=FakeLLM(reading))
+    enqueue(store, message(ROOT, text))
+    for at in ("1790000030.000000", "1790000040.000000", "1790000050.000000"):
+        clock.at(at)
+        worker.step()
+    return worker, slack
+
+
+def test_a_zero_typed_after_count_was_picked_is_replayed_on_the_count(store: Store, clock: Clock) -> None:
+    movement = CandidateMovement(MovementType.UNCLEAR, (LineItem("Disc 40", None),), None, "main stock")
+    worker, slack = llm_asked(store, clock, Extraction(MODEL, (movement,)), "counted the Disc 40 in main stock")
+    [item] = store.questions(KEY)
+    assert item.question["ask"] == "movement_type"
+    count = [kind for kind in MovementType if kind is not MovementType.UNCLEAR].index(MovementType.COUNT)
+    clicked(store, click_on(slack.posted[0], "1790009999.000001", count, SAM), "1")
+    worker.step()
+    _, second = store.questions(KEY)
+    assert second.question["ask"] == "quantity"
+    typed_in(store, clock, worker, "0", ts="1790020000.000100")
+    _, second = store.questions(KEY)
+    assert store.answer(second.id) is not None
+    result = newest_result(store)
+    assert result["movements"][0]["type"] == "count"
+    assert result["movements"][0]["items"][0]["quantity"] == "0"
+    assert second.id in result["answers"]
+
+
+def test_a_part_named_for_a_line_without_an_item_moves_on_to_the_next_such_line(store: Store, clock: Clock) -> None:
+    movement = CandidateMovement(
+        MovementType.TAKE_TO_VEHICLE,
+        (LineItem(None, Decimal(2)), LineItem(None, Decimal(3))),
+        "main stock",
+        "truck 1",
+    )
+    worker, _ = llm_asked(store, clock, Extraction(MODEL, (movement,)), "shuffled 2 and 3 from main stock to truck 1")
+    [first] = store.questions(KEY)
+    assert (first.question["ask"], first.question["line"]) == ("name_part", 0)
+    typed_in(store, clock, worker, "Disc 40")
+    movement_now = newest_result(store)["movements"][0]
+    assert [line["item_text"] for line in movement_now["items"]] == ["Disc 40", None]
+    # "Items missing" is still raised, now about the second line (it was settled away for good before).
+    assert "items_missing" in [reason["code"] for reason in movement_now["reasons"]]
+    assert movement_now["items"][1]["part"]["status"] == "unmatched"

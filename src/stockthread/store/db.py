@@ -912,7 +912,53 @@ class Store:
             self._audit(Actor.HUMAN, "question_answered", post_id=post_id)
             return Answered.ANSWERED
 
-    def _moved_on(self, post_id: int, revision: int) -> bool:
+    def answer_by_message(self, owner: str, item: ReviewItem, ts: str, edited: str | None, user: str) -> Answered:
+        """Record `user`'s message `ts` in the post's thread as the answer to `item`, once (design section 4,
+        "Answers by thread reply"). The caller judges the message and who may answer first. Only the message's
+        timestamp is stored, with the stamp of the edit it was judged as (`edited`), never its text: on replay it is
+        read as it is then, and an edit since makes it a thread message.
+
+        Refused, as for a click, when the question is no longer open or has expired, or when the post has moved on
+        from the dry run that asked it, except by the answer message itself: it must be the one message read by no
+        dry run yet.
+        """
+        with self._transaction():
+            self._check_lock(owner)
+            post_id = self._post_id(item.post)
+            row = self._db.execute(
+                "SELECT revision, expired_at FROM review_items WHERE id = ? AND post_id = ? AND status = 'open'",
+                (item.id, post_id),
+            ).fetchone()
+            if post_id is None or row is None:
+                return Answered.NOT_OPEN
+            if row[1] is not None:
+                return Answered.EXPIRED
+            if self._moved_on(post_id, int(row[0]), answer_ts=ts):
+                return Answered.POST_CHANGED
+            self._db.execute(
+                "UPDATE review_items SET status = 'answered', answer = ?, answered_by = ?, closed_at = ?"
+                " WHERE id = ? AND status = 'open'",
+                (_json({"message": ts, "edited": edited}), user, self._now(), item.id),
+            )
+            self._audit(Actor.HUMAN, "question_answered", post_id=post_id)
+            return Answered.ANSWERED
+
+    def open_question(self, key: PostKey) -> ReviewItem | None:
+        """The post's open question, or None (a post has one at most). An expired one is still open."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        row = self._db.execute(
+            "SELECT id, revision, question, approver_only, channel_id, message_ts, status, poster_id, expires_from"
+            " FROM review_items WHERE post_id = ? AND status = 'open'",
+            (post_id,),
+        ).fetchone()
+        return None if row is None else _review_item(key, row)
+
+    def _moved_on(self, post_id: int, revision: int, *, answer_ts: str | None = None) -> bool:
+        """Whether the post moved on from the dry run `revision`: a later one read it otherwise, or a message joined
+        or changed since the newest one. With `answer_ts`, that message must be the one that joined, and the only
+        one."""
         records = self._db.execute(
             "SELECT 1, read_through, changes_through, outcome FROM dry_runs WHERE post_id = ?1 UNION ALL"
             " SELECT revision, read_through, changes_through, outcome FROM dry_run_revisions WHERE post_id = ?1"
@@ -922,8 +968,11 @@ class Store:
         if not records or any(rev > revision and outcome != "unchanged" for rev, _, _, outcome in records):
             return True
         _, through, changes, _ = records[-1]
-        newest = self._db.execute("SELECT max(id) FROM post_messages WHERE post_id = ?", (post_id,)).fetchone()[0]
-        return bool(newest > through or self._changes_through(post_id) > changes)
+        if self._changes_through(post_id) > changes:
+            return True
+        joined = self._db.execute("SELECT ts FROM post_messages WHERE post_id = ? AND id > ?", (post_id, through))
+        found = [row[0] for row in joined.fetchall()]
+        return found != ([] if answer_ts is None else [answer_ts])
 
     def expire_questions(self, owner: str, before: Decimal) -> int:
         """Mark open questions whose plan expiry counts from before `before` (Slack seconds) as expired, so their
