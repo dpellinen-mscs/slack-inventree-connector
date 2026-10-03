@@ -158,6 +158,8 @@ TAKE_DOWN_BACKOFF_SECONDS = 60
 failure), or for as long as Slack asks, if longer."""
 NOTE_QUIET_SECONDS = 60
 """After a note to a clicker fails, no note is sent for this long: a slow Slack never holds the queue up."""
+MAX_NOTED = 1000
+"""Thread replies remembered as told (`Worker._note_not_allowed`); the memory starts over beyond this."""
 HEARTBEAT_SECONDS = 10.0
 """The worker beats the instance lock at most this often, before each batch and each post, so one long step
 (Slack or InvenTree slow to answer) never lets the lock look stale."""
@@ -321,6 +323,8 @@ class Worker:
     """What to tell the clicker about the event being handled."""
     _notes_quiet_until: Decimal = Decimal(0)
     """A note failed: no note is sent before this time."""
+    _noted: set[tuple[str, str]] = field(default_factory=set)
+    """(channel, ts): thread replies whose author was told they may not answer."""
     _take_down_quiet_until: Decimal = Decimal(0)
     """No buttons are taken down before this time."""
 
@@ -434,12 +438,13 @@ class Worker:
             self._feedback = _Feedback(click.channel, click.user, click.thread_ts or click.message_ts, text)
         return status, outcome
 
-    def _tell(self, event_id: int, feedback: _Feedback) -> None:
-        """Send a note to the clicker. Best effort: the click is finished already. A note that fails is logged
-        and not tried again, and no note is sent for NOTE_QUIET_SECONDS after it."""
+    def _tell(self, event_id: int | str, feedback: _Feedback, what: str = "click feedback") -> None:
+        """Send a note to the clicker (or to the author of a thread reply). Best effort: the click is finished
+        already. A note that fails is logged and not tried again, and no note is sent for NOTE_QUIET_SECONDS after
+        it."""
         now = self._now()
         if now < self._notes_quiet_until:
-            log.info("click feedback %s: not sent, a recent note failed", event_id)
+            log.info("%s %s: not sent, a recent note failed", what, event_id)
             return
         self.beat()  # the note has its own deadline (run.NOTE_DEADLINE_SECONDS)
         try:
@@ -447,7 +452,7 @@ class Worker:
                 channel=feedback.channel, user=feedback.user, thread_ts=feedback.thread_ts, text=feedback.text
             )
         except Exception as error:
-            _log_failure("click feedback", event_id, error)
+            _log_failure(what, event_id, error)
             self._notes_quiet_until = now + NOTE_QUIET_SECONDS
 
     def take_down_buttons(self) -> int:
@@ -730,7 +735,7 @@ class Worker:
                         candidate, views, effects, extraction, all_messages, late, catalog, poster, author
                     )
                     if not taken:
-                        continue  # not an answer: a thread message, read with the post
+                        continue  # not an answer, or not from someone who may answer: read with the post
                     answers = self.store.post_answers_through(key)
                     effects = self._replay(key, history, reading, answers, views, answering, catalog, poster)
                 views = self._answered(views, effects, extraction, all_messages, late)
@@ -888,10 +893,11 @@ class Worker:
         authors: Mapping[str, str],
         typed: Mapping[int, MessageInput],
         changes: int,
-    ) -> tuple[ReviewItem, MessageInput, Question] | None:
-        """The open question and the message that may answer it by thread reply: the question takes one, and the
-        post is as its newest dry run read it except for this one message, posted after the reply that asked, by
-        someone who may answer. Two new messages, or an edit, and the thread is read with the post as before."""
+    ) -> tuple[ReviewItem, MessageInput, Question, bool] | None:
+        """The open question and the message that may answer it by thread reply, and whether its author may answer
+        it: the question takes one, and the post is as its newest dry run read it except for this one message,
+        posted after the reply that asked. Two new messages, or an edit, and the thread is read with the post as
+        before. A message whose author may not answer is a thread message; it is judged only to tell its author."""
         item = self.store.open_question(key)
         last = history[-1] if history else None
         if item is None or item.message_ts is None or last is None or not last.result:
@@ -913,14 +919,16 @@ class Worker:
         if message.deleted or not message.text.strip() or seconds(message.ts) <= seconds(item.message_ts):
             return None
         author = authors.get(message.ts)
+        if author is None:
+            return None
         allowed = author in self.settings.slack.approvers or (
             not item.approver_only and item.poster_id is not None and author == item.poster_id
         )
-        return (item, message, question) if allowed else None
+        return item, message, question, allowed
 
     def _take_answer(
         self,
-        candidate: tuple[ReviewItem, MessageInput, Question],
+        candidate: tuple[ReviewItem, MessageInput, Question, bool],
         views: Sequence[MovementView],
         effects: Effects,
         extraction: Extraction,
@@ -932,12 +940,15 @@ class Worker:
     ) -> bool:
         """Whether the candidate message reads cleanly as the answer to its question, judged on the reading that
         stands with the answers given so far, and was recorded as that answer."""
-        item, message, question = candidate
+        item, message, question, allowed = candidate
         answered = self._answered(views, effects, extraction, messages, late)
         if not 0 <= question.movement < len(answered):
             return False
         movement = answered[question.movement].movement
         if read_typed_answer(message.text, question, movement, catalog, poster) is None:
+            return False
+        if not allowed:
+            self._note_not_allowed(item, message, author)
             return False
         result = self.store.answer_by_message(self.owner, item, message.ts, message.edited_ts, author)
         if result is not Answered.ANSWERED:
@@ -945,6 +956,25 @@ class Worker:
             return False
         log.info("post %s: question answered by thread reply", item.post.ts)
         return True
+
+    def _note_not_allowed(self, item: ReviewItem, message: MessageInput, author: str) -> None:
+        """Tell the author of a message that reads cleanly as the answer, but who may not answer, why it was not
+        taken: the note a click would get. Once per message while the worker runs; a restart may tell them again."""
+        noted = (item.channel_id, message.ts)
+        if noted in self._noted or self.stopping():
+            return
+        if len(self._noted) >= MAX_NOTED:
+            self._noted.clear()
+        self._noted.add(noted)
+        log.info("post %s: thread reply from someone who may not answer", item.post.ts)
+        text = click_feedback(
+            "not_allowed",
+            approver_only=item.approver_only,
+            approvers=bool(self.settings.slack.approvers),
+            expiry_hours=self.settings.slack.plan_expiry_hours,
+        )
+        if text is not None:
+            self._tell(item.post.ts, _Feedback(item.channel_id, author, item.post.ts, text), "reply feedback")
 
     def _answered(
         self,

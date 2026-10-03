@@ -760,10 +760,11 @@ needs.
     - *Then.* As for a click: the post is due at once, the revised dry run
       shows the result and asks the next question, and the question is
       taken out of its reply, which says who answered. The answer message
-      gets no ephemeral note when it counts. (Designed, not built yet: a
-      message that reads cleanly but comes from someone who may not answer
-      gets the same note a click would, "poster or approver only". Today
-      it is read with the post and gets no note.)
+      gets no ephemeral note when it counts. A message that reads cleanly
+      but comes from someone who may not answer is read with the post, and
+      its author gets the note a click would, "poster or approver only"
+      (or "approvers only"): once per message while the worker runs, best
+      effort, so a restart while the post waits may tell them again.
     - *Limits.* As for buttons: an answer never authorizes a write. On
       every replay a typed answer counts only while its author is the
       poster stored with the question or an approver then, so an answer

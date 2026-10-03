@@ -3979,15 +3979,17 @@ def test_a_place_named_in_the_thread_answers_where_from(store: Store, clock: Clo
 
 
 @pytest.mark.parametrize(
-    ("text", "user"),
+    ("text", "user", "told"),
     [
-        ("Disc 40", RIVER),  # reads cleanly, but neither the poster nor an approver wrote it
-        ("ok thanks", SAM),  # does not read cleanly as a part
-        ("Disc 40 and ONT 100", SAM),  # nor does a list
+        # reads cleanly, but neither the poster nor an approver wrote it: they are told why, as for a click
+        ("Disc 40", RIVER, [(RIVER, CLICK_FEEDBACK["not_allowed"])]),
+        ("ok thanks", SAM, []),  # does not read cleanly as a part
+        ("Disc 40 and ONT 100", SAM, []),  # nor does a list
+        ("ok thanks", RIVER, []),  # nobody is told about a message that is no answer
     ],
 )
 def test_a_message_that_is_not_an_answer_is_read_with_the_post(
-    store: Store, clock: Clock, text: str, user: str
+    store: Store, clock: Clock, text: str, user: str, told: list[tuple[str, str]]
 ) -> None:
     worker = asked(store, clock, CATALOG, GIZMO)
     typed_in(store, clock, worker, text, user=user)
@@ -3996,6 +3998,48 @@ def test_a_message_that_is_not_an_answer_is_read_with_the_post(
     record = store.dry_run(KEY)
     assert record is not None
     assert record.outcome is DryRunOutcome.RETRACTED
+    assert record.result is not None
+    assert AFTER_ASK in record.result["messages"]
+    assert notes(worker) == told
+
+
+def test_someone_who_may_not_answer_is_told_once_per_message(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    typed_in(store, clock, worker, "Disc 40", user=RIVER)
+    worker._noted.clear()  # forgotten, as after a restart: the message was read with the post and is judged no more
+    clock.at("1790010300.000000")
+    worker.step()
+    assert notes(worker) == [(RIVER, CLICK_FEEDBACK["not_allowed"])]
+
+
+def test_someone_who_may_not_answer_is_told_once_while_the_post_waits_for_the_model(
+    store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    down = ProviderError("the provider answered HTTP 503")
+    llm = FakeLLM(read(item="Gizmo"), down, read(item="Gizmo"))
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, "handed off 2 Gizmo from main stock to truck 1"))  # the rules decline it
+    read_and_answered(worker, clock)
+    [item] = store.questions(LLM_KEY)
+    assert item.question["ask"] == "name_part"
+    enqueue(store, message(AFTER_ASK, "Disc 40", user=RIVER, thread_ts=ROOT))
+    for at in range(1790010100, 1790010110):  # judged, read with the post, the model is down, then tried again
+        clock.at(f"{at}.000000")
+        worker.step()
+    assert len(llm.calls) == 3
+    assert notes(worker) == [(RIVER, CLICK_FEEDBACK["not_allowed"])]
+
+
+def test_a_note_to_someone_who_may_not_answer_that_fails_is_not_tried_again(store: Store, clock: Clock) -> None:
+    worker = asked(store, clock, CATALOG, GIZMO)
+    slack = worker.slack
+    assert isinstance(slack, FakeSlack)
+    slack.note_failures = 1
+    typed_in(store, clock, worker, "Disc 40", user=RIVER)
+    assert notes(worker) == []
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.outcome is DryRunOutcome.RETRACTED  # the reply is decided whatever became of the note
 
 
 def test_an_approver_may_answer_by_thread_reply(store: Store, clock: Clock) -> None:
