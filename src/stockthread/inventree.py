@@ -174,7 +174,10 @@ class InvenTreeReader:
         rows = await self.list_all("/api/stock/track/", {"search": marker_id})
         # Offset paging over rows that tie on the ordering can repeat one row and skip another with the same count.
         # A repeated pk proves a skip, and a skipped entry could be the one that proves the write.
-        if len({row.get("pk") for row in rows}) != len(rows):
+        pks = [row.get("pk") for row in rows]
+        if not all(pk is None or isinstance(pk, int) for pk in pks):
+            raise InvenTreeError("GET /api/stock/track/: an entry has a pk that is not a number")
+        if len(set(pks)) != len(rows):
             raise InvenTreeError("GET /api/stock/track/: an entry came back twice, so another may have been skipped")
         found: list[MarkedEntry] = []
         for row in rows:

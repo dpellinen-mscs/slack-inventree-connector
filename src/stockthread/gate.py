@@ -10,7 +10,9 @@ Validation is `plan_requests`: a plan it refuses is blocked whole. The policy th
 - The policy approves it with no click when every movement's type is in `policy.auto_apply` and nothing about the
   plan came from a person or from a loose rule: no answer was applied to it, every part and place was
   found by the exact, normalized or alias rule, and a vehicle is the poster's mapped vehicle or was found by its
-  exact location name (ADR 0004; a learned alias for a vehicle still waits). A model flag is a review reason and
+  exact location name (ADR 0004; a learned alias for a vehicle still waits). A vehicle is the destination of a take
+  to a vehicle, or any source or destination that is someone's mapped vehicle; an unmapped vehicle a take to a site
+  starts from cannot be told from a shelf. A model flag is a review reason and
   blocks before this.
 """
 
@@ -78,6 +80,7 @@ def judge(
     answered: bool,
     rejected: bool,
     poster_vehicle: int | None,
+    vehicles: Collection[int],
     clicked_by: str | None = None,
 ) -> Judgement:
     """Judge one plan of a post.
@@ -85,7 +88,7 @@ def judge(
     `answered`: any answer was applied to the plan, by button or typed reply, including a stock choice (it is
     then never automatic). This flag is the only safeguard for typed and stock answers: a typed name keeps the
     matcher's own rule, and a stock choice changes no match. `poster_vehicle`: the location of the vehicle
-    mapped to the poster, if any. `rejected`: a "no" ended
+    mapped to the poster, if any. `vehicles`: the locations of every mapped vehicle. `rejected`: a "no" ended
     the plan. `clicked_by`: who clicked Apply on it, if anyone. The requests' notes name the approver, or the poster
     when the policy approved it.
     """
@@ -100,13 +103,18 @@ def judge(
         return Judgement(Verdict.BLOCKED, f"not decided: {error}")
     if approver is not None:
         return Judgement(Verdict.ALLOWED, "approved by an approver", approver, requests)
-    if why := _not_automatic(views, policy, answered=answered, poster_vehicle=poster_vehicle):
+    if why := _not_automatic(views, policy, answered=answered, poster_vehicle=poster_vehicle, vehicles=vehicles):
         return Judgement(Verdict.WAITS, why)
     return Judgement(Verdict.ALLOWED, "approved by the policy", None, requests)
 
 
 def _not_automatic(
-    views: Sequence[MovementView], policy: Policy, *, answered: bool, poster_vehicle: int | None
+    views: Sequence[MovementView],
+    policy: Policy,
+    *,
+    answered: bool,
+    poster_vehicle: int | None,
+    vehicles: Collection[int],
 ) -> str | None:
     """Why the policy may not approve this decided plan without a click, or None."""
     if answered:
@@ -122,8 +130,14 @@ def _not_automatic(
         for match in (view.source, view.destination):
             if match is not None and not _by(match, _AUTOMATIC_RULES):
                 return f"movement {number}: a place was not found by an exact, normalized or alias rule"
-        if movement.movement_type is MovementType.TAKE_TO_VEHICLE and not _vehicle(view.destination, poster_vehicle):
-            return f"movement {number}: the vehicle is not the poster's mapped vehicle or found by its exact name"
+        to_vehicle = movement.movement_type is MovementType.TAKE_TO_VEHICLE
+        vehicle_places = [
+            match
+            for match, must in ((view.source, False), (view.destination, to_vehicle))
+            if must or (match is not None and match.record in vehicles)
+        ]
+        if not all(_vehicle(match, poster_vehicle) for match in vehicle_places):
+            return f"movement {number}: a vehicle is not the poster's mapped vehicle or found by its exact name"
     return None
 
 
