@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal, localcontext
+from decimal import MAX_EMAX, MIN_EMIN, Decimal, localcontext
 from typing import Any
 
 from stockthread.core.marker import Marker
@@ -126,6 +126,9 @@ def _decimal(quantity: Decimal) -> str:
 
 
 def _normal(quantity: Decimal) -> Decimal:
-    """`quantity` without trailing zeros, never rounded: `normalize` rounds to the context's precision (28 digits)."""
-    with localcontext(prec=max(28, len(quantity.as_tuple().digits))):
+    """`quantity` without trailing zeros, never rounded.
+
+    `normalize` rounds to the context's precision (28 digits) and its exponent range (1E-1000030 would become 0).
+    """
+    with localcontext(prec=max(28, len(quantity.as_tuple().digits)), Emin=MIN_EMIN, Emax=MAX_EMAX):
         return quantity.normalize()
