@@ -4171,3 +4171,50 @@ def test_once_the_post_reads_otherwise_the_answer_message_is_read_with_it_again(
     assert record.result is not None
     assert record.result["messages"] == [ROOT, AFTER_ASK]  # answers start over: "Disc 40" is a thread message
     assert record.outcome is DryRunOutcome.RETRACTED  # which the rules then decline
+
+
+def llm_asked(store: Store, clock: Clock, reading: Extraction, text: str = SHUFFLED) -> tuple[Worker, FakeSlack]:
+    slack = FakeSlack()
+    worker = Worker(approving(), store, OWNER, slack, lambda: CATALOG, clock, llm=FakeLLM(reading))
+    enqueue(store, message(ROOT, text))
+    for at in ("1790000030.000000", "1790000040.000000", "1790000050.000000"):
+        clock.at(at)
+        worker.step()
+    return worker, slack
+
+
+def test_a_zero_typed_after_count_was_picked_is_replayed_on_the_count(store: Store, clock: Clock) -> None:
+    movement = CandidateMovement(MovementType.UNCLEAR, (LineItem("Disc 40", None),), None, "main stock")
+    worker, slack = llm_asked(store, clock, Extraction(MODEL, (movement,)), "counted the Disc 40 in main stock")
+    [item] = store.questions(KEY)
+    assert item.question["ask"] == "movement_type"
+    count = [kind for kind in MovementType if kind is not MovementType.UNCLEAR].index(MovementType.COUNT)
+    clicked(store, click_on(slack.posted[0], "1790009999.000001", count, SAM), "1")
+    worker.step()
+    _, second = store.questions(KEY)
+    assert second.question["ask"] == "quantity"
+    typed_in(store, clock, worker, "0", ts="1790020000.000100")
+    _, second = store.questions(KEY)
+    assert store.answer(second.id) is not None
+    result = newest_result(store)
+    assert result["movements"][0]["type"] == "count"
+    assert result["movements"][0]["items"][0]["quantity"] == "0"
+    assert second.id in result["answers"]
+
+
+def test_a_part_named_for_a_line_without_an_item_moves_on_to_the_next_such_line(store: Store, clock: Clock) -> None:
+    movement = CandidateMovement(
+        MovementType.TAKE_TO_VEHICLE,
+        (LineItem(None, Decimal(2)), LineItem(None, Decimal(3))),
+        "main stock",
+        "truck 1",
+    )
+    worker, _ = llm_asked(store, clock, Extraction(MODEL, (movement,)), "shuffled 2 and 3 from main stock to truck 1")
+    [first] = store.questions(KEY)
+    assert (first.question["ask"], first.question["line"]) == ("name_part", 0)
+    typed_in(store, clock, worker, "Disc 40")
+    movement_now = newest_result(store)["movements"][0]
+    assert [line["item_text"] for line in movement_now["items"]] == ["Disc 40", None]
+    # "Items missing" is still raised, now about the second line (it was settled away for good before).
+    assert "items_missing" in [reason["code"] for reason in movement_now["reasons"]]
+    assert movement_now["items"][1]["part"]["status"] == "unmatched"

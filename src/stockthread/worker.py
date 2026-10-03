@@ -649,8 +649,14 @@ class Worker:
         # Answers by thread reply: a message counted as the answer to a question of the reading that stands is kept
         # out of what the extractor reads. A new message may be one (`candidate`); it is judged on that reading.
         # Then the post is read with it, then with every answer message: the reading differs, answers start over.
-        typed = self._typed(key, history, all_messages, answers)
-        candidate = self._candidate(key, history, all_messages, authors, typed, changes)
+        try:
+            typed = self._typed(key, history, all_messages, answers)
+            candidate = self._candidate(key, history, all_messages, authors, typed, changes)
+        except LockLost:
+            raise
+        except Exception as error:  # a stored record or question that cannot be read: this post only
+            self._broken(post, now, error, read=everything, changes=changes, answers=answers)
+            return True
         tries: list[dict[int, MessageInput]] = [{**typed, candidate[0].id: candidate[1]}] if candidate else []
         tries += [typed, {}] if typed else [{}]
         catalog: Catalog | None = None
@@ -816,28 +822,42 @@ class Worker:
             if _digest(found.result) != reading:
                 break
             same.add(found.revision)
-        given: list[Given | Typed] = []
+        shape = [len(view.movement.line_items) for view in views]
+        stored: list[Given | tuple[int, Question, MessageInput, str]] = []
         unreadable: list[int] = []
         for item, answer, by in self.store.answers(key, through) if same else ():
             if item.revision not in same:
                 continue
             try:
                 if "message" not in answer:
-                    given.append(Given.stored(item.id, item.question, answer, by))
+                    stored.append(Given.stored(item.id, item.question, answer, by))
                     continue
                 question = question_from_json(item.question)
                 message = typed.get(item.id)
-                says = None
-                if message is not None and not message.deleted and question.movement < len(views):
-                    movement = views[question.movement].movement
-                    says = replay_typed(message.text, question, movement, catalog, poster)
-                if message is None or says is None:
+                if message is None or message.deleted or question.movement >= len(views):
                     unreadable.append(item.id)  # deleted, edited since, or read with the post: asked again
                 else:
-                    given.append(Typed(item.id, question, says, message.text, by))
+                    stored.append((item.id, question, message, by))
             except ValueError:
                 unreadable.append(item.id)
-        effects = replay(given, [len(view.movement.line_items) for view in views], self.settings.slack.approvers)
+        # A typed answer is read on the movement as the buttons left it, as it was judged: a "0" typed for a count
+        # is a quantity only once the type picked is a count.
+        types = replay([entry for entry in stored if isinstance(entry, Given)], shape, self.settings.slack.approvers)
+        given: list[Given | Typed] = []
+        for entry in stored:
+            if isinstance(entry, Given):
+                given.append(entry)
+                continue
+            item_id, question, message, by = entry
+            movement = views[question.movement].movement
+            if question.movement in types.types:
+                movement = replace(movement, movement_type=types.types[question.movement])
+            says = replay_typed(message.text, question, movement, catalog, poster)
+            if says is None:
+                unreadable.append(item_id)
+            else:
+                given.append(Typed(item_id, question, says, message.text, by))
+        effects = replay(given, shape, self.settings.slack.approvers)
         effects.ignored = sorted([*effects.ignored, *unreadable])
         return effects
 
@@ -1347,8 +1367,11 @@ def _row(history: Sequence[DryRunRecord]) -> tuple[str | None, set[int]]:
 
 def _typed_line(effects: Effects, movement: int, line: int, item: LineItem) -> LineItem:
     """A line item with the quantity and serials typed for it in the thread. A quantity typed for a pack-unit
-    question counts pieces: the line's unit is the piece and its pack size is dropped."""
+    question counts pieces: the line's unit is the piece and its pack size is dropped. A line the post named no item
+    for takes the typed name as its item text, so "items missing" moves on to the next line without one."""
     key = (movement, line)
+    if key in effects.named and not (item.item_text or "").strip():
+        item = replace(item, item_text=effects.named[key])
     if key in effects.quantities:
         item = replace(item, quantity=effects.quantities[key])
     if key in effects.pieces:
