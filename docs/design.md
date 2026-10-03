@@ -1062,6 +1062,24 @@ The gate is evaluated twice: when a plan is approved, and again
 immediately before the write. The switch, the approver list and the server
 version can change in between.
 
+**Where (built: `gate.py`, nothing calls it yet).** `judge` takes the
+post's views, their apply markers, the policy as read from the settings
+at that moment, and who clicked Apply. Its verdict is `blocked` (writes
+off, a plan a "no" rejected, or a plan `plan_requests` refuses), `waits`
+(decided, but needs an approver's click) or `allowed`, and only an
+`allowed` verdict carries the requests to send. A click counts only from
+someone who is an approver when the gate is judged. The notes of the
+requests name the approver, or the poster when the policy approved it.
+One movement that waits makes the whole plan wait. A plan that had any
+answer applied to it (a button, a typed reply or a stock choice) always
+waits for Apply, even a take-out: the person answered a question, which
+is not the same as approving the write. The caller's `answered` is the
+only check for typed and stock answers, because a typed name keeps the
+matcher's own rule and a stock choice changes no match. A vehicle applies
+without a click only when it is the poster's mapped vehicle or was found
+by its exact location name (ADR 0004); a vehicle found by the normalized
+rule or a learned alias waits.
+
 ### The model cannot authorize a write
 
 Leaving a confidence score out of the gate is not enough, because a model
