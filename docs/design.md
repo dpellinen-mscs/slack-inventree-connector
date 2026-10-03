@@ -764,7 +764,10 @@ needs.
       message that reads cleanly but comes from someone who may not answer
       gets the same note a click would, "poster or approver only". Today
       it is read with the post and gets no note.)
-    - *Limits.* As for buttons: an answer never authorizes a write. A
+    - *Limits.* As for buttons: an answer never authorizes a write. On
+      every replay a typed answer counts only while its author is the
+      poster stored with the question or an approver then, so an answer
+      from an approver who has since been removed is asked again. A
       typed name is a human correction of the post's own words, so once
       the plan is applied and verified, the post's item text becomes an
       alias for the part named in the thread, and the post's place text

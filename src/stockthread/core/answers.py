@@ -22,7 +22,8 @@ the reading that stands, oldest first, onto that same reading read again; this m
   code its question was asked for. A quantity answer settles every doubt about that line's quantity; one to a
   pack-unit question also makes the line count pieces.
 
-An answer to a question for approvers counts only while its author is an approver; one that does not fit its
+An answer to a question for approvers counts only while its author is an approver, and one by thread reply only
+while its author is the poster or an approver; one that does not fit its
 question (a record that was not offered, a movement or line the reading does not have) changes nothing. Neither
 ever authorizes a write: the write gate checks the plan again.
 
@@ -78,13 +79,15 @@ by an answer to a pack-unit question: a quantity typed for "how many?" says noth
 @dataclass(frozen=True)
 class Typed:
     """One answer by thread reply: the id of its question, the question, what the message reads as now, the typed
-    text (shown beside the post's own words), and who wrote it."""
+    text (shown beside the post's own words), who wrote it, and who wrote the post when the question was asked."""
 
     item: int
     question: Question
     answer: TypedAnswer
     text: str
     by: str
+    poster: str | None
+    """None for a question from before the poster was stored: only an approver's answer counts."""
 
 
 @dataclass
@@ -177,7 +180,8 @@ def _apply(answer: Given, shape: Sequence[int], approvers: Collection[str], effe
 
 def _typed(answer: Typed, shape: Sequence[int], approvers: Collection[str], effects: Effects) -> bool:
     question, typed = answer.question, answer.answer
-    if (question.approver_only and answer.by not in approvers) or typed.ask is not question.ask:
+    poster = answer.poster is not None and answer.by == answer.poster and not question.approver_only
+    if not (poster or answer.by in approvers) or typed.ask is not question.ask:
         return False
     movement = question.movement
     if movement >= len(shape):

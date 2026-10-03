@@ -4006,6 +4006,26 @@ def test_an_approver_may_answer_by_thread_reply(store: Store, clock: Clock) -> N
     assert newest_result(store)["movements"][0]["items"][0]["part"]["record"] == 2
 
 
+def test_a_typed_answer_counts_only_from_someone_who_is_an_approver_when_it_is_applied(
+    store: Store, clock: Clock
+) -> None:
+    worker = asked(store, clock, CATALOG, "took 2 Gizmo and 3 Gadget from main stock to truck 1")
+    typed_in(store, clock, worker, "ONT 100", user=LUIS)  # taken while Luis is an approver
+    [first, second] = store.questions(KEY)
+    assert first.status.value == "answered"
+    assert second.question["ask"] == "name_part"
+    worker.settings = settings()  # Luis is an approver no longer
+    typed_in(store, clock, worker, "Disc 40", ts="1790010400.000100")  # the poster answers the next one
+    result = newest_result(store)
+    assert result["answers"] == [second.id]
+    assert result["ignored"] == [first.id]
+    [line, other] = result["movements"][0]["items"]
+    assert line["part"]["record"] is None  # which part is asked again
+    assert other["part"]["record"] == 1
+    [*_, again] = store.questions(KEY)
+    assert (again.question["ask"], again.question["line"], again.status.value) == ("name_part", 0, "open")
+
+
 def test_two_new_messages_at_once_are_read_with_the_post(store: Store, clock: Clock) -> None:
     worker = asked(store, clock, CATALOG, GIZMO)
     enqueue(store, message("1790010000.000050", "one sec", thread_ts=ROOT))

@@ -823,7 +823,7 @@ class Worker:
                 break
             same.add(found.revision)
         shape = [len(view.movement.line_items) for view in views]
-        stored: list[Given | tuple[int, Question, MessageInput, str]] = []
+        stored: list[Given | tuple[int, Question, MessageInput, str, str | None]] = []
         unreadable: list[int] = []
         for item, answer, by in self.store.answers(key, through) if same else ():
             if item.revision not in same:
@@ -837,7 +837,7 @@ class Worker:
                 if message is None or message.deleted or question.movement >= len(views):
                     unreadable.append(item.id)  # deleted, edited since, or read with the post: asked again
                 else:
-                    stored.append((item.id, question, message, by))
+                    stored.append((item.id, question, message, by, item.poster_id))
             except ValueError:
                 unreadable.append(item.id)
         # A typed answer is read on the movement as the buttons left it, as it was judged: a "0" typed for a count
@@ -848,7 +848,7 @@ class Worker:
             if isinstance(entry, Given):
                 given.append(entry)
                 continue
-            item_id, question, message, by = entry
+            item_id, question, message, by, asked_poster = entry
             movement = views[question.movement].movement
             if question.movement in types.types:
                 movement = replace(movement, movement_type=types.types[question.movement])
@@ -856,7 +856,7 @@ class Worker:
             if says is None:
                 unreadable.append(item_id)
             else:
-                given.append(Typed(item_id, question, says, message.text, by))
+                given.append(Typed(item_id, question, says, message.text, by, asked_poster))
         effects = replay(given, shape, self.settings.slack.approvers)
         effects.ignored = sorted([*effects.ignored, *unreadable])
         return effects

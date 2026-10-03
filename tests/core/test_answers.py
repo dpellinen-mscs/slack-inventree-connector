@@ -248,8 +248,10 @@ def test_read_the_stock_again_ends_the_lines_earlier_stock_answers_only() -> Non
 # Answers by thread reply (`Typed`).
 
 
-def typed(question: Question, answer: TypedAnswer, by: str = SAM, item: int = 7, text: str = "typed") -> Typed:
-    return Typed(item, question, answer, text, by)
+def typed(
+    question: Question, answer: TypedAnswer, by: str = SAM, item: int = 7, text: str = "typed", poster: str | None = SAM
+) -> Typed:
+    return Typed(item, question, answer, text, by, poster)
 
 
 def test_a_typed_quantity_replaces_the_line_quantity_and_settles_every_doubt_about_it() -> None:
@@ -313,6 +315,21 @@ def test_a_typed_answer_that_does_not_fit_changes_nothing(question: Question, an
     effects = replay([typed(question, TypedAnswer(Ask.QUANTITY, quantity=answer), by=by)], [1], APPROVERS)
     assert effects.ignored == [7]
     assert (effects.quantities, effects.settled, effects.retyped) == ({}, set(), set())
+
+
+def test_a_typed_answer_counts_only_from_the_poster_or_someone_who_is_an_approver_now() -> None:
+    question = Question(Ask.QUANTITY, ReasonCode.QUANTITY_MISSING, 0, 0)
+    by_luis = typed(question, TypedAnswer(Ask.QUANTITY, quantity=Decimal(24)), by=LUIS)
+    assert replay([by_luis], [1], APPROVERS).quantities == {(0, 0): Decimal(24)}
+    removed = replay([by_luis], [1], frozenset())  # Luis answered as an approver and is one no longer
+    assert removed.ignored == [7]
+    assert (removed.quantities, removed.settled, removed.retyped) == ({}, set(), set())
+    by_sam = typed(question, TypedAnswer(Ask.QUANTITY, quantity=Decimal(3)))
+    assert replay([by_sam], [1], frozenset()).quantities == {(0, 0): Decimal(3)}  # the poster needs no list
+    stranger = typed(question, TypedAnswer(Ask.QUANTITY, quantity=Decimal(3)), by="U0ANA0009")
+    assert replay([stranger], [1], APPROVERS).ignored == [7]
+    unknown = typed(question, TypedAnswer(Ask.QUANTITY, quantity=Decimal(3)), poster=None)
+    assert replay([unknown], [1], APPROVERS).ignored == [7]  # no poster stored: only an approver counts
 
 
 def test_a_typed_answer_after_a_rejection_is_not_applied() -> None:
