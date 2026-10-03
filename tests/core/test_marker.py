@@ -2,7 +2,7 @@
 
 import pytest
 
-from stockthread.core.marker import ALPHABET, ID_LENGTH, AttemptKind, Marker, is_marker_id, new_marker_id
+from stockthread.core.marker import ALPHABET, ID_LENGTH, AttemptKind, Marker, is_marker_id, marked, new_marker_id
 
 
 def test_the_design_example_round_trips() -> None:
@@ -44,3 +44,45 @@ def test_parse_refuses_anything_but_a_whole_marker(text: str) -> None:
 def test_attempt_numbers_have_two_digits(attempt: int) -> None:
     with pytest.raises(ValueError, match="attempt"):
         Marker(new_marker_id(), AttemptKind.UNDO, attempt)
+
+
+ID = "k7m2q9x4t1b8w3n6p5r0zd"
+OTHER = "k7m2q9x4t1b8w3n6p5r0zc"
+
+
+@pytest.mark.parametrize(
+    ("notes", "found"),
+    [
+        (
+            f"[sic:{ID}:a01] U0SAM0001 https://acme-fiber.slack.com/archives/C0ACME0001/p1",
+            Marker(ID, AttemptKind.APPLY, 1),
+        ),
+        (f"[sic:{ID}:u02]", Marker(ID, AttemptKind.UNDO, 2)),
+        (f"[sic:{ID}:a03] U0SAM0001", Marker(ID, AttemptKind.APPLY, 3)),
+    ],
+)
+def test_marked_finds_a_whole_marker_of_the_id_leading_the_notes(notes: str, found: Marker) -> None:
+    assert marked(notes, ID) == found
+
+
+@pytest.mark.parametrize(
+    "notes",
+    [
+        f"[sic:{OTHER}:a01] U0SAM0001",  # another request
+        f"see [sic:{ID}:a01]",  # not first: someone quoted it
+        f"[sic:{ID}:a01]x U0SAM0001",  # not a whole token
+        f" [sic:{ID}:a01]",
+        f"[sic:{ID}:a00]",  # not a marker: attempts start at 1
+        f"sic:{ID}:a01",
+        ID,
+        "",
+        None,
+        42,
+    ],
+)
+def test_marked_refuses_anything_else(notes: object) -> None:
+    assert marked(notes, ID) is None
+
+
+def test_marked_refuses_an_id_that_is_not_one() -> None:
+    assert marked(f"[sic:{ID}:a01]", ID[:-1]) is None

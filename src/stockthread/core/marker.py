@@ -55,3 +55,19 @@ class Marker:
         if found is None:
             raise ValueError("not a marker")
         return cls(found.group(1), AttemptKind(found.group(2)), int(found.group(3)))
+
+
+def marked(notes: object, marker_id: str) -> Marker | None:
+    """The marker of `marker_id` that leads `notes`, else None.
+
+    The connector writes its marker first in the notes, followed by a space or nothing (`write_notes`). The server
+    search matches substrings, so a row it returns is ours only when its first token is a whole marker of this id.
+    """
+    if not isinstance(notes, str) or not is_marker_id(marker_id):
+        return None
+    first = notes.split(" ", 1)[0]
+    try:
+        marker = Marker.parse(first)
+    except ValueError:
+        return None
+    return marker if marker.marker_id == marker_id else None

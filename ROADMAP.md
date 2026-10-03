@@ -121,6 +121,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] The judgement: blocked, waits for Apply, or allowed with its requests (`gate.py`)
   - [ ] Judged at approval and again before the write (with the apply protocol)
 - [ ] Apply protocol: writer lock, marker check, snapshot, single write, read-back
+  - [x] Marker search: every attempt of one request, whole markers only (`InvenTreeReader.marker_entries`)
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
 - [ ] Plans with several requests, and the `partially_applied` state
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
