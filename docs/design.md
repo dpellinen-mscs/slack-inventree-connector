@@ -1078,7 +1078,11 @@ only check for typed and stock answers, because a typed name keeps the
 matcher's own rule and a stock choice changes no match. A vehicle applies
 without a click only when it is the poster's mapped vehicle or was found
 by its exact location name (ADR 0004); a vehicle found by the normalized
-rule or a learned alias waits.
+rule or a learned alias waits. This holds for the destination of a take
+to a vehicle and for any source or destination that is someone's mapped
+vehicle ("2 Disc 40 from Mike's van to the Smith job"). A vehicle no one
+is mapped to cannot be told from any other location when it is the
+source of a take to a site; map every vehicle in `[vehicles]`.
 
 ### The model cannot authorize a write
 

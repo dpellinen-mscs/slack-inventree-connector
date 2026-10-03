@@ -31,6 +31,9 @@ ON = Policy(True, frozenset({MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_
 SECRET_PREFIXES = {"SLACK_BOT_TOKEN": "xoxb-", "SLACK_APP_TOKEN": "xapp-", "INVENTREE_TOKEN": ""}
 SAMS_TRUCK = 11
 """The destination `view` matches by default: Sam's mapped vehicle."""
+MIKES_VAN = 12
+VEHICLES = frozenset({SAMS_TRUCK, MIKES_VAN})
+SITE = 14
 TAKE_OUTS = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
 CONFIRMED = (MovementType.RETURN, MovementType.RECEIVE, MovementType.TRANSFER, MovementType.CONSUME, MovementType.COUNT)
 
@@ -71,6 +74,7 @@ def run(views: list[MovementView], policy: Policy = ON, **given: Any) -> Any:
         "answered": False,
         "rejected": False,
         "poster_vehicle": SAMS_TRUCK,
+        "vehicles": VEHICLES,
         **given,
     }
     return judge(views, markers(len(views)), policy, **arguments)
@@ -192,9 +196,20 @@ def test_an_answered_plan_waits_for_apply_even_as_a_clear_take_out() -> None:
         (view(items=(matched(1, MatchRule.ANSWER),)), "a part was not found", {}),
         (view(source=matched(10, MatchRule.ANSWER)), "a place was not found", {}),
         (view(MovementType.TAKE_TO_SITE, destination=matched(11, MatchRule.ANSWER)), "a place was not found", {}),
-        (view(destination=matched(12, MatchRule.NORMALIZED)), "the vehicle is not", {}),
-        (view(destination=matched(12, MatchRule.ALIAS)), "the vehicle is not", {}),  # a learned alias, not Sam's
-        (view(destination=matched(11, MatchRule.ALIAS)), "the vehicle is not", {"poster_vehicle": None}),
+        (view(destination=matched(12, MatchRule.NORMALIZED)), "a vehicle is not", {}),
+        (view(destination=matched(12, MatchRule.ALIAS)), "a vehicle is not", {}),  # a learned alias, not Sam's
+        (view(destination=matched(11, MatchRule.ALIAS)), "a vehicle is not", {"poster_vehicle": None}),
+        # A take to a site from someone's mapped vehicle found by a learned alias ("2 Disc 40 from Mike's van").
+        (view(MovementType.TAKE_TO_SITE, source=matched(MIKES_VAN, MatchRule.ALIAS)), "a vehicle is not", {}),
+        (view(MovementType.TAKE_TO_SITE, source=matched(MIKES_VAN, MatchRule.NORMALIZED)), "a vehicle is not", {}),
+        (view(MovementType.TAKE_TO_SITE, destination=matched(MIKES_VAN, MatchRule.ALIAS)), "a vehicle is not", {}),
+        (
+            view(MovementType.TAKE_TO_SITE, source=matched(SAMS_TRUCK, MatchRule.ALIAS), destination=matched(SITE)),
+            "a vehicle is not",
+            {"poster_vehicle": None},
+        ),
+        # The source of a take to a vehicle is checked too.
+        (view(source=matched(MIKES_VAN, MatchRule.ALIAS)), "a vehicle is not", {}),
     ],
 )
 def test_automatic_apply_is_stricter_than_apply(loose: MovementView, why: str, given: dict[str, Any]) -> None:
@@ -227,6 +242,20 @@ def test_a_model_flag_never_lets_the_policy_approve_even_if_the_gate_missed_it(m
 def test_the_posters_mapped_vehicle_or_a_vehicle_by_its_exact_name_applies_automatically(rule: MatchRule) -> None:
     assert run([view(destination=matched(SAMS_TRUCK, rule))]).allowed
     assert run([view(destination=matched(12, MatchRule.EXACT))]).allowed
+
+
+@pytest.mark.parametrize("rule", [MatchRule.EXACT, MatchRule.ALIAS])
+def test_a_take_to_a_site_from_the_posters_vehicle_or_a_vehicle_by_its_exact_name_applies_automatically(
+    rule: MatchRule,
+) -> None:
+    assert run([view(MovementType.TAKE_TO_SITE, source=matched(SAMS_TRUCK, rule), destination=matched(SITE))]).allowed
+    assert run([view(MovementType.TAKE_TO_SITE, source=matched(MIKES_VAN, MatchRule.EXACT))]).allowed
+
+
+def test_a_place_that_is_no_mapped_vehicle_needs_no_vehicle_rule() -> None:
+    """A site or shelf found by a learned alias, as the source or destination of a take to a site, needs no click."""
+    assert run([view(MovementType.TAKE_TO_SITE, source=matched(13, MatchRule.ALIAS))]).allowed
+    assert run([view(MovementType.TAKE_TO_SITE, destination=matched(13, MatchRule.ALIAS))]).allowed
 
 
 def test_the_gate_reads_the_settings_it_is_given() -> None:

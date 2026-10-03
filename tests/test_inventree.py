@@ -335,7 +335,16 @@ async def test_marker_entries_refuses_an_id_that_is_not_one_without_asking() -> 
 async def test_marker_entries_refuses_an_entry_of_ours_it_cannot_read(row: dict[str, object]) -> None:
     client, _ = reader(history_pages([{**row, "notes": f"[sic:{MARKER_ID}:a01]"}]))
     async with client:
-        with pytest.raises(InvenTreeError, match="no valid pk, item or deltas"):
+        with pytest.raises(InvenTreeError, match=r"no valid pk, item or deltas|pk that is not a number"):
+            await client.marker_entries(MARKER_ID)
+
+
+@pytest.mark.parametrize("pk", [[1], {}, "1", 1.0])
+async def test_marker_entries_refuses_any_entry_whose_pk_is_not_a_number(pk: object) -> None:
+    """Checked before the repeat check, which could not hash [1] or {}; for any entry, ours or not."""
+    client, _ = reader(history_pages([{"pk": pk, "item": 7, "notes": "x"}]))
+    async with client:
+        with pytest.raises(InvenTreeError, match="pk that is not a number"):
             await client.marker_entries(MARKER_ID)
 
 
