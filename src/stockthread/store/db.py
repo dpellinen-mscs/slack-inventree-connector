@@ -62,6 +62,10 @@ class SchemaTooNew(Exception):
     """The database was migrated by a newer version of the connector."""
 
 
+class SchemaTooOld(Exception):
+    """A read-only open found a database that this version has not migrated yet."""
+
+
 class StateConflict(Exception):
     """The request is not in the expected state: someone else moved it first. Nothing changed."""
 
@@ -326,6 +330,25 @@ class Store:
             connection.execute("PRAGMA synchronous = FULL")
             store = cls(connection, clock)
             store._migrate()
+        except BaseException:
+            connection.close()
+            raise
+        return store
+
+    @classmethod
+    def open_read_only(cls, path: str | Path) -> Store:
+        """Open an existing database without changing it (`stockthread trail`). Raises FileNotFoundError when there
+        is none, and SchemaTooNew or SchemaTooOld unless its schema is the one this version writes."""
+        if not Path(path).exists():
+            raise FileNotFoundError(f"no database at {path}")
+        connection = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        try:
+            store = cls(connection, _utcnow)
+            current, known = store.schema_version, len(_migrations())
+            if current > known:
+                raise SchemaTooNew(f"the database has schema version {current}; this version knows {known}")
+            if current < known:
+                raise SchemaTooOld(f"the database has schema version {current}; start the connector once to upgrade it")
         except BaseException:
             connection.close()
             raise
@@ -1120,6 +1143,21 @@ class Store:
             )
             for outcome, extractor, result, rev, ts, changes in rows
         ]
+
+    def audit(self, key: PostKey) -> list[tuple[str, str, str, str | None, str | None]]:
+        """The audit log rows of a post, its plans and their requests, oldest first: when, by whom, what, and the
+        state change when there is one."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        rows = self._db.execute(
+            "SELECT at, actor, event, from_state, to_state FROM audit_log WHERE post_id = ?1"
+            " OR plan_id IN (SELECT id FROM plans WHERE post_id = ?1)"
+            " OR request_id IN (SELECT r.id FROM requests r JOIN plans p ON p.id = r.plan_id WHERE p.post_id = ?1)"
+            " ORDER BY id",
+            (post_id,),
+        ).fetchall()
+        return [(row[0], row[1], row[2], row[3], row[4]) for row in rows]
 
     def create_plan(self, post: PostKey, input_hash: str, operations: Sequence[Operation]) -> int:
         """Store a new plan revision with one planned request per operation, and return its revision.

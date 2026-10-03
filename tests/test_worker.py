@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from slack_sdk.errors import SlackApiError
 
+from stockthread import trail
 from stockthread import worker as worker_module
 from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules, resolve
@@ -4282,3 +4283,49 @@ def test_a_part_named_for_a_line_without_an_item_moves_on_to_the_next_such_line(
     # "Items missing" is still raised, now about the second line (it was settled away for good before).
     assert "items_missing" in [reason["code"] for reason in movement_now["reasons"]]
     assert movement_now["items"][1]["part"]["status"] == "unmatched"
+
+
+# The trail of a post (`stockthread trail`): what was read, every reason, the question and its answer.
+
+
+def test_the_trail_shows_each_dry_run_with_its_reasons_and_who_answered(store: Store, clock: Clock, path: Path) -> None:
+    worker = asked(store, clock)
+    reply, ts = posted(worker)
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    worker.step()
+    key = PostKey(WORKSPACE, CHANNEL, ROOT)
+    assert [record.revision for record in store.dry_run_history(key)] == [1, 2]
+    [item] = store.questions(key)
+    before = path.read_bytes()
+    reader = Store.open_read_only(path)
+    try:
+        lines = trail.post_trail(reader, key)
+        worded = trail.post_trail(reader, key, text=True)
+    finally:
+        reader.close()
+    assert path.read_bytes() == before
+    shown = "\n".join(lines)
+    assert f"post {CHANNEL} {ROOT} (workspace {WORKSPACE})" in shown
+    assert "dry run 1: replied, read by rules" in shown
+    assert "    line 1: 2 of (no part, ambiguous: candidates 1, 2)\n    review: part_ambiguous: line 1\n" in shown
+    assert (
+        f"question {item.id} (dry run 1): choose_part for part_ambiguous, movement 1 line 1 (choices 1, 2): answered"
+        in shown
+    )
+    assert f"  answered by {SAM}: " in shown
+    assert '"record": 2' in shown
+    assert "    line 1: 2 of part 2 (matched, answer)\n    no review reason\n" in shown
+    assert f"answers (question ids): applied {item.id}" in shown
+    events = [line.split()[1:] for line in lines[lines.index("audit log:") + 1 :]]
+    assert events[-5:] == [
+        ["planner", "dry_run_replied"],
+        ["planner", "question_asked"],
+        ["human", "question_answered"],
+        ["planner", "revision_replied"],
+        ["planner", "buttons_removed"],
+    ]
+    for words in ("Disc", "main stock", "truck"):
+        assert words not in shown  # ids and codes only, unless asked
+    assert '"Disc 40"' in "\n".join(worded)
+    assert '"main stock"' in "\n".join(worded)

@@ -87,6 +87,10 @@ What to expect in this version:
   again, up to `catch_up_hours` back (a day at most gets a reply), and their dry run says it was
   read late. Posts from before the very first start are left alone.
 - The database is one file, `stockthread.db`, next to the settings. It holds the raw Slack events.
+- To see why a post got the reply it did, copy the link of any of its messages (*Copy link* in
+  Slack) and run `.venv/bin/stockthread trail '<link>'`. It prints each dry run with every reason it
+  needs a person, the question asked, who answered and with what, and the audit log. It only reads
+  the database, and prints ids and codes rather than the words of the post, unless you add `--text`.
 
 ### Serving over HTTP instead of Socket Mode
 
