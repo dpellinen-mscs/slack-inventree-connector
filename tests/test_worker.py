@@ -2912,6 +2912,31 @@ def test_recorded_answer_clicks_are_checked_against_the_stored_button(
     assert store.answer(item.id) == expected
 
 
+@pytest.mark.parametrize(
+    ("name", "status", "told"),
+    [
+        ("message_thread_answer", "answered", []),
+        ("message_thread_answer_other_user", "stale", [(RIVER, CLICK_FEEDBACK["not_allowed"])]),
+    ],
+)
+def test_recorded_thread_answers_count_only_from_someone_who_may_answer(
+    store: Store, clock: Clock, name: str, status: str, told: list[tuple[str, str]]
+) -> None:
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "slack" / "events" / f"{name}.json").read_text())
+    event = fixture["body"]["event"]
+    assert (event["thread_ts"], event["ts"]) == (ROOT, AFTER_ASK)
+    worker = asked(store, clock, CATALOG, GIZMO)
+    [item] = store.questions(KEY)
+    assert item.question["ask"] == "name_part"
+    assert store.enqueue_event(fixture["body"]["event_id"], "event", json.dumps(fixture["body"]))
+    clock.at("1790010060.000000")
+    worker.step()
+    [item] = store.questions(KEY)
+    assert item.status.value == status
+    assert store.answer(item.id) == (({"message": AFTER_ASK, "edited": None}, SAM) if status == "answered" else None)
+    assert notes(worker) == told
+
+
 # Buttons taken down once their question is closed (design section 4, "Interactivity").
 
 
