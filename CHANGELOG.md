@@ -10,6 +10,8 @@ Nothing is released yet. The connector cannot write stock in this state.
 
 ### Fixed
 
+- A consume of serialized stock no longer reads "could apply": InvenTree answers a remove on a serialized item with
+  success and changes nothing, so the dry run shows the items and a review reason instead.
 - A question and the revisions of its post now expire at the same time, fixed by the post's first dry run
   (migration 0015). Before, an answer given late to a thread whose root was older than its newest message was
   recorded but never acted on.

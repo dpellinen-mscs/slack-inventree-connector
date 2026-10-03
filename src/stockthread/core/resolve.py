@@ -49,6 +49,7 @@ DETAIL_MIXED = "serialized and unserialized stock of the part at the source"
 DETAIL_NO_TARGET = "no stock item of the part at the location"
 DETAIL_SEVERAL_TARGETS = "several stock items of the part at the location"
 DETAIL_SERIALIZED_TARGET = "serialized stock: an add or a count does not change it"
+DETAIL_SERIALIZED_REMOVE = "serialized stock: a remove does not change it"
 DETAIL_SHARED = "other lines of the post take the same stock"
 DETAIL_COUNTED = "another line of the post acts on a counted stock item"
 DETAIL_EMPTIED = "an earlier line of the post takes all of the stock item an add acts on"
@@ -169,7 +170,7 @@ def resolve_line(
     """What one line acts on: for a transfer or a remove the items it takes from (`pick_source`), for an add or a
     count the one item it changes, by `quantity`."""
     if operation in (Operation.TRANSFER, Operation.REMOVE):
-        return pick_source(quantity, items, serials)
+        return _removable(operation, pick_source(quantity, items, serials), items)
     pk, reasons = target_item(items)
     return SourcePick(() if pk is None else (Take(pk, quantity),), reasons)
 
@@ -212,8 +213,11 @@ def resolve_lines(lines: Sequence[LineStock]) -> list[SourcePick]:
                     as_read = pick_source(line.quantity, line.items, line.serials)
                     if _short(pick) - _short(as_read):
                         pick = _shared(pick, as_read)
+            pick = _removable(line.operation, pick, line.items)
+            unchanged = _serialized(line.items) if line.operation is Operation.REMOVE else set()
             for take in pick.takes:
-                taken[take.item] = taken.get(take.item, Decimal(0)) + take.quantity
+                if take.item not in unchanged:  # a remove leaves a serialized item where it is: later lines read it
+                    taken[take.item] = taken.get(take.item, Decimal(0)) + take.quantity
         else:
             left = list(line.items)
             if line.chosen is not None and len(line.chosen) <= 1:
@@ -239,6 +243,20 @@ def resolve_lines(lines: Sequence[LineStock]) -> list[SourcePick]:
         else pick
         for pick in picks
     ]
+
+
+def _removable(operation: Operation, pick: SourcePick, items: Sequence[StockItem]) -> SourcePick:
+    """The pick, with DETAIL_SERIALIZED_REMOVE when a remove takes a serialized item: InvenTree answers success and
+    changes nothing (`test_char_serialized_quantity_noop`). The items stay shown; the reason keeps the line from a
+    write until a person settles it, as for an add or a count on serialized stock."""
+    serialized = _serialized(items)
+    if operation is not Operation.REMOVE or not any(take.item in serialized for take in pick.takes):
+        return pick
+    return replace(pick, reasons=(*pick.reasons, _reason(ReasonCode.STOCK_CHOICE, DETAIL_SERIALIZED_REMOVE)))
+
+
+def _serialized(items: Sequence[StockItem]) -> set[int]:
+    return {item.pk for item in items if item.serial}
 
 
 def _chosen(line: LineStock, chosen: tuple[int, ...], left: Sequence[StockItem]) -> SourcePick:
