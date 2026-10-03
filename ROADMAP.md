@@ -83,11 +83,14 @@ The quickstart reaches the first dry-run in about 15 minutes.
   - [x] Which question: `core/questions.py` picks one per post by tier (design section 4, "Questions")
   - [x] The question in the thread, with buttons and a stored button row (in the dry-run reply; migration 0010)
   - [x] Stale buttons removed from Slack when a revision replaces the reply (and once a question is answered; migration 0012)
-- [ ] Answers by button or by thread reply update the candidate and re-run validation
+- [x] Answers by button or by thread reply update the candidate and re-run validation
   - [x] A click on a question's button is checked against its stored row and recorded as the answer
   - [x] The clicker is told why a click did nothing (stale, expired, not allowed): an ephemeral note in the thread
-  - [x] The answer updates the candidate, re-runs validation, and asks the next question (by button; thread replies next)
+  - [x] The answer updates the candidate, re-runs validation, and asks the next question (by button)
+  - [x] Which part, which place, how many and which serials are answered by a thread reply that reads cleanly (#85)
 - [ ] Authorization: who may answer and who may approve, by button and by thread reply
+  - [x] Poster or approver, approvers only for approval questions, by button and by thread reply (#85)
+  - [ ] The "poster or approver only" note for a clean thread reply from someone else
 - [ ] Plan revisions: an edit, a deletion or a new thread message makes a plan stale
   - [x] A new message after the dry run gets a revised dry run, or a notice that the reply no longer stands
   - [x] An edit or a deletion after the dry run starts a revision by itself
