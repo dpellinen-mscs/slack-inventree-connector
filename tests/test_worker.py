@@ -4322,14 +4322,15 @@ def test_the_trail_shows_each_dry_run_with_its_reasons_and_who_answered(store: S
     key = PostKey(WORKSPACE, CHANNEL, ROOT)
     assert [record.revision for record in store.dry_run_history(key)] == [1, 2]
     [item] = store.questions(key)
-    before = path.read_bytes()
+    files = [path, path.with_name(f"{path.name}-wal")]  # in WAL mode a write lands in the side file first
+    before = [file.read_bytes() if file.exists() else None for file in files]
     reader = Store.open_read_only(path)
     try:
         lines = trail.post_trail(reader, key)
         worded = trail.post_trail(reader, key, text=True)
     finally:
         reader.close()
-    assert path.read_bytes() == before
+    assert [file.read_bytes() if file.exists() else None for file in files] == before
     shown = "\n".join(lines)
     assert f"post {CHANNEL} {ROOT} (workspace {WORKSPACE})" in shown
     assert "dry run 1: replied, read by rules" in shown

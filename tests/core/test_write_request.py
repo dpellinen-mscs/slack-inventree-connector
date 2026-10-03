@@ -75,6 +75,7 @@ def test_a_count_may_set_zero_and_nothing_else_may() -> None:
         ([Take(44, Decimal("Infinity"))], "finite"),
         ([Take(44, 1.5)], "finite Decimal"),  # type: ignore[arg-type]
         ([Take(44, Decimal("0.000001"))], "round"),
+        ([Take(44, Decimal("1.0000000000000000000000000000001"))], "round"),  # 32 digits: past normalize's precision
         ([Take(44, Decimal("1E+10"))], "larger"),
     ],
 )
