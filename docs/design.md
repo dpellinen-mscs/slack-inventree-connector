@@ -772,9 +772,10 @@ needs.
       the items differ in batch or supplier part). The question is about
       quantity coverage: buttons, one per stock item that alone covers
       the line with what the lines before it left, oldest first, at most 5, then "None of these". A label
-      names the item by its InvenTree id, what is on hand, and its batch
-      or supplier part (`#57 · 5 on hand · batch B-1`); these words come
-      from InvenTree, never from the post. When no single item covers the
+      names the item by its InvenTree id, what it holds once the lines
+      before it have taken their share (so it can be less than InvenTree
+      shows), and its batch or supplier part (`#57 · 5 left · batch B-1`);
+      these words come from InvenTree, never from the post. When no single item covers the
       line, the rule's split is offered as it stands, yes or no ("Take 1
       from #41 and 1 from #57?"). Both are computed from what the lines
       before it left, so a later line of a post that still has enough
@@ -786,7 +787,7 @@ needs.
       there is never a split: buttons, one per eligible item at the place
       (unserialized; status and allocation do not matter, as in the rule),
       oldest first, at most 5, then "None of these". The label is the
-      same, with what is on hand for information only.
+      same, with what is left for information only.
     - *Nothing the thread can choose* (no stock item, too few, serialized
       stock without serials, mixed serialized and unserialized stock, a
       serialized target, other lines of the post take the same stock so

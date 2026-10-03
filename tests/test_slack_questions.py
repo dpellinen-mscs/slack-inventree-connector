@@ -351,9 +351,9 @@ def test_a_stock_item_is_labelled_by_its_id_what_is_on_hand_and_its_batch_or_sup
     question = Question(Ask.CHOOSE_STOCK, ReasonCode.STOCK_CHOICE, 0, 0, None, (41, 57, 60), detail="line 1: x")
     body = question_message(question, [stock_view(pick)], PARTS, LOCATIONS, ids(question))
     labels = [b["text"]["text"] for b in buttons(body)]
-    assert labels[:2] == ["#41 · 5 on hand · batch B-1", "#57 · 2.5 on hand · supplier part #9"]
+    assert labels[:2] == ["#41 · 5 left · batch B-1", "#57 · 2.5 left · supplier part #9"]
     assert len(labels[2]) == MAX_LABEL
-    assert labels[2].startswith("#60 · 5 on hand · batch x")
+    assert labels[2].startswith("#60 · 5 left · batch x")
     assert labels[3] == "None of these"
     assert "Which stock item is “Disc 40” taken from (x)?" in text_of(body)
     target = question_message(question, [stock_view(pick, MovementType.COUNT)], PARTS, LOCATIONS, ids(question))

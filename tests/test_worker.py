@@ -3605,7 +3605,7 @@ def test_a_stock_item_picked_by_button_is_the_one_the_line_takes_from(store: Sto
     worker = stocked(store, clock, FakeStock({(1, 10): [ok(41, 5, "B1"), ok(57, 5, "B2")]}))
     reply, ts = posted(worker)
     labels = [element["text"]["text"] for element in reply["blocks"][-1]["elements"]]
-    assert labels == ["#41 · 5 on hand · batch B1", "#57 · 5 on hand · batch B2", "None of these"]
+    assert labels == ["#41 · 5 left · batch B1", "#57 · 5 left · batch B2", "None of these"]
     assert "taken from (the items differ in batch)?" in reply_text(reply)
     clicked(store, click_on(reply, ts, 1, SAM), "1")
     worker.step()

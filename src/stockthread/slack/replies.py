@@ -417,11 +417,12 @@ def _offered(question: Question, view: MovementView) -> Mapping[int, StockItem]:
 
 
 def _stock_label(choice: Choice, offered: Mapping[int, StockItem]) -> str:
-    """`#57 · 5 on hand · batch B-1`: words from InvenTree, never from the post."""
+    """`#57 · 5 left · batch B-1`: words from InvenTree, never from the post. The quantity is what the item holds once
+    the lines of the post before this one have taken their share, so it can be less than InvenTree shows."""
     if choice.kind != "record" or choice.record is None:
         return "None of these"
     item = offered[choice.record]
-    parts = [f"#{item.pk}", f"{_number(item.quantity)} on hand"]
+    parts = [f"#{item.pk}", f"{_number(item.quantity)} left"]
     if item.batch:
         parts.append(f"batch {' '.join(item.batch.split())}")
     if item.supplier_part is not None:
