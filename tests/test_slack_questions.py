@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from corpus import cases, corpus_views, eval_catalog
+from corpus import EVAL, cases, corpus_views, eval_catalog
 
 from stockthread.core import resolve
 from stockthread.core.model import (
@@ -39,6 +39,7 @@ from stockthread.slack.replies import (
     REASONS,
     MovementView,
     dry_run_reply,
+    gate_reasons,
     question_message,
     with_question,
 )
@@ -229,6 +230,24 @@ def test_the_notification_keeps_asterisks_of_the_post() -> None:
 
 
 _, CORPUS_PARTS, CORPUS_LOCATIONS = eval_catalog()
+
+
+EXPECTED_QUESTIONS = json.loads((EVAL / "questions.json").read_text(encoding="utf-8"))
+
+
+def test_the_expected_questions_cover_this_corpus_exactly() -> None:
+    assert EXPECTED_QUESTIONS["corpus"] == (EVAL / "VERSION").read_text(encoding="utf-8").strip()
+    assert list(EXPECTED_QUESTIONS["questions"]) == [case["id"] for case in cases()]
+
+
+@pytest.mark.parametrize("case", cases(), ids=lambda case: case["id"])
+def test_every_corpus_case_asks_its_expected_question(case: dict[str, Any]) -> None:
+    """M2's definition of done: a case with a review reason asks the question `eval/questions.json` names, and a
+    case without one asks nothing."""
+    views = corpus_views(case)
+    question = pick_question(views)
+    assert (None if question is None else question_json(question)) == EXPECTED_QUESTIONS["questions"][case["id"]]
+    assert (question is None) == (not any(gate_reasons(view) for view in views))
 
 
 @pytest.mark.parametrize("case", cases(), ids=lambda case: case["id"])
