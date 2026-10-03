@@ -6,6 +6,10 @@ a plan is applied whole or not at all. Decided means what the dry run shows as "
 `gate_reasons`) and, checked here again, what the requests are built from: an operation, the one record of every
 place the operation acts at, and for every line a pick without reasons whose takes add up to the line's quantity.
 The switch and the policy are the other two thirds of the write gate (design section 6), checked by the caller.
+
+Not checked here: that each pick was read for its line's part at the place the operation acts at. The views come
+from the worker's `_with_stock`, which reads them with the same `operation_for`; a consume policy that changes the
+operation must reach both, or the plan must carry what each pick was read for.
 """
 
 from __future__ import annotations

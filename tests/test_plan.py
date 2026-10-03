@@ -21,7 +21,7 @@ from stockthread.core.model import (
     ReasonSource,
     ReviewReason,
 )
-from stockthread.core.resolve import SourcePick, Take
+from stockthread.core.resolve import LineStock, SourcePick, StockItem, Take, resolve_lines
 from stockthread.plan import NotDecided, plan_requests
 from stockthread.slack.replies import MovementView
 
@@ -155,3 +155,24 @@ def test_markers_must_be_one_apply_marker_per_movement_each_its_own() -> None:
         plan_requests([view(), view()], [one, replace(one, attempt=2)], user=SAM)
     with pytest.raises(ValueError, match="apply markers"):
         plan_requests([view()], [replace(one, kind=AttemptKind.UNDO)], user=SAM)
+
+
+def test_a_remove_without_its_source_is_refused() -> None:
+    with pytest.raises(NotDecided, match="review reason"):
+        plan_requests([view(MovementType.CONSUME, source=None)], markers(1), user=SAM)
+
+
+def test_a_count_to_zero_is_sent_as_zero() -> None:
+    (request,) = plan_requests(
+        [view(MovementType.COUNT, lines=(("Disc 40", "0"),), stock=(picked((71, "0")),))], markers(1), user=SAM
+    )
+    assert request.body["items"] == [{"pk": 71, "quantity": "0"}]
+
+
+def test_a_consume_of_serialized_stock_as_the_rule_resolves_it_is_never_a_request() -> None:
+    """InvenTree answers a remove on a serialized item with success and changes nothing (design section 5)."""
+    stock = [StockItem(80, Decimal(1), 10, Decimal(0), "SN-1", None, None)]
+    (pick,) = resolve_lines([LineStock(Operation.REMOVE, Decimal(1), stock, ("SN-1",))])
+    assert pick.takes  # shown in the dry run, with its reason
+    with pytest.raises(NotDecided, match="no decided stock"):
+        plan_requests([view(MovementType.CONSUME, stock=(pick,))], markers(1), user=SAM)
