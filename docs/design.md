@@ -974,7 +974,11 @@ needs.
   means two stock items. The research found that add and remove on a
   serialized item do nothing and still return success. The connector never
   sends a quantity change for a serialized item. It moves whole items,
-  chosen by serial number. A serial read from a photo is unconfirmed until
+  chosen by serial number. A remove (a consume) that would take a
+  serialized item shows the items and is a review reason ("serialized
+  stock: a remove does not change it", `core/resolve.py`), as an add or a
+  count on one is: how a used serialized item leaves stock is for a person
+  until policy says otherwise. A serial read from a photo is unconfirmed until
   a human or a barcode confirms it.
 - **Locations.** Vehicles and job sites must exist as stock locations
   before stock can move there. The connector never creates locations by
