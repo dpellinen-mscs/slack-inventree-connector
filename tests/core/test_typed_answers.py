@@ -15,6 +15,7 @@ from stockthread.core.typed_answers import (
     read_quantity,
     read_serials,
     read_typed_answer,
+    replay_typed,
     takes_typed_answer,
 )
 
@@ -157,3 +158,29 @@ def test_serials_need_a_whole_quantity() -> None:
     assert read_typed_answer("SR5-000456", question(Ask.SERIALS), post, CATALOG, "U0SAM") == TypedAnswer(
         Ask.SERIALS, serials=("SR5-000456",)
     )
+
+
+def test_a_typed_name_is_matched_again_on_replay_and_counts_even_when_it_finds_nothing_now() -> None:
+    reading = movement(LineItem("ubiquity psu", Decimal(1)))
+    found = replay_typed("U7 Lite Access Point", question(Ask.NAME_PART), reading, CATALOG, "U0SAM")
+    assert found is not None
+    assert found.match is not None
+    assert found.match.record == 3
+    gone = Catalog(parts=(), locations=CATALOG.locations)
+    found = replay_typed("U7 Lite Access Point", question(Ask.NAME_PART), reading, gone, "U0SAM")
+    assert found == TypedAnswer(Ask.NAME_PART, match=Match(MatchStatus.UNMATCHED))  # the line is unmatched now
+    place = replay_typed("B-12", question(Ask.NAME_LOCATION, None, "source"), reading, CATALOG, "U0SAM")
+    assert place is not None
+    assert place.match is not None
+    assert place.match.record == 14
+
+
+def test_a_typed_quantity_or_serials_are_read_as_they_were_judged() -> None:
+    reading = movement(LineItem("U7 Lite", None))
+    assert replay_typed("3", question(Ask.QUANTITY), reading, CATALOG, "U0SAM") == TypedAnswer(
+        Ask.QUANTITY, quantity=Decimal(3)
+    )
+    serials = replay_typed("SN-1A SN-2B", question(Ask.SERIALS), reading, CATALOG, "U0SAM")
+    assert serials == TypedAnswer(Ask.SERIALS, serials=("SN-1A", "SN-2B"))
+    assert replay_typed("3", question(Ask.QUANTITY, line=2), reading, CATALOG, "U0SAM") is None
+    assert replay_typed("3", question(Ask.QUANTITY, line=None), reading, CATALOG, "U0SAM") is None

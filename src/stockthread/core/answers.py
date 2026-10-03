@@ -17,6 +17,10 @@ the reading that stands, oldest first, onto that same reading read again; this m
   revision and picks from the named items only (`resolve.resolve_lines`).
 - "No" to any yes-or-no question about the reading ends the plan: nothing of this reading will be applied. So does
   "Drop it".
+- An answer by thread reply (`Typed`, read by `core/typed_answers.py`) gives the line its quantity or serials, or
+  the matcher's result for the typed name of its part or place, and settles every reason of that line with the
+  code its question was asked for. A quantity answer settles every doubt about that line's quantity; one to a
+  pack-unit question also makes the line count pieces.
 
 An answer to a question for approvers counts only while its author is an approver; one that does not fit its
 question (a record that was not offered, a movement or line the reading does not have) changes nothing. Neither
@@ -29,6 +33,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 from stockthread.core.model import Match, MatchRule, MatchStatus, MovementType, ReasonCode
@@ -42,6 +47,7 @@ from stockthread.core.questions import (
     question_from_json,
     tier_of,
 )
+from stockthread.core.typed_answers import TypedAnswer
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,28 @@ class Given:
         return cls(item, question_from_json(question), choice_from_json(answer), by)
 
 
+_QUANTITY_DOUBTS = (
+    ReasonCode.QUANTITY_MISSING,
+    ReasonCode.QUANTITY_VAGUE,
+    ReasonCode.QUANTITY_FROM_PHOTO,
+    ReasonCode.QUANTITY_NOT_IN_TEXT,
+)
+"""What a typed quantity settles on its line, whichever of them was asked about. A pack-unit doubt is settled only
+by an answer to a pack-unit question: a quantity typed for "how many?" says nothing about what one of them is."""
+
+
+@dataclass(frozen=True)
+class Typed:
+    """One answer by thread reply: the id of its question, the question, what the message reads as now, the typed
+    text (shown beside the post's own words), and who wrote it."""
+
+    item: int
+    question: Question
+    answer: TypedAnswer
+    text: str
+    by: str
+
+
 @dataclass
 class Effects:
     """What the answers replayed onto one reading change. Keys are movement indexes (and line or side)."""
@@ -69,6 +97,20 @@ class Effects:
     stock: dict[tuple[int, int], tuple[int, ...]] = field(default_factory=dict)
     """(movement, line): the stock items a person named for the line, oldest answer first and the newest kept;
     empty for "None of these". A line without an entry picks by the rule."""
+    quantities: dict[tuple[int, int], Decimal] = field(default_factory=dict)
+    """(movement, line): the quantity typed in the thread."""
+    pieces: set[tuple[int, int]] = field(default_factory=set)
+    """(movement, line): lines a quantity answer to a pack-unit question set to count pieces."""
+    serials: dict[tuple[int, int], tuple[str, ...]] = field(default_factory=dict)
+    """(movement, line): the serials typed in the thread. Typed by a person, they count as confirmed."""
+    named: dict[tuple[int, int | Side], str] = field(default_factory=dict)
+    """(movement, line or side): the name typed in the thread for a part or a place, whose match is in `parts` or
+    `places`."""
+    retyped: set[int] = field(default_factory=set)
+    """The movements an answer by thread reply changed: validation runs on them again."""
+    settled: set[tuple[int, int | None, ReasonCode]] = field(default_factory=set)
+    """(movement, line or None, code): every reason with that code on that line is settled by an answer by thread
+    reply, whatever its detail: the value it doubted was replaced by what a person typed."""
     cleared: set[tuple[int, int | None, ReasonCode, str]] = field(default_factory=set)
     """(movement, line or None, code, detail): the reasons a "yes" cleared (`questions.reason_line` gives a reason's
     line)."""
@@ -80,12 +122,14 @@ class Effects:
     """The ids of the questions whose answers changed nothing: not from an approver now, or not fitting."""
 
 
-def replay(given: Sequence[Given], shape: Sequence[int], approvers: Collection[str]) -> Effects:
+def replay(given: Sequence[Given | Typed], shape: Sequence[int], approvers: Collection[str]) -> Effects:
     """The effects of `given`, oldest first, on a reading whose movement n has `shape[n]` line items."""
     effects = Effects()
     for answer in given:
         if effects.rejected is not None:
             effects.ignored.append(answer.item)  # the plan has ended: nothing after it is applied
+        elif isinstance(answer, Typed):
+            (effects.applied if _typed(answer, shape, approvers, effects) else effects.ignored).append(answer.item)
         elif _apply(answer, shape, approvers, effects):
             effects.applied.append(answer.item)
         else:
@@ -129,6 +173,42 @@ def _apply(answer: Given, shape: Sequence[int], approvers: Collection[str], effe
             effects.cleared.add((movement, question.line, question.reason, question.detail))
             return True
     return False  # a question answered by a thread reply has no buttons; a yes to an old stock doubt clears nothing
+
+
+def _typed(answer: Typed, shape: Sequence[int], approvers: Collection[str], effects: Effects) -> bool:
+    question, typed = answer.question, answer.answer
+    if (question.approver_only and answer.by not in approvers) or typed.ask is not question.ask:
+        return False
+    movement = question.movement
+    if movement >= len(shape):
+        return False
+    if question.ask is Ask.NAME_LOCATION:
+        if question.side is None or typed.match is None:
+            return False
+        effects.places[(movement, question.side)] = typed.match
+        effects.named[(movement, question.side)] = answer.text
+    else:
+        if question.line is None or question.line >= shape[movement] or question.side is not None:
+            return False
+        line = (movement, question.line)
+        if question.ask is Ask.NAME_PART and typed.match is not None:
+            effects.parts[line] = typed.match
+            effects.named[line] = answer.text
+        elif question.ask is Ask.QUANTITY and typed.quantity is not None:
+            effects.quantities[line] = typed.quantity
+            if question.reason is ReasonCode.PACK_UNIT_AMBIGUOUS:
+                effects.pieces.add(line)
+        elif question.ask is Ask.SERIALS and typed.serials:
+            effects.serials[line] = typed.serials
+        else:
+            return False
+    effects.retyped.add(movement)
+    # Some reasons are about the post's text and would come back when the movement is validated again: the same
+    # doubt raised by rule and by the model, or a typed quantity that the post's text does not state.
+    effects.settled.add((movement, question.line, question.reason))
+    if question.ask is Ask.QUANTITY:
+        effects.settled.update((movement, question.line, code) for code in _QUANTITY_DOUBTS)
+    return True
 
 
 def _stock(answer: Given, effects: Effects) -> bool:

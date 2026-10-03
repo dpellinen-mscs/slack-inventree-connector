@@ -8,7 +8,7 @@ from decimal import Decimal
 
 import pytest
 
-from stockthread.core.answers import Given, clears_on_yes, replay
+from stockthread.core.answers import Given, Typed, clears_on_yes, replay
 from stockthread.core.model import (
     CandidateMovement,
     LineItem,
@@ -32,6 +32,7 @@ from stockthread.core.questions import (
     tier_of,
 )
 from stockthread.core.resolve import SourcePick
+from stockthread.core.typed_answers import TypedAnswer
 from stockthread.core.validate import TYPE_UNCLEAR
 
 SAM, LUIS = "U0SAM0001", "U0LUIS0005"
@@ -242,3 +243,82 @@ def test_read_the_stock_again_ends_the_lines_earlier_stock_answers_only() -> Non
         APPROVERS,
     )
     assert later.stock == {(0, 0): (41, 57)}
+
+
+# Answers by thread reply (`Typed`).
+
+
+def typed(question: Question, answer: TypedAnswer, by: str = SAM, item: int = 7, text: str = "typed") -> Typed:
+    return Typed(item, question, answer, text, by)
+
+
+def test_a_typed_quantity_replaces_the_line_quantity_and_settles_every_doubt_about_it() -> None:
+    question = Question(Ask.QUANTITY, ReasonCode.QUANTITY_MISSING, 0, 0)
+    effects = replay([typed(question, TypedAnswer(Ask.QUANTITY, quantity=Decimal(3)))], [1], APPROVERS)
+    assert effects.quantities == {(0, 0): Decimal(3)}
+    assert effects.applied == [7]
+    assert effects.retyped == {0}
+    assert {code for _, _, code in effects.settled} == {
+        ReasonCode.QUANTITY_MISSING,
+        ReasonCode.QUANTITY_VAGUE,
+        ReasonCode.QUANTITY_FROM_PHOTO,
+        ReasonCode.QUANTITY_NOT_IN_TEXT,
+    }
+    assert effects.pieces == set()  # a pack-unit doubt is not settled by "how many?"
+
+
+def test_a_typed_quantity_for_a_pack_unit_question_counts_pieces() -> None:
+    question = Question(Ask.QUANTITY, ReasonCode.PACK_UNIT_AMBIGUOUS, 0, 0)
+    effects = replay([typed(question, TypedAnswer(Ask.QUANTITY, quantity=Decimal(24)))], [1], APPROVERS)
+    assert effects.pieces == {(0, 0)}
+    assert (0, 0, ReasonCode.PACK_UNIT_AMBIGUOUS) in effects.settled
+
+
+def test_a_typed_name_gives_the_matchers_result_and_keeps_the_typed_text() -> None:
+    part = Question(Ask.NAME_PART, ReasonCode.PART_UNMATCHED, 0, 1)
+    place = Question(Ask.NAME_LOCATION, ReasonCode.IMPLIED_SOURCE, 0, None, "source")
+    loose = Match(MatchStatus.MATCHED, MatchRule.WORDS, 4)
+    effects = replay(
+        [
+            typed(part, TypedAnswer(Ask.NAME_PART, match=loose), item=1, text="the pro one"),
+            typed(place, TypedAnswer(Ask.NAME_LOCATION, match=EXACT), item=2, text="main stock"),
+        ],
+        [2],
+        APPROVERS,
+    )
+    assert effects.parts == {(0, 1): loose}  # a loose match is confirmed by the next question
+    assert effects.places == {(0, "source"): EXACT}
+    assert effects.named == {(0, 1): "the pro one", (0, "source"): "main stock"}
+    assert effects.applied == [1, 2]
+
+
+def test_typed_serials_replace_the_lines_serials() -> None:
+    question = Question(Ask.SERIALS, ReasonCode.SERIAL_UNCONFIRMED, 0, 0)
+    effects = replay([typed(question, TypedAnswer(Ask.SERIALS, serials=("SN-1A", "SN-2B")))], [1], APPROVERS)
+    assert effects.serials == {(0, 0): ("SN-1A", "SN-2B")}
+    assert (0, 0, ReasonCode.SERIAL_UNCONFIRMED) in effects.settled
+
+
+@pytest.mark.parametrize(
+    ("question", "answer", "by"),
+    [
+        # for approvers, typed by the poster
+        (Question(Ask.QUANTITY, ReasonCode.QUANTITY_MISSING, 0, 0, approver_only=True), Decimal(3), SAM),
+        (Question(Ask.QUANTITY, ReasonCode.QUANTITY_MISSING, 0, 4), Decimal(3), SAM),  # a line the reading lacks
+        (Question(Ask.QUANTITY, ReasonCode.QUANTITY_MISSING, 2, 0), Decimal(3), SAM),  # a movement it lacks
+        (Question(Ask.SERIALS, ReasonCode.SERIAL_UNCONFIRMED, 0, 0), Decimal(3), SAM),  # the answer of another ask
+    ],
+)
+def test_a_typed_answer_that_does_not_fit_changes_nothing(question: Question, answer: Decimal, by: str) -> None:
+    effects = replay([typed(question, TypedAnswer(Ask.QUANTITY, quantity=answer), by=by)], [1], APPROVERS)
+    assert effects.ignored == [7]
+    assert (effects.quantities, effects.settled, effects.retyped) == ({}, set(), set())
+
+
+def test_a_typed_answer_after_a_rejection_is_not_applied() -> None:
+    no = Given(1, Question(Ask.CONFIRM, ReasonCode.CONTRADICTION, 0), Choice("no"), SAM)
+    question = Question(Ask.QUANTITY, ReasonCode.QUANTITY_MISSING, 0, 0)
+    effects = replay([no, typed(question, TypedAnswer(Ask.QUANTITY, quantity=Decimal(3)), item=2)], [1], APPROVERS)
+    assert effects.rejected == 1
+    assert effects.ignored == [2]
+    assert effects.quantities == {}

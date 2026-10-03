@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -97,6 +97,8 @@ class MovementView:
     stock: Sequence[SourcePick | None] = ()
     """The stock items each line acts on, as read from InvenTree (None: that line's stock was not read). Empty:
     no line's stock was read."""
+    named: Mapping[int | str, str] = field(default_factory=dict)
+    """The names typed in the thread, by line or side ("source", "destination"), shown beside the post's words."""
 
     def __post_init__(self) -> None:
         if len(self.items) != len(self.movement.line_items):
@@ -115,8 +117,11 @@ def _number(value: Decimal) -> str:
     return format(value.normalize(), "f") if value == value.to_integral_value() else format(value, "f")
 
 
-def _named(text: str | None, match: Match | None, names: Mapping[int, str], what: str) -> str:
+def _named(text: str | None, match: Match | None, names: Mapping[int, str], what: str, typed: str | None = None) -> str:
     written = f"“{escape(text)}”" if text else "(not stated)"
+    if typed is not None:
+        typed_as = f"named in the thread as “{escape(typed)}”"
+        written = f"{written}, {typed_as}" if text else typed_as
     if match is None:
         return written
     if match.status is MatchStatus.MATCHED and match.record is not None:
@@ -135,7 +140,7 @@ def _line(view: MovementView, index: int, parts: Mapping[int, str]) -> str:
     quantity = "?" if item.quantity is None else _number(item.quantity)
     unit = f" {escape(item.unit)}" if item.unit else ""
     pack = f" of {_number(item.pack_size)}" if item.pack_size is not None else ""
-    named = _named(item.item_text, view.items[index], parts, "part")
+    named = _named(item.item_text, view.items[index], parts, "part", view.named.get(index))
     pick = view.stock[index] if view.stock else None
     return f"• {quantity}{unit}{pack} \N{MULTIPLICATION SIGN} {named}{_stock(movement, pick)}"
 
@@ -230,10 +235,11 @@ def dry_run_reply(
         if len(views) > 1:
             heading = f"{number}. {heading}"
         lines = [_line(view, i, parts) for i in range(len(view.items))]
-        places = (
-            f"From {_named(movement.source_text, view.source, locations, 'location')}"
-            f" to {_named(movement.destination_text, view.destination, locations, 'location')}"
+        source = _named(movement.source_text, view.source, locations, "location", view.named.get("source"))
+        destination = _named(
+            movement.destination_text, view.destination, locations, "location", view.named.get("destination")
         )
+        places = f"From {source} to {destination}"
         blocks.append(_section("\n".join([f"*{heading}*", *lines, places])))
         details: dict[ReasonCode, list[str]] = {}
         for code, detail in sorted(gate_reasons(view), key=lambda reason: (reason[0].value, reason[1])):

@@ -634,8 +634,7 @@ needs.
       is applied and verified ([0012](decisions/0012-first-confirmation-becomes-alias.md)).
       Answers given as thread replies follow the same rules once they are
       read (below).
-  - **Answers by thread reply (designed; the reading rules are built, the
-    worker does not use them yet).** Four questions have
+  - **Answers by thread reply (built).** Four questions have
     no buttons: which part (`name_part`), which place (`name_location`),
     how many (`quantity`) and which serials (`serials`). The person
     answers them by writing in the thread. Which questions take one and
@@ -655,8 +654,13 @@ needs.
       that question, the same rule as for a button. It is the first
       message that meets these conditions and reads cleanly: a message
       before it that does not read cleanly uses up nothing. A question
-      gets one answer, and one message answers one question. And it
-      *reads cleanly as an answer* to that ask:
+      gets one answer, and one message answers one question. It is the
+      only change of the post since its newest dry run: one new message,
+      no edit (`worker._candidate`). Two messages that join in one
+      revision, or a message that joins with an edit, are read with the
+      post, the safe side; "one sec, checking" and then "3" a minute later
+      are two revisions, and "3" answers. And it *reads cleanly as an
+      answer* to that ask:
       - `quantity`: the whole message is one number, as digits or as a
         word the rules already read ("3", "three"), greater than zero
         (zero only for a count). A piece word may follow ("3 pcs",
@@ -721,9 +725,14 @@ needs.
       - a `serials` answer replaces the line's serials. Typed by a person
         in the thread, they count as confirmed (the brief: serials are
         confirmed by barcode, OCR or a person).
-      Validation and the matcher then run as for any reading. The
-      question's own reason (code and detail) is cleared, as for a "yes",
-      because some reasons are about the text and would come back.
+      Validation and the matcher then run as for any reading, with the
+      answer's text in the post. Some reasons are about the text and would
+      come back, so an answer settles every reason of its line (or side)
+      with its question's code, whatever the detail (the rule and the
+      model may raise the same doubt), and a quantity answer settles every
+      doubt about that line's quantity: missing, vague, read from a photo,
+      or not in the text (the person typed it). A pack-unit doubt is
+      settled only by an answer to a pack-unit question.
     - *What the extractor reads.* One rule: a message is kept out of the
       extractor's input only while it is the counted answer to a question
       of the reading that stands. When answers start over (another
@@ -740,19 +749,21 @@ needs.
       reading never changes without someone touching the thread.
     - *Stored.* The answer row keeps the message's `ts` and the kind of
       answer, never the text: on replay the message is read as it is now.
+      The row also keeps the stamp of the edit the message was judged as.
       An edit of an answer message is a change of the post like any other
-      and makes a revision. If it still reads cleanly, the new value is
-      the answer. If it no longer does, it is a thread message from then
-      on: it is read with the post, the reading differs, and the answers
-      start over, the safe side for an edit that may be a correction. A
-      deleted answer message is no answer, and the question it answered
-      is asked again.
+      and makes a revision, and the edited message is a thread message from
+      then on: it is read with the post, the reading differs, and the
+      answers start over, the safe side for an edit that may be a
+      correction (it is not judged again: a corrected value is asked for
+      again by the new reading's question). A deleted answer message is no
+      answer, and the question it answered is asked again.
     - *Then.* As for a click: the post is due at once, the revised dry run
-      shows the result and asks the next question, and the question's
-      reply loses nothing (it has no buttons to take down). The answer
-      message gets no ephemeral note when it counts; a message that reads
-      cleanly but comes from someone who may not answer gets the same note
-      a click would ("poster or approver only").
+      shows the result and asks the next question, and the question is
+      taken out of its reply, which says who answered. The answer message
+      gets no ephemeral note when it counts. (Designed, not built yet: a
+      message that reads cleanly but comes from someone who may not answer
+      gets the same note a click would, "poster or approver only". Today
+      it is read with the post and gets no note.)
     - *Limits.* As for buttons: an answer never authorizes a write. A
       typed name is a human correction of the post's own words, so once
       the plan is applied and verified, the post's item text becomes an
