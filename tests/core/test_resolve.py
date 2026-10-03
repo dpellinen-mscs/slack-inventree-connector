@@ -21,6 +21,7 @@ from stockthread.core.resolve import (
     DETAIL_NONE_CHOSEN,
     DETAIL_SERIAL_COUNT,
     DETAIL_SERIAL_NOT_FOUND,
+    DETAIL_SERIALIZED_REMOVE,
     DETAIL_SERIALIZED_TARGET,
     DETAIL_SERIALS_NEEDED,
     DETAIL_SEVERAL_TARGETS,
@@ -460,3 +461,32 @@ def test_serialized_stock_is_never_offered_as_a_choice() -> None:
     (pick,) = resolve_lines([LineStock(TRANSFER, Decimal(1), stock, chosen=(41,))])
     assert codes(pick) == [(ReasonCode.STOCK_CHOICE, DETAIL_CHOSEN_SHORT)]
     assert (pick.offer, pick.split) == ((), ())  # so the question is "read the stock again"
+
+
+def test_a_remove_of_serialized_stock_shows_its_items_and_waits_for_a_person() -> None:
+    """InvenTree answers a remove on a serialized item with success and changes nothing: never a write."""
+    stock = [item(1, "1", serial="SN-1"), item(2, "1", serial="SN-2")]
+    for pick in (
+        resolve_line(Operation.REMOVE, Decimal(1), stock, ("SN-2",)),
+        resolve_lines([LineStock(Operation.REMOVE, Decimal(1), stock, ("SN-2",))])[0],
+        resolve_lines([LineStock(Operation.REMOVE, Decimal(2), stock)])[0],
+    ):
+        assert pick.takes
+        assert (ReasonCode.STOCK_CHOICE, DETAIL_SERIALIZED_REMOVE) in codes(pick)
+        assert not pick.decided
+    moved = resolve_lines([LineStock(Operation.TRANSFER, Decimal(1), stock, ("SN-2",))])[0]
+    assert moved.decided  # a transfer moves serialized stock whole
+    plain = resolve_lines([LineStock(Operation.REMOVE, Decimal(1), [item(3, "5")])])[0]
+    assert plain.decided
+
+
+def test_a_remove_of_serialized_stock_leaves_it_for_the_lines_after_it() -> None:
+    """InvenTree leaves a serialized item where it is after a remove, so a later line of the post still finds it."""
+    stock = [item(1, "1", serial="SN-1")]
+    consumed, moved = resolve_lines(
+        [LineStock(Operation.REMOVE, Decimal(1), stock, ("SN-1",)), LineStock(TRANSFER, Decimal(1), stock, ("SN-1",))]
+    )
+    assert consumed.takes == takes((1, "1"))
+    assert (ReasonCode.STOCK_CHOICE, DETAIL_SERIALIZED_REMOVE) in codes(consumed)
+    assert moved.takes == takes((1, "1"))
+    assert moved.decided
