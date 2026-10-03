@@ -77,6 +77,8 @@ def test_a_count_may_set_zero_and_nothing_else_may() -> None:
         ([Take(44, Decimal("0.000001"))], "round"),
         ([Take(44, Decimal("1.0000000000000000000000000000001"))], "round"),  # 32 digits: past normalize's precision
         ([Take(44, Decimal("1E+10"))], "larger"),
+        ([Take(44, Decimal("1E-1000030"))], "round"),  # past the default exponent range: normalize made it 0
+        ([Take(44, Decimal("1E+1000000"))], "larger"),  # past the default exponent range: normalize overflowed
     ],
 )
 def test_takes_inventree_would_misread_are_refused(takes: list[Take], message: str) -> None:

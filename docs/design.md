@@ -948,8 +948,8 @@ needs.
   `location` for a transfer only. The builder refuses rather than repairs:
   no item twice, a quantity InvenTree would round (more than 5 decimal
   places) or cannot store, zero except for a count, a transfer without a
-  destination or another operation with one, and a user id or link that
-  is not exactly one, or notes that would reach 200 characters. The notes are the
+  destination or another operation with one, a malformed user id or
+  link, or notes that would reach 200 characters. The notes are the
   marker, the Slack user id and the https link to the message, nothing
   else (`write_notes`). Each body is posted to every pinned version in
   `tests/integration/test_built_requests.py`.

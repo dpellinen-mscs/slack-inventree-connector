@@ -162,6 +162,24 @@ def test_a_remove_without_its_source_is_refused() -> None:
         plan_requests([view(MovementType.CONSUME, source=None)], markers(1), user=SAM)
 
 
+@pytest.mark.parametrize(
+    ("given", "message"),
+    [
+        (view(MovementType.CONSUME, source=None), "a remove needs its source"),
+        (view(source=None), "a transfer needs its source and its destination"),
+        (view(destination=None), "a transfer needs its source and its destination"),
+        (view(MovementType.RECEIVE, destination=None), "a add needs the place it acts at"),
+    ],
+)
+def test_places_are_checked_again_even_if_the_gate_missed_them(
+    monkeypatch: pytest.MonkeyPatch, given: MovementView, message: str
+) -> None:
+    """plan.py does not rely on gate_reasons alone for the places a write needs."""
+    monkeypatch.setattr("stockthread.plan.gate_reasons", lambda _view: set())
+    with pytest.raises(NotDecided, match=message):
+        plan_requests([given], markers(1), user=SAM)
+
+
 def test_a_count_to_zero_is_sent_as_zero() -> None:
     (request,) = plan_requests(
         [view(MovementType.COUNT, lines=(("Disc 40", "0"),), stock=(picked((71, "0")),))], markers(1), user=SAM
