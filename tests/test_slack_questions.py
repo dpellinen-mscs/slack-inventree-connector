@@ -11,7 +11,16 @@ import pytest
 from corpus import cases, corpus_views, eval_catalog
 
 from stockthread.core import resolve
-from stockthread.core.model import CandidateMovement, LineItem, Match, MatchRule, MatchStatus, MovementType, ReasonCode
+from stockthread.core.model import (
+    CandidateMovement,
+    LineItem,
+    Match,
+    MatchRule,
+    MatchStatus,
+    MovementType,
+    Operation,
+    ReasonCode,
+)
 from stockthread.core.questions import (
     Ask,
     Choice,
@@ -358,6 +367,21 @@ def test_a_stock_item_is_labelled_by_its_id_what_is_on_hand_and_its_batch_or_sup
     assert "Which stock item is “Disc 40” taken from (x)?" in text_of(body)
     target = question_message(question, [stock_view(pick, MovementType.COUNT)], PARTS, LOCATIONS, ids(question))
     assert "Which stock item of “Disc 40” is it (x)?" in text_of(target)
+
+
+def test_a_target_is_labelled_with_what_is_on_hand_after_an_earlier_line_takes_part_of_it() -> None:
+    stock = [stock_item(41, "5", batch="B-1"), stock_item(42, "5", batch="B-2")]
+    take, add = resolve.resolve_lines(
+        [
+            resolve.LineStock(Operation.TRANSFER, Decimal(2), stock, chosen=(41,)),
+            resolve.LineStock(Operation.ADD, Decimal(1), stock),
+        ]
+    )
+    assert [(t.item, t.quantity) for t in take.takes] == [(41, Decimal(2))]
+    question = Question(Ask.CHOOSE_STOCK, ReasonCode.STOCK_CHOICE, 0, 0, None, (41, 42))
+    body = question_message(question, [stock_view(add, MovementType.RECEIVE)], PARTS, LOCATIONS, ids(question))
+    labels = [b["text"]["text"] for b in buttons(body)]
+    assert labels == ["#41 · 5 on hand · batch B-1", "#42 · 5 on hand · batch B-2", "None of these"]  # not "5 left"
 
 
 def test_a_stock_question_about_items_the_pick_does_not_offer_is_not_shown() -> None:

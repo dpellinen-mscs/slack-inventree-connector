@@ -787,7 +787,9 @@ needs.
       there is never a split: buttons, one per eligible item at the place
       (unserialized; status and allocation do not matter, as in the rule),
       oldest first, at most 5, then "None of these". The label is the
-      same, with what is left for information only.
+      same except for the quantity, which is what InvenTree shows, for
+      information only (`#57 · 5 on hand`): a target is offered as read,
+      whatever the lines before it take.
     - *Nothing the thread can choose* (no stock item, too few, serialized
       stock without serials, mixed serialized and unserialized stock, a
       serialized target, other lines of the post take the same stock so

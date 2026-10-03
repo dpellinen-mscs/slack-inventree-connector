@@ -363,7 +363,8 @@ def question_message(
     plain = text.replace(f"*{record}*", record) if record else text
     blocks: list[dict[str, Any]] = [_section(text)]
     if ask is Ask.CHOOSE_STOCK:
-        labels = [_stock_label(choice, _offered(question, view)) for choice in buttons]
+        target = operation_for(view.movement.movement_type) in (Operation.ADD, Operation.COUNT)
+        labels = [_stock_label(choice, _offered(question, view), target) for choice in buttons]
     elif ask is Ask.READ_STOCK_AGAIN:
         labels = ["Read the stock again", "Drop it"]
     else:
@@ -416,13 +417,14 @@ def _offered(question: Question, view: MovementView) -> Mapping[int, StockItem]:
     return offered
 
 
-def _stock_label(choice: Choice, offered: Mapping[int, StockItem]) -> str:
-    """`#57 · 5 left · batch B-1`: words from InvenTree, never from the post. The quantity is what the item holds once
-    the lines of the post before this one have taken their share, so it can be less than InvenTree shows."""
+def _stock_label(choice: Choice, offered: Mapping[int, StockItem], target: bool) -> str:
+    """`#57 · 5 left · batch B-1`: words from InvenTree, never from the post. To take from, the quantity is what the
+    item holds once the lines of the post before this one have taken their share, so it can be less than InvenTree
+    shows. A target (an add or a count) is offered as read, whatever the lines before it take: `5 on hand`."""
     if choice.kind != "record" or choice.record is None:
         return "None of these"
     item = offered[choice.record]
-    parts = [f"#{item.pk}", f"{_number(item.quantity)} left"]
+    parts = [f"#{item.pk}", f"{_number(item.quantity)} {'on hand' if target else 'left'}"]
     if item.batch:
         parts.append(f"batch {' '.join(item.batch.split())}")
     if item.supplier_part is not None:
