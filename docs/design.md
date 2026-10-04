@@ -1326,6 +1326,19 @@ connector never has two InvenTree writes in flight and cannot race itself.
    `stock_items`: each source item's pk and the quantity it held, as a
    decimal string (`{"stock_items": {"7": "3"}}`). Otherwise store the snapshot,
    the exact request body and the move to `applying` in one transaction.
+   Built (the check, pure): `precondition.check` takes the movement's
+   decided view and the stock items of every pair `precondition.pairs`
+   names (each line's part where the movement acts, and at a transfer's
+   destination), read now. It refuses (`Stale`, with the line and item)
+   when a named item is no longer at that location, lacks a serial number
+   the line names, or, for a transfer or a remove, is no longer available
+   or holds less than the movement's lines take from it together; for an
+   add or a count, when the target is gone or now serialized (an emptied
+   target is still a target). Otherwise it returns the snapshot: each named
+   item's quantity and the total at each pair, stored as
+   `{"stock_items": {"<pk>": "<qty>"}, "totals": {"<part>@<location>":
+   "<qty>"}}`. Not built yet: the comparison with the stock the plan was
+   built on, and the history entry ids.
    Built (the transaction): `Store.begin_attempt`. The body is built
    before it, with the marker `Store.next_marker` names, and
    `begin_attempt` refuses a body whose notes do not lead with the marker
