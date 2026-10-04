@@ -1291,12 +1291,12 @@ connector never has two InvenTree writes in flight and cannot race itself.
    per request with `Store.recorded_requests` (each request's state and
    its attempts with their outcomes). A `hit` is a found marker that no
    recorded attempt explains, that InvenTree refused, that belongs to a
-   request that never wrote, or that belongs to an earlier attempt of a
-   request applied (or undone) once. A `missing` finding is the last
+   request that never wrote, or a second attempt of one kind (apply or
+   undo) that also wrote, in any state. A `missing` finding is the last
    apply of a verified or undone request, or the last undo of an undone
-   one, not found, except a removal (the apply of a remove, the undo of
-   an add), whose marker 1.4.3 may lose on depletion. Requests in flight
-   or in front of the operator are checked for unexplained hits only.
+   one, not found, unless the caller saw its stock item answer 404 (the
+   1.4.3 depletion case) or it is the apply of an undone request whose
+   outcome stayed unknown.
 3. **Snapshot and precondition.** Read every stock item of each part in
    the plan, at the source and at the destination location, without
    sub-locations. Compare with what the plan was built on. If a source

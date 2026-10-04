@@ -105,14 +105,19 @@ def test_a_verified_request_without_its_marker_is_missing() -> None:
     assert check(request(S.VERIFIED, (APPLY, 1, OC.ACCEPTED))) == [(MISSING, m(APPLY, 1))]
 
 
-def test_a_verified_remove_without_its_marker_is_no_finding() -> None:
-    # 1.4.3: a removal that deleted its stock item cannot be found by search (design section 5, Depletion).
-    assert check(request(S.VERIFIED, (APPLY, 1, OC.ACCEPTED), operation=Operation.REMOVE)) == []
+def test_a_verified_write_whose_item_is_gone_may_miss_its_marker() -> None:
+    # 1.4.3: a write that deleted its stock item cannot be found by search (design section 5, Depletion). Only the
+    # caller's 404 excuses it, never the operation alone: a partial remove still leaves its marker.
+    remove = request(S.VERIFIED, (APPLY, 1, OC.ACCEPTED), operation=Operation.REMOVE)
+    assert check(remove) == [(MISSING, m(APPLY, 1))]
+    assert check_markers([remove], {ID_1: []}, item_gone=[m(APPLY, 1)]) == []
+    assert check_markers([remove], {ID_1: []}, item_gone=[m(APPLY, 2)]) != []
 
 
-def test_a_verified_remove_found_twice_is_still_a_hit() -> None:
+def test_an_earlier_attempt_that_wrote_is_a_hit_even_if_the_last_ones_item_is_gone() -> None:
     twice = request(S.VERIFIED, (APPLY, 1, OC.UNKNOWN), (APPLY, 2, OC.ACCEPTED), operation=Operation.REMOVE)
-    assert check(twice, [m(APPLY, 1)]) == [(HIT, m(APPLY, 1))]
+    findings = check_markers([twice], {ID_1: [m(APPLY, 1)]}, item_gone=[m(APPLY, 2)])
+    assert [(finding.kind, finding.marker) for finding in findings] == [(HIT, m(APPLY, 1))]
 
 
 def test_an_earlier_apply_attempt_of_a_verified_request_that_also_wrote_is_a_hit() -> None:
@@ -143,16 +148,19 @@ def test_an_undone_request_without_its_undo_marker_is_missing() -> None:
     assert check(undone, [m(UNDO, 1)]) == [(MISSING, m(APPLY, 1))]
 
 
-def test_the_undo_of_an_add_is_a_removal_and_may_not_be_found() -> None:
+def test_an_undone_request_whose_undo_item_is_gone_may_miss_its_undo_marker() -> None:
     undone = request(S.UNDONE, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.ACCEPTED), operation=Operation.ADD)
-    assert check(undone, [m(APPLY, 1)]) == []
-    assert check(undone, [m(UNDO, 1)]) == [(MISSING, m(APPLY, 1))]
+    assert check(undone, [m(APPLY, 1)]) == [(MISSING, m(UNDO, 1))]
+    assert check_markers([undone], {ID_1: [m(APPLY, 1)]}, item_gone=[m(UNDO, 1)]) == []
 
 
-def test_an_undone_remove_may_miss_its_apply_marker_but_not_its_undo_marker() -> None:
-    undone = request(S.UNDONE, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.ACCEPTED), operation=Operation.REMOVE)
+def test_an_undone_apply_whose_outcome_stayed_unknown_may_miss_its_apply_marker() -> None:
+    # unknown, recovery: not found but changed -> verify_failed; the operator undid what was observed.
+    undone = request(S.UNDONE, (APPLY, 1, OC.UNKNOWN), (UNDO, 1, OC.ACCEPTED))
     assert check(undone, [m(UNDO, 1)]) == []
     assert check(undone) == [(MISSING, m(UNDO, 1))]
+    verified = request(S.VERIFIED, (APPLY, 1, OC.UNKNOWN))
+    assert check(verified) == [(MISSING, m(APPLY, 1))]
 
 
 def test_an_earlier_undo_attempt_of_an_undone_request_that_also_wrote_is_a_hit() -> None:
@@ -219,3 +227,21 @@ def test_a_recorded_attempt_must_carry_the_requests_marker_id() -> None:
         RecordedRequest(KEY_1, Operation.TRANSFER, S.APPLYING, ID_1, (RecordedAttempt(m(APPLY, 1, ID_2), None),))
     with pytest.raises(ValueError, match="own marker"):
         RecordedRequest(KEY_1, Operation.TRANSFER, S.FAILED, ID_1, (RecordedAttempt(m(APPLY, 1), OC.REFUSED),) * 2)
+
+
+# A write twice, in any state that may write again
+
+
+@pytest.mark.parametrize("state", [S.VERIFY_FAILED, S.ACCEPTED, S.APPLIED, S.UNDO_FAILED, S.UNDOING, S.UNKNOWN])
+def test_two_apply_attempts_that_both_wrote_are_a_hit_in_any_state(state: RequestState) -> None:
+    # unknown -> failed -> a new attempt -> verify_failed, and then the first attempt lands late.
+    twice = request(state, (APPLY, 1, OC.UNKNOWN), (APPLY, 2, OC.ACCEPTED))
+    assert check(twice, [m(APPLY, 2)]) == []
+    assert check(twice, [m(APPLY, 1), m(APPLY, 2)]) == [(HIT, m(APPLY, 1))]
+
+
+@pytest.mark.parametrize("state", [S.VERIFY_FAILED, S.ACCEPTED, S.UNDO_UNKNOWN, S.UNDOING])
+def test_two_undo_attempts_that_both_wrote_are_a_hit_in_any_state(state: RequestState) -> None:
+    twice = request(state, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.UNKNOWN), (UNDO, 2, OC.UNKNOWN))
+    assert check(twice, [m(APPLY, 1), m(UNDO, 2)]) == []
+    assert check(twice, [m(APPLY, 1), m(UNDO, 1), m(UNDO, 2)]) == [(HIT, m(UNDO, 1))]
