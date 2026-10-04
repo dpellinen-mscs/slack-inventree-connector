@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from stockthread.config import Settings, parse_settings
-from stockthread.core.resolve import StockItem
+from stockthread.core.model import Operation, ReasonCode
+from stockthread.core.resolve import SourcePick, StockItem, Take, resolve_line
 from stockthread.inventree import InvenTreeError
 from stockthread.run import inventree_stock
 
@@ -47,3 +48,27 @@ def test_a_refused_token_is_an_inventree_error(scratch: Scratch) -> None:
     read = inventree_stock(settings("not-a-token"))
     with pytest.raises(InvenTreeError, match="refused the token"):
         read([(scratch.part, scratch.parent)])
+
+
+def test_char_depleted_items_are_read(api: RawApi, scratch: Scratch) -> None:
+    """An item emptied by a remove (and kept: delete_on_deplete off) is left out by InvenTree's `in_stock` filter and
+    given by its `depleted` filter. The reader reads both, so a receive or a count finds the empty item as its
+    target, and an empty item next to a full one is a choice, not the full one (audit #107)."""
+    emptied = scratch.stock(2, delete_on_deplete=False)
+    response = api.post("/api/stock/remove/", {"items": [{"pk": emptied["pk"], "quantity": 2}], "notes": "r"})
+    assert response.status_code == 201, response.text[:500]
+    assert api.get("/api/stock/", part=scratch.part, location=scratch.parent, in_stock="true") == []
+    read = inventree_stock(settings())
+    (only,) = read([(scratch.part, scratch.parent)])[(scratch.part, scratch.parent)]
+    assert (only.pk, only.quantity) == (emptied["pk"], Decimal(0))
+    for operation in (Operation.ADD, Operation.COUNT):
+        assert resolve_line(operation, Decimal(3), [only]) == SourcePick((Take(emptied["pk"], Decimal(3)),))
+    full = scratch.stock(5)
+    both = read([(scratch.part, scratch.parent)])[(scratch.part, scratch.parent)]
+    assert [item.pk for item in both] == sorted([emptied["pk"], full["pk"]])
+    assert [reason.code for reason in resolve_line(Operation.ADD, Decimal(3), both).reasons] == [
+        ReasonCode.STOCK_CHOICE
+    ]
+    assert resolve_line(Operation.REMOVE, Decimal(1), both).takes == (
+        Take(full["pk"], Decimal(1)),
+    )  # never the empty one

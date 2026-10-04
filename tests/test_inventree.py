@@ -195,15 +195,37 @@ async def test_booleans_are_sent_the_way_django_filters_read_them() -> None:
     client, recorder = reader(respond(body={"count": 0, "results": []}))
     async with client:
         await client.stock_items(part=7, location=12)
-    params = dict(recorder.requests[0].url.params)
-    assert params == {
-        "part": "7",
-        "location": "12",
-        "cascade": "false",
-        "in_stock": "true",
-        "limit": "100",
-        "offset": "0",
-    }
+    in_stock, depleted = (dict(request.url.params) for request in recorder.requests)
+    place = {"part": "7", "location": "12", "cascade": "false", "limit": "100", "offset": "0"}
+    assert in_stock == {**place, "in_stock": "true"}
+    assert depleted == {**place, "depleted": "true"}
+
+
+def stock_rows(in_stock: list[object], depleted: list[object]) -> Handler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        rows = depleted if request.url.params.get("depleted") == "true" else in_stock
+        return httpx.Response(200, json={"count": len(rows), "results": rows})
+
+    return handler
+
+
+async def test_stock_items_are_those_in_stock_and_those_depleted_by_pk() -> None:
+    client, _ = reader(stock_rows([{"pk": 9, "quantity": 5}, {"pk": 3, "quantity": 1}], [{"pk": 4, "quantity": 0}]))
+    async with client:
+        assert [row["pk"] for row in await client.stock_items(part=7, location=12)] == [3, 4, 9]
+
+
+@pytest.mark.parametrize(
+    ("in_stock", "depleted"),
+    [([{"pk": 4, "quantity": 1}], [{"pk": 4, "quantity": 0}]), ([{"quantity": 1}], []), ([{"pk": "4"}], [])],
+)
+async def test_stock_items_refuse_a_row_read_twice_or_without_a_pk(
+    in_stock: list[object], depleted: list[object]
+) -> None:
+    client, _ = reader(stock_rows(in_stock, depleted))
+    async with client:
+        with pytest.raises(InvenTreeError, match="without a pk"):
+            await client.stock_items(part=7, location=12)
 
 
 def paged(total: int) -> Handler:

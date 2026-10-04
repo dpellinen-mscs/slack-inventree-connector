@@ -240,9 +240,19 @@ class InvenTreeReader:
         return await self.list_all("/api/part/", {"active": True})
 
     async def stock_items(self, part: int, location: int) -> list[dict[str, Any]]:
-        """Stock items of one part in one location, without its sub-locations, that are in stock."""
-        params = {"part": part, "location": location, "cascade": False, "in_stock": True}
-        return await self.list_all("/api/stock/", params)
+        """Stock items of one part in one location, without its sub-locations, by pk: those in stock and those
+        depleted to zero. An add or a count acts on the item that is there, even an empty one, so an empty item must
+        not hide (`core.resolve.target_item`); a pick never takes from it. InvenTree's `in_stock` filter leaves
+        depleted items out, and its `depleted` filter gives exactly them (`test_char_depleted_items_are_read`)."""
+        place = {"part": part, "location": location, "cascade": False}
+        rows = [
+            *await self.list_all("/api/stock/", {**place, "in_stock": True}),
+            *await self.list_all("/api/stock/", {**place, "depleted": True}),
+        ]
+        pks = [row.get("pk") for row in rows]
+        if not all(type(pk) is int for pk in pks) or len(set(pks)) != len(pks):
+            raise InvenTreeError("GET /api/stock/ gave a stock item without a pk, or one both in stock and depleted")
+        return sorted(rows, key=lambda row: int(row["pk"]))
 
 
 @dataclass(frozen=True)
