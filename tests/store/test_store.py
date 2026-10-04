@@ -320,7 +320,7 @@ def test_the_outcome_follows_the_state(store: Store, path: Path) -> None:
     verified(store, key())
     begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
     store.transition(key(), expected=S.UNDOING, target=S.UNDO_UNKNOWN, actor=A.APPLIER)
-    store.transition(key(), expected=S.UNDO_UNKNOWN, target=S.UNDONE, actor=A.RECOVERY)
+    store.transition(key(), expected=S.UNDO_UNKNOWN, target=S.UNDONE, actor=A.RECOVERY, marker_found=True)
     outcomes = raw(path).execute("SELECT kind, outcome FROM request_attempts ORDER BY id").fetchall()
     assert outcomes == [("a", "accepted"), ("u", "unknown")]
 
@@ -774,3 +774,91 @@ def test_recorded_requests_span_revisions_and_feed_the_marker_check(store: Store
 
 def test_recorded_requests_of_an_unknown_post_are_none(store: Store) -> None:
     assert store.recorded_requests(POST) == []
+
+
+# What recovery concluded about the marker
+
+
+def unknown(store: Store, request: RequestKey) -> None:
+    approve(store, request)
+    begin(store, request)
+    store.transition(request, expected=S.APPLYING, target=S.UNKNOWN, actor=A.APPLIER)
+
+
+@pytest.mark.parametrize(
+    ("target", "found"),
+    [(S.APPLIED, True), (S.FAILED, False), (S.VERIFY_FAILED, True), (S.VERIFY_FAILED, False)],
+)
+def test_recovery_records_whether_it_found_the_marker(store: Store, path: Path, target: S, found: bool) -> None:
+    plan(store)
+    unknown(store, key())
+    store.transition(key(), expected=S.UNKNOWN, target=target, actor=A.RECOVERY, marker_found=found)
+    assert store.request(key()).state is target
+    assert raw(path).execute("SELECT outcome, marker_found FROM request_attempts").fetchall() == [("unknown", found)]
+    (recorded,) = store.recorded_requests(POST)
+    assert [attempt.marker_found for attempt in recorded.attempts] == [found]
+
+
+def test_recovery_of_an_undo_records_it_on_the_undo(store: Store, path: Path) -> None:
+    plan(store)
+    verified(store, key())
+    begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+    store.transition(key(), expected=S.UNDOING, target=S.UNDO_UNKNOWN, actor=A.APPLIER)
+    store.transition(key(), expected=S.UNDO_UNKNOWN, target=S.VERIFY_FAILED, actor=A.RECOVERY, marker_found=False)
+    rows = raw(path).execute("SELECT kind, marker_found FROM request_attempts ORDER BY id").fetchall()
+    assert rows == [("a", None), ("u", 0)]
+
+
+@pytest.mark.parametrize(
+    ("expected", "target", "found"),
+    [
+        (S.UNKNOWN, S.APPLIED, False),
+        (S.UNKNOWN, S.FAILED, True),
+        (S.UNDO_UNKNOWN, S.UNDONE, False),
+        (S.UNDO_UNKNOWN, S.VERIFIED, True),
+    ],
+)
+def test_recovery_must_agree_with_the_target(expected: S, target: S, found: bool) -> None:
+    with pytest.raises(ValueError, match="does not follow"):
+        store_db._check_recovered(expected, target, found)
+
+
+def test_recovery_must_say_whether_it_found_the_marker(store: Store, path: Path) -> None:
+    plan(store)
+    unknown(store, key())
+    with pytest.raises(ValueError, match="whether it found"):
+        store.transition(key(), expected=S.UNKNOWN, target=S.VERIFY_FAILED, actor=A.RECOVERY)
+    with pytest.raises(ValueError, match="does not follow"):
+        store.transition(key(), expected=S.UNKNOWN, target=S.APPLIED, actor=A.RECOVERY, marker_found=False)
+    assert store.request(key()).state is S.UNKNOWN
+    assert raw(path).execute("SELECT marker_found FROM request_attempts").fetchall() == [(None,)]
+
+
+def test_only_recovery_of_an_unknown_outcome_records_a_marker_conclusion(store: Store) -> None:
+    plan(store)
+    approve(store, key())
+    begin(store, key())
+    with pytest.raises(ValueError, match="only recovery"):
+        store.transition(key(), expected=S.APPLYING, target=S.APPLIED, actor=A.APPLIER, marker_found=True)
+    assert store.request(key()).state is S.APPLYING
+
+
+def test_a_recovered_conclusion_is_recorded_once_and_only_on_an_unknown_outcome(store: Store, path: Path) -> None:
+    plan(store)
+    unknown(store, key())
+    store.transition(key(), expected=S.UNKNOWN, target=S.FAILED, actor=A.RECOVERY, marker_found=False)
+    db = raw(path)
+    with pytest.raises(sqlite3.IntegrityError, match="recovery concludes once"):
+        db.execute("UPDATE request_attempts SET marker_found = 1")
+    store.transition(key(), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
+    begin(store, key())
+    store.transition(key(), expected=S.APPLYING, target=S.APPLIED, actor=A.APPLIER)
+    with pytest.raises(sqlite3.IntegrityError, match="recovery concludes once"):
+        db.execute("UPDATE request_attempts SET marker_found = 1 WHERE outcome = 'accepted'")
+    with pytest.raises(sqlite3.IntegrityError, match="starts unrecovered"):
+        db.execute(
+            "INSERT INTO request_attempts (request_id, kind, attempt, marker, snapshot, request_body, started_at,"
+            " marker_found) SELECT request_id, 'u', 1, marker || 'x', '{}', '{}', started_at, 0 FROM request_attempts"
+            " LIMIT 1"
+        )
+    assert db.execute("SELECT marker_found FROM request_attempts ORDER BY id").fetchall() == [(0,), (None,)]

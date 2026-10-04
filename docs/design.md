@@ -1290,13 +1290,14 @@ connector never has two InvenTree writes in flight and cannot race itself.
    Built: `core/marker_check.check_markers` compares the markers found
    per request with `Store.recorded_requests` (each request's state and
    its attempts with their outcomes). A `hit` is a found marker that no
-   recorded attempt explains, that InvenTree refused, that belongs to a
+   recorded attempt explains, that InvenTree refused, whose marker
+   recovery concluded was not found (a late write), that belongs to a
    request that never wrote, or a second attempt of one kind (apply or
    undo) that also wrote, in any state. A `missing` finding is the last
    apply of a verified or undone request, or the last undo of an undone
    one, not found, unless the caller saw its stock item answer 404 (the
    1.4.3 depletion case) or it is the apply of an undone request whose
-   outcome stayed unknown.
+   marker recovery did not find.
 3. **Snapshot and precondition.** Read every stock item of each part in
    the plan, at the source and at the destination location, without
    sub-locations. Compare with what the plan was built on. If a source
@@ -1376,6 +1377,12 @@ server, so recovery waits before it concludes anything:
 | Not found | Unchanged | `failed`: the operator may approve a new attempt |
 | Not found | Changed | `verify_failed` |
 
+Recovery records its conclusion about the marker on the attempt. A marker
+found later for an attempt that recovery did not find is a late write:
+the state recovery chose does not account for it, and an undo built on
+the history observed at apply time would reverse the stock twice. Step 2
+of the next apply or undo reports it as a `hit` and stops.
+
 A new attempt, after a failure or after recovery, gets a new attempt
 number in its marker. It runs the whole protocol again, and step 2
 searches for the markers of **all** earlier attempts, so a late write from
@@ -1427,7 +1434,7 @@ and needs no extra service.
 | `matches` | Match results with candidates and the rule that matched |
 | `review_items` | One question per dry run that asked one: the question as ids and codes, approvers only or not, the message it was asked in, open, answered or stale, the answer and who answered (migration 0010); the poster and when its plan expires (0011); where its buttons stand (0012); when it expired unanswered (0014) |
 | `requests` | The state machine of section 7, unique on the request key, with the marker id |
-| `request_attempts` | One row per apply or undo attempt: marker, snapshot, request body, outcome |
+| `request_attempts` | One row per apply or undo attempt: marker, snapshot, request body, outcome, and for an unknown outcome whether recovery found the marker (migration 0016) |
 | `interactions` | One row per button: its random id, its question and the answer it stands for (migration 0010) |
 | `instance_lock` | The single-instance lock with its heartbeat |
 | `api_calls` | Every InvenTree request and response, redacted |

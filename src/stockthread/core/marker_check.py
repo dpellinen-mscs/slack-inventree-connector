@@ -6,7 +6,8 @@ it. This module only compares; the caller searches (`InvenTreeReader.marker_entr
 
 A found marker proves that its write happened, so a hit that the recorded state does not explain is a `HIT`
 finding: an attempt the store has no record of (a lost or restored database), an attempt InvenTree refused, an
-apply of a request that left no stock change behind (a late write of an unknown attempt), or a second attempt of a
+attempt whose marker recovery concluded was not found (a late write: the state recovery chose, and an undo built on
+it, do not account for it), an apply of a request that left no stock change behind, or a second attempt of a
 request that is already applied once.
 
 A marker that is not found proves nothing on its own, but a request the store records as verified or undone wrote
@@ -14,17 +15,14 @@ its marker, and a history that no longer shows it cannot be trusted to show the 
 history, or another database wrote). That is a `MISSING` finding, with two excuses only. On 1.4.3 a write that
 deleted its stock item cannot be found by search (design section 5, Depletion): the caller passes the markers whose
 item answered 404 (`item_gone`); the operation alone excuses nothing, because a partial remove keeps its marker. And
-the apply of an undone request whose outcome stayed unknown may never have written: recovery moves "not found,
-changed" to `verify_failed`, and the operator's undo reverses what was observed.
+the apply of an undone request whose marker recovery did not find may never have written: recovery moved "not found,
+changed" to `verify_failed`, and the operator's undo reversed what was observed. An unknown apply that recovery found
+has no excuse.
 
 In any state, at most one attempt of each kind may have written: a request is applied once and undone once, so two
 found apply markers, or two found undo markers, are a `HIT`. For a verified or undone request it must be the last
 attempt. Requests in the other states (in flight, `verify_failed`, `accepted`) are checked for that and for hits no
 attempt explains.
-
-Not decided here: a request in `verify_failed` whose single undo attempt wrote late, after recovery, is one write,
-explained. An undo the operator then starts must be built from the history observed at its start, which holds that
-entry (design section 7, Undo).
 """
 
 from __future__ import annotations
@@ -57,6 +55,13 @@ class RecordedAttempt:
     marker: Marker
     outcome: Outcome | None
     """None while the attempt is in flight."""
+    marker_found: bool | None = None
+    """What recovery of an unknown outcome concluded about the marker (`request_attempts.marker_found`); None when
+    the attempt was not recovered."""
+
+    def __post_init__(self) -> None:
+        if self.marker_found is not None and self.outcome is not Outcome.UNKNOWN:
+            raise ValueError("only an attempt with an unknown outcome is recovered")
 
 
 @dataclass(frozen=True)
@@ -126,6 +131,8 @@ def _check(request: RecordedRequest, hits: set[Marker], item_gone: frozenset[Mar
             yield hit(marker, "the store has no record of this attempt")
         elif attempt.outcome is Outcome.REFUSED:
             yield hit(marker, "InvenTree refused this attempt, yet it wrote")
+        elif attempt.marker_found is False:
+            yield hit(marker, "recovery did not find this attempt's marker, yet it wrote late")
         else:
             explained.add(marker)
 
@@ -140,18 +147,21 @@ def _check(request: RecordedRequest, hits: set[Marker], item_gone: frozenset[Mar
     # verified or undone request records which one: the last.
     for attempts in (applies, undos):
         wrote = [attempt.marker for attempt in attempts if attempt.marker in explained]
-        settled = request.state in (S.VERIFIED, S.UNDONE) and attempts
-        earlier = [m for m in wrote if m != attempts[-1].marker] if settled else wrote[:-1]
-        for marker in earlier:
-            yield hit(marker, "a later attempt of this request also wrote")
+        if request.state in (S.VERIFIED, S.UNDONE) and attempts:
+            for marker in wrote:
+                if marker != attempts[-1].marker:
+                    yield hit(marker, "the store records another attempt of this request as the one that wrote")
+        else:
+            for marker in wrote[:-1]:
+                yield hit(marker, "a later attempt of this request also wrote")
     if request.state is S.VERIFIED:
         for attempt in undos:
             if attempt.marker in explained:
                 yield hit(attempt.marker, "the request is verified, yet this undo wrote")
     if request.state in (S.VERIFIED, S.UNDONE):
-        yield from _missing(request, applies, explained, item_gone, excused_if_unknown=request.state is S.UNDONE)
+        yield from _missing(request, applies, explained, item_gone, excused_if_not_found=request.state is S.UNDONE)
     if request.state is S.UNDONE:
-        yield from _missing(request, undos, explained, item_gone, excused_if_unknown=False)
+        yield from _missing(request, undos, explained, item_gone, excused_if_not_found=False)
 
 
 def _missing(
@@ -160,16 +170,16 @@ def _missing(
     explained: set[Marker],
     item_gone: frozenset[Marker],
     *,
-    excused_if_unknown: bool,
+    excused_if_not_found: bool,
 ) -> Iterable[Finding]:
-    """The last of `attempts` wrote, so it must be found unless its item is gone. `excused_if_unknown`: an undone
-    apply whose outcome stayed unknown may never have written (recovery found no marker but changed stock, and the
-    operator undid what was observed)."""
+    """The last of `attempts` wrote, so it must be found unless its item is gone. `excused_if_not_found`: an undone
+    apply whose marker recovery did not find may never have written (recovery found changed stock, and the operator
+    undid what was observed)."""
     if not attempts:
         raise ValueError(f"a {request.state} request has an attempt of each kind it went through")
     last = attempts[-1]
     if last.marker in explained or last.marker in item_gone:
         return
-    if excused_if_unknown and last.outcome is Outcome.UNKNOWN:
+    if excused_if_not_found and last.marker_found is False:
         return
     yield Finding(request.key, FindingKind.MISSING, last.marker, f"the request is {request.state}, but not found")
