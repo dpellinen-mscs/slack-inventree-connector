@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from stockthread.apply import check_post_markers
+from stockthread.apply import check_post_markers, depletes
 from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.marker_check import FindingKind
 from stockthread.core.model import Operation, PostKey, RequestKey
@@ -72,12 +73,20 @@ class FakeReader:
         return pk in self.gone
 
 
-def verified(store: Store, key: RequestKey, pks: list[int]) -> Marker:
+def verified(store: Store, key: RequestKey, pks: list[int], held: str = "1") -> Marker:
+    """A verified write taking 1 of each item, whose snapshot shows each item holding `held` before it."""
     store.transition(key, expected=S.PLANNED, target=S.APPROVED, actor=A.HUMAN)
     marker = store.next_marker(key, AttemptKind.APPLY)
     body: dict[str, Any] = {"items": [{"pk": pk, "quantity": "1"} for pk in pks], "notes": write_notes(marker, "U0SAM")}
+    snapshot = {"stock_items": {str(pk): held for pk in pks}}
     store.begin_attempt(
-        key, AttemptKind.APPLY, expected=S.APPROVED, actor=A.APPLIER, snapshot={}, request_body=body, lock_owner=OWNER
+        key,
+        AttemptKind.APPLY,
+        expected=S.APPROVED,
+        actor=A.APPLIER,
+        snapshot=snapshot,
+        request_body=body,
+        lock_owner=OWNER,
     )
     store.transition(key, expected=S.APPLYING, target=S.APPLIED, actor=A.APPLIER)
     store.transition(key, expected=S.APPLIED, target=S.VERIFIED, actor=A.APPLIER)
@@ -107,6 +116,25 @@ async def test_a_missing_marker_is_excused_when_every_item_of_its_write_is_gone(
     assert reader.asked == [7, 9]
 
 
+@pytest.mark.parametrize("held", ["2", "1.5", "x"])
+async def test_a_missing_marker_of_a_partial_removal_is_missing_even_if_its_items_are_gone(
+    store: Store, held: str
+) -> None:
+    # A partial removal keeps its item and its entry: if the item 404s later, someone else deleted it, or this
+    # database never had it. Only the snapshot showing the whole quantity taken explains a missing marker.
+    marker = verified(store, KEY_1, [7, 9], held=held)
+    findings = await check_post_markers(FakeReader(gone={7, 9}), store, POST)
+    assert [(f.kind, f.marker) for f in findings] == [(FindingKind.MISSING, marker)]
+
+
+@pytest.mark.parametrize("snapshot", [{}, {"stock_items": {"7": "1"}}, {"stock_items": {"7": 1, "9": 1}}, []])
+def test_only_a_snapshot_of_every_item_held_whole_shows_depletion(snapshot: Any) -> None:
+    lines = [(7, Decimal(1)), (9, Decimal(1))]
+    assert depletes(lines, snapshot) is False
+    assert depletes(lines, {"stock_items": {"7": "1.0", "9": "1"}}) is True
+    assert depletes([], {"stock_items": {}}) is False
+
+
 @pytest.mark.parametrize("gone", [set(), {7}, {9}])
 async def test_a_missing_marker_with_an_item_still_there_is_missing(store: Store, gone: set[int]) -> None:
     marker = verified(store, KEY_1, [7, 9])
@@ -134,11 +162,12 @@ async def test_a_read_error_propagates(store: Store) -> None:
         await check_post_markers(Failing(), store, POST)
 
 
-def test_attempt_items_reads_the_stored_body(store: Store) -> None:
-    marker = verified(store, KEY_1, [7, 9])
-    assert store.attempt_items(marker) == [7, 9]
+def test_attempt_lines_and_snapshot_read_what_was_stored(store: Store) -> None:
+    marker = verified(store, KEY_1, [7, 9], held="3")
+    assert store.attempt_lines(marker) == [(7, Decimal(1)), (9, Decimal(1))]
+    assert store.attempt_snapshot(marker) == {"stock_items": {"7": "3", "9": "3"}}
     with pytest.raises(KeyError):
-        store.attempt_items(Marker(marker.marker_id, AttemptKind.UNDO, 1))
+        store.attempt_lines(Marker(marker.marker_id, AttemptKind.UNDO, 1))
 
 
 async def test_a_write_that_names_no_item_is_never_excused(store: Store) -> None:
@@ -170,8 +199,15 @@ def undone(store: Store, key: RequestKey, pks: list[int]) -> Marker:
     verified(store, key, pks)
     marker = store.next_marker(key, AttemptKind.UNDO)
     body: dict[str, Any] = {"items": [{"pk": pk, "quantity": "1"} for pk in pks], "notes": write_notes(marker, "U0SAM")}
+    snapshot = {"stock_items": {str(pk): "1" for pk in pks}}
     store.begin_attempt(
-        key, AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN, snapshot={}, request_body=body, lock_owner=OWNER
+        key,
+        AttemptKind.UNDO,
+        expected=S.VERIFIED,
+        actor=A.HUMAN,
+        snapshot=snapshot,
+        request_body=body,
+        lock_owner=OWNER,
     )
     store.transition(key, expected=S.UNDOING, target=S.UNDONE, actor=A.APPLIER)
     return marker

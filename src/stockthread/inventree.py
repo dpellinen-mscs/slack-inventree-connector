@@ -100,6 +100,10 @@ class InvenTreeReader:
             headers={"Authorization": f"Token {token.get_secret_value()}", "Accept": "application/json"},
             timeout=settings.timeout_seconds,
             follow_redirects=False,  # a redirect could carry the token somewhere else
+            # No proxy from the environment, as for the writer: the reads that clear a write (a marker search, an
+            # item's 404) must reach the server the write goes to, not a proxy's answer. CAs as the environment says.
+            trust_env=False,
+            verify=httpx.create_ssl_context(trust_env=True),
             event_hooks={"request": [_only_get]},
             transport=transport,
         )

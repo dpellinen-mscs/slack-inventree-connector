@@ -97,7 +97,7 @@ async def test_step_two_excuses_a_depleting_write_only_by_inventrees_404(
     store = Store.open(tmp_path / "stockthread.db")
     store.acquire_lock("it", stale_after=timedelta(seconds=60))
 
-    def verified(post: PostKey, item: int, quantity: int, *, sent: bool) -> Marker:
+    def verified(post: PostKey, item: int, quantity: int, *, held: int, sent: bool) -> Marker:
         store.create_post(post)
         store.create_plan(post, "0" * 64, (Operation.REMOVE,))
         key = RequestKey(post, 1, 1)
@@ -109,7 +109,7 @@ async def test_step_two_excuses_a_depleting_write_only_by_inventrees_404(
             AttemptKind.APPLY,
             expected=s.APPROVED,
             actor=a.APPLIER,
-            snapshot={},
+            snapshot={"stock_items": {str(item): str(held)}},
             request_body=request.body,
             lock_owner="it",
         )
@@ -124,8 +124,8 @@ async def test_step_two_excuses_a_depleting_write_only_by_inventrees_404(
     kept = scratch.stock(3)
     depleting = PostKey("T0ACME", "C0STOCK", "1727600000.000100")
     never_sent = PostKey("T0ACME", "C0STOCK", "1727600000.000200")
-    verified(depleting, depleted["pk"], 3, sent=True)
-    unsent = verified(never_sent, kept["pk"], 1, sent=False)
+    verified(depleting, depleted["pk"], 3, held=3, sent=True)
+    unsent = verified(never_sent, kept["pk"], 1, held=3, sent=False)
 
     async with make_reader() as reader:
         assert await reader.stock_item_gone(depleted["pk"]) is True

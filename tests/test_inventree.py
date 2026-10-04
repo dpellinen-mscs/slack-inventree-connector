@@ -18,6 +18,7 @@ from stockthread.inventree import (
     ServerInfo,
     check_version,
 )
+from stockthread.writer import InvenTreeWriter
 
 pytestmark = pytest.mark.anyio
 
@@ -415,3 +416,17 @@ async def test_stock_item_gone_refuses_a_pk_that_is_not_one_without_asking(pk: o
         with pytest.raises(ValueError, match="positive number"):
             await client.stock_item_gone(pk)  # type: ignore[arg-type]
     assert recorder.requests == []
+
+
+@pytest.mark.parametrize("variable", ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"])
+async def test_reader_and_writer_take_the_same_route_whatever_the_environment_says(
+    monkeypatch: pytest.MonkeyPatch, variable: str
+) -> None:
+    # A proxy that only the reader used could answer the marker search or an item's 404 for a server the writer
+    # then writes to directly (review of PR #102).
+    monkeypatch.setenv(variable, "http://proxy.example:3128")
+    settings = SETTINGS
+    async with InvenTreeReader(settings, SecretStr("t")) as read, InvenTreeWriter(settings, SecretStr("t")) as write:
+        for client in (read._http, write._http):
+            assert client.trust_env is False
+            assert client._mounts == {}
