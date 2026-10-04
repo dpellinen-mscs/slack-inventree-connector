@@ -81,7 +81,10 @@ class InvenTreeWriter:
             headers={"Authorization": f"Token {token.get_secret_value()}", "Accept": "application/json"},
             timeout=settings.timeout_seconds,
             follow_redirects=False,  # a redirect could carry the token, or the write, somewhere else
-            trust_env=False,  # no proxy from the environment between the connector and InvenTree
+            # No proxy from the environment between the connector and InvenTree. `trust_env=False` would also drop
+            # SSL_CERT_FILE and SSL_CERT_DIR, so the TLS context is built as the reader's is: same CAs for both.
+            trust_env=False,
+            verify=httpx.create_ssl_context(trust_env=True),
             event_hooks={"request": [self._only_stock_writes]},
             transport=transport,
         )
@@ -136,7 +139,11 @@ def _check(request: WriteRequest) -> None:
     except (ValueError, TypeError, KeyError, AttributeError, InvalidOperation):
         raise WriteRefused("the request is not one build_request makes") from None
     # Compared as JSON, which tells `false` from `0` and `"2"` from `2`, as InvenTree would.
-    if json.dumps(rebuilt.body, sort_keys=True) != json.dumps(dict(request.body), sort_keys=True):
+    try:
+        same = json.dumps(rebuilt.body, sort_keys=True) == json.dumps(dict(request.body), sort_keys=True)
+    except (ValueError, TypeError):  # a value JSON cannot hold, or a circular one
+        same = False
+    if not same:
         raise WriteRefused("the request is not one build_request makes")
 
 
