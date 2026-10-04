@@ -184,8 +184,13 @@ needs.
   processing status. Rows that were not finished are picked up again at
   startup, so a restart loses nothing that was acknowledged. A row moves
   `pending` -> `processing` -> `done`, `dropped` or `failed`, and back to
-  `pending` only at startup. An event claimed 3 times without finishing is
-  `failed`, so one bad payload cannot crash the connector in a loop. Only
+  `pending` only at startup or after a transient failure. A transient
+  failure (the database busy or locked, a disk or network error) puts the
+  event back with a time before which it is not claimed again: 5 s, then
+  10 s. While such an event waits the queue is not empty, so no post is due
+  without it. Any other error fails the event at once. An event claimed 3
+  times without finishing, by retries and restarts together, is `failed`,
+  so one bad payload cannot crash the connector in a loop. Only
   the holder of the instance lock claims and finishes events, and startup
   requeues only events an earlier instance left behind. Delivery is **at
   least once**: after a lock takeover, an event the old instance was still

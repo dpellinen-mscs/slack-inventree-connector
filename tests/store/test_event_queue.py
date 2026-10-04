@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from stockthread.store import EventStatus, LockLost, StateConflict, Store
+from stockthread.store import MAX_EVENT_ATTEMPTS, EventStatus, LockLost, StateConflict, Store
 from stockthread.store import db as store_db
 
 OWNER = "instance-a"
@@ -225,3 +225,63 @@ def test_a_version_1_file_upgrades(path: Path, monkeypatch: pytest.MonkeyPatch) 
     upgraded.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
     assert upgraded.enqueue_event("Ev1", "event", BODY)
     upgraded.close()
+
+
+def test_an_event_put_off_is_claimed_again_only_once_its_time_comes(path: Path) -> None:
+    now = [datetime(2026, 10, 4, 12, 0, tzinfo=UTC)]
+    store = Store.open(path, clock=lambda: now[0])
+    store.acquire_lock(OWNER, stale_after=timedelta(minutes=1))
+    store.enqueue_event("Ev1", "event", BODY)
+    store.enqueue_event("Ev2", "event", BODY)
+    (first,) = store.claim_events(OWNER, limit=1)
+    store.retry_event_later(OWNER, first.id, timedelta(seconds=5))
+    assert store.event_status(first.id) == (EventStatus.PENDING, 1, None)
+    assert store.events_pending()
+    (second,) = store.claim_events(OWNER)  # the put-off event is skipped, not the one behind it
+    assert second.key == "Ev2"
+    store.finish_event(OWNER, second.id, EventStatus.DONE)
+    now[0] += timedelta(seconds=4, microseconds=999999)
+    assert store.claim_events(OWNER) == []
+    assert store.events_pending()
+    now[0] += timedelta(microseconds=1)
+    (again,) = store.claim_events(OWNER)
+    assert (again.id, again.attempts) == (first.id, 2)
+    store.finish_event(OWNER, again.id, EventStatus.DONE)
+    assert not store.events_pending()
+    with raw(path) as connection:
+        assert connection.execute("SELECT not_before FROM slack_events").fetchall() == [(None,), (None,)]
+    store.close()
+
+
+def test_only_the_instance_processing_an_event_may_put_it_off(store: Store) -> None:
+    store.enqueue_event("Ev1", "event", BODY)
+    with pytest.raises(StateConflict):
+        store.retry_event_later(OWNER, 1, timedelta(seconds=5))  # pending, not claimed
+    (event,) = store.claim_events(OWNER)
+    restart(store, OTHER)
+    with pytest.raises(LockLost):
+        store.retry_event_later(OWNER, event.id, timedelta(seconds=5))
+    (event,) = store.claim_events(OTHER)
+    store.finish_event(OTHER, event.id, EventStatus.FAILED, "error_operational_error")
+    with pytest.raises(StateConflict):
+        store.retry_event_later(OTHER, event.id, timedelta(seconds=5))
+
+
+def test_retries_and_restarts_share_one_attempt_budget(store: Store) -> None:
+    store.enqueue_event("Ev1", "event", BODY)
+    for _ in range(MAX_EVENT_ATTEMPTS - 1):
+        (event,) = store.claim_events(OWNER)
+        store.retry_event_later(OWNER, event.id, timedelta(0))
+    (event,) = store.claim_events(OWNER)  # and the process dies while processing it
+    restart(store, OTHER)
+    assert store.event_status(event.id) == (EventStatus.FAILED, MAX_EVENT_ATTEMPTS, "too_many_attempts")
+
+
+def test_an_event_is_put_off_only_as_it_goes_back_to_the_queue(store: Store, path: Path) -> None:
+    store.enqueue_event("Ev1", "event", BODY)
+    with raw(path) as connection, pytest.raises(sqlite3.IntegrityError, match="put off only"):
+        connection.execute("UPDATE slack_events SET not_before = '2026-10-04T12:00:00.000000+00:00'")
+    (event,) = store.claim_events(OWNER)
+    store.finish_event(OWNER, event.id, EventStatus.DONE)
+    with raw(path) as connection, pytest.raises(sqlite3.IntegrityError, match="put off only"):
+        connection.execute("UPDATE slack_events SET not_before = '2026-10-04T12:00:00.000000+00:00'")

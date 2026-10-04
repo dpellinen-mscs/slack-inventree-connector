@@ -44,6 +44,9 @@ S = RequestState
 MIN_SQLITE = (3, 37, 0)
 """STRICT tables."""
 
+MAX_EVENT_ATTEMPTS = 3
+"""Claims of one Slack event, by retries after a transient failure and by restarts alike: the last one fails."""
+
 OUTCOMES: dict[RequestState, str] = {
     S.APPLIED: "accepted",
     S.FAILED: "refused",
@@ -1592,13 +1595,13 @@ class Store:
             self._check_lock(owner)
             rows = self._db.execute(
                 "SELECT id, event_key, kind, body, attempts FROM slack_events WHERE status = 'pending'"
-                " ORDER BY id LIMIT ?",
-                (limit,),
+                " AND (not_before IS NULL OR not_before <= ?) ORDER BY id LIMIT ?",
+                (self._now(), limit),
             ).fetchall()
             for row in rows:
                 self._db.execute(
-                    "UPDATE slack_events SET status = 'processing', attempts = attempts + 1, claimed_by = ?"
-                    " WHERE id = ?",
+                    "UPDATE slack_events SET status = 'processing', attempts = attempts + 1, claimed_by = ?,"
+                    " not_before = NULL WHERE id = ?",
                     (owner, row[0]),
                 )
             return [QueuedEvent(row[0], row[1], row[2], row[3], row[4] + 1) for row in rows]
@@ -1620,7 +1623,25 @@ class Store:
                 raise StateConflict("the event is not being processed by this instance")
             self._audit("ingest", f"event_{status.value}", slack_event_id=event_id)
 
-    def requeue_unfinished(self, owner: str, *, max_attempts: int = 3) -> int:
+    def events_pending(self) -> bool:
+        """Whether any event waits in the queue, including one that may not be claimed yet."""
+        return self._db.execute("SELECT 1 FROM slack_events WHERE status = 'pending' LIMIT 1").fetchone() is not None
+
+    def retry_event_later(self, owner: str, event_id: int, after: timedelta) -> None:
+        """Put an event this instance is processing back in the queue after a transient failure, not to be claimed
+        again before `after` has passed (`Worker.drain`). Its attempts are kept, so the retries stay bounded."""
+        with self._transaction():
+            self._check_lock(owner)
+            cursor = self._db.execute(
+                "UPDATE slack_events SET status = 'pending', claimed_by = NULL, not_before = ? WHERE id = ?"
+                " AND status = 'processing' AND claimed_by = ?",
+                ((self._clock_now() + after).astimezone(UTC).isoformat(timespec="microseconds"), event_id, owner),
+            )
+            if cursor.rowcount != 1:
+                raise StateConflict("the event is not being processed by this instance")
+            self._audit("ingest", "event_retry_later", slack_event_id=event_id)
+
+    def requeue_unfinished(self, owner: str, *, max_attempts: int = MAX_EVENT_ATTEMPTS) -> int:
         """At startup, put events that an earlier instance left processing back in the queue.
 
         Events claimed by `owner` itself are left alone: they are still being processed. An event claimed
