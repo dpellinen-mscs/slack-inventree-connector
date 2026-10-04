@@ -30,6 +30,10 @@ MIN_API_VERSION = 511
 MAX_API_VERSION = 530
 """InvenTree 1.5.6, the newest release CI tests."""
 
+DEPLETING_MARKER_FOUND_FROM = 530
+"""Measured (`test_char_deplete_deletes_item_keeps_history`): API 511 (1.4.3) does not find the marker of a removal
+that deleted its item; API 530 (1.5.6) does. Below it, step 2 may excuse such a marker by the item's 404."""
+
 PAGE_SIZE = 100
 MAX_PAGES = 1000
 """A list longer than this many pages is refused: it would be a server bug or a loop."""

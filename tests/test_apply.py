@@ -15,7 +15,7 @@ from stockthread.core.marker_check import FindingKind
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.write_request import write_notes
-from stockthread.inventree import InvenTreeError, MarkedEntry
+from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, MarkedEntry, ServerInfo
 from stockthread.store import Store
 
 pytestmark = pytest.mark.anyio
@@ -41,12 +41,22 @@ def store(tmp_path: Path) -> Iterator[Store]:
     opened.close()
 
 
+OLD_API = DEPLETING_MARKER_FOUND_FROM - 1
+"""A server whose search cannot find the marker of a removal that deleted its item (1.4.3)."""
+
+
 class FakeReader:
-    def __init__(self, entries: dict[Marker, list[int]] | None = None, gone: set[int] | None = None) -> None:
+    def __init__(
+        self, entries: dict[Marker, list[int]] | None = None, gone: set[int] | None = None, api: int = OLD_API
+    ) -> None:
         self.entries = entries or {}
         self.gone = gone or set()
+        self.api = api
         self.searched: list[str] = []
         self.asked: list[int] = []
+
+    async def server_info(self) -> ServerInfo:
+        return ServerInfo(version="x", api_version=self.api)
 
     async def marker_entries(self, marker_id: str) -> list[MarkedEntry]:
         self.searched.append(marker_id)
@@ -135,3 +145,47 @@ async def test_a_write_that_names_no_item_is_never_excused(store: Store) -> None
     marker = verified(store, KEY_1, [])  # the builder never makes one; the excuse must not follow from all([])
     findings = await check_post_markers(FakeReader(), store, POST)
     assert [(f.kind, f.marker) for f in findings] == [(FindingKind.MISSING, marker)]
+
+
+@pytest.mark.parametrize("api", [DEPLETING_MARKER_FOUND_FROM, DEPLETING_MARKER_FOUND_FROM + 10])
+async def test_a_server_whose_search_finds_depletions_excuses_nothing(store: Store, api: int) -> None:
+    # A 404 there may be an item this database never had (a restored backup, another instance).
+    marker = verified(store, KEY_1, [7])
+    reader = FakeReader(gone={7}, api=api)
+    findings = await check_post_markers(reader, store, POST)
+    assert [(f.kind, f.marker) for f in findings] == [(FindingKind.MISSING, marker)]
+    assert reader.asked == []
+
+
+async def test_only_a_removal_may_be_excused(store: Store) -> None:
+    store.transition(KEY_1, expected=S.PLANNED, target=S.REJECTED, actor=A.HUMAN)
+    marker = verified(store, KEY_2, [7])  # a transfer keeps its item
+    reader = FakeReader(gone={7})
+    findings = await check_post_markers(reader, store, POST)
+    assert [(f.kind, f.marker) for f in findings] == [(FindingKind.MISSING, marker)]
+    assert reader.asked == []
+
+
+def undone(store: Store, key: RequestKey, pks: list[int]) -> Marker:
+    verified(store, key, pks)
+    marker = store.next_marker(key, AttemptKind.UNDO)
+    body: dict[str, Any] = {"items": [{"pk": pk, "quantity": "1"} for pk in pks], "notes": write_notes(marker, "U0SAM")}
+    store.begin_attempt(
+        key, AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN, snapshot={}, request_body=body, lock_owner=OWNER
+    )
+    store.transition(key, expected=S.UNDOING, target=S.UNDONE, actor=A.APPLIER)
+    return marker
+
+
+@pytest.mark.parametrize(("operation", "excused"), [(Operation.ADD, True), (Operation.REMOVE, False)])
+async def test_an_undo_is_excused_only_when_it_removes(tmp_path: Path, operation: Operation, excused: bool) -> None:
+    # The undo of an add is a remove and may deplete; the undo of a remove adds.
+    opened = Store.open(tmp_path / "undo.db")
+    opened.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
+    opened.create_post(POST)
+    opened.create_plan(POST, "0" * 64, (operation,))
+    apply_marker = Marker(opened.request(KEY_1).marker_id, AttemptKind.APPLY, 1)
+    undo = undone(opened, KEY_1, [7])
+    findings = await check_post_markers(FakeReader({apply_marker: [7]}, gone={7}), opened, POST)
+    opened.close()
+    assert [(f.kind, f.marker) for f in findings] == ([] if excused else [(FindingKind.MISSING, undo)])

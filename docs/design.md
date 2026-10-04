@@ -1300,10 +1300,14 @@ connector never has two InvenTree writes in flight and cannot race itself.
    request reached its state on that conclusion).
    Built (the caller): `apply.check_post_markers` searches every
    request's marker id (`InvenTreeReader.marker_entries`) and, for a
-   `missing` marker, asks for every stock item of the attempt's stored
+   `missing` marker of a removal (the apply of a remove, the undo of an
+   add) on a server below API 530 (`DEPLETING_MARKER_FOUND_FROM`; 1.5.6
+   finds that marker), asks for every stock item of the attempt's stored
    body; only when all of them answer InvenTree's own 404 (a `detail`
-   alone, `InvenTreeReader.stock_item_gone`) is the marker excused. A
-   proxy's 404 or any read error raises, and nothing is written.
+   alone, `InvenTreeReader.stock_item_gone`) is the marker excused. Any
+   other write has no excuse: an item that 404s may never have existed
+   in this database (a restored backup, another instance). A proxy's 404
+   or any read error raises, and nothing is written.
 3. **Snapshot and precondition.** Read every stock item of each part in
    the plan, at the source and at the destination location, without
    sub-locations. Compare with what the plan was built on. If a source

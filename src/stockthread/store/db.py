@@ -1459,7 +1459,8 @@ class Store:
         row = self._db.execute("SELECT request_body FROM request_attempts WHERE marker = ?", (str(marker),)).fetchone()
         if row is None:
             raise KeyError(f"no attempt carries {marker}")
-        lines = json.loads(row[0]).get("items")
+        body = json.loads(row[0])
+        lines = body.get("items") if isinstance(body, dict) else None
         if not isinstance(lines, list) or not all(isinstance(line, dict) for line in lines):
             raise ValueError(f"the stored body of {marker} has no list of items")
         pks = [line.get("pk") for line in lines]
