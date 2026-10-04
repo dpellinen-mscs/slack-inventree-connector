@@ -1,6 +1,7 @@
 """The audit store: SQLite in one file (design section 8, ADR 0009)."""
 
 from stockthread.store.db import (
+    MAX_EVENT_ATTEMPTS,
     Answered,
     Attempt,
     Button,
@@ -26,6 +27,7 @@ from stockthread.store.db import (
 )
 
 __all__ = [
+    "MAX_EVENT_ATTEMPTS",
     "Answered",
     "Attempt",
     "Button",
