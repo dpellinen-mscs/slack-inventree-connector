@@ -215,16 +215,39 @@ def test_a_verified_or_undone_request_with_no_attempt_is_refused(state: RequestS
 @pytest.mark.parametrize(
     "state", [S.APPLYING, S.UNKNOWN, S.APPLIED, S.VERIFY_FAILED, S.ACCEPTED, S.UNDOING, S.UNDO_UNKNOWN]
 )
-def test_open_or_operator_states_are_checked_only_for_unexplained_hits(state: RequestState) -> None:
+def test_an_attempt_not_known_to_have_written_may_be_missing_in_any_state(state: RequestState) -> None:
     if state is S.APPLYING:
         one = request(state, (APPLY, 1, None))
     elif state in (S.UNKNOWN, S.UNDO_UNKNOWN):
         one = request(state, (APPLY, 1, OC.UNKNOWN))
     else:
-        one = request(state, (APPLY, 1, OC.UNKNOWN, FOUND))
+        one = request(state, (APPLY, 1, OC.UNKNOWN, NOT_FOUND))
     assert check(one) == []
-    assert check(one, [m(APPLY, 1)]) == []
     assert check(one, [m(APPLY, 2)]) == [(HIT, m(APPLY, 2))]
+
+
+@pytest.mark.parametrize("state", [S.APPLIED, S.VERIFY_FAILED, S.ACCEPTED, S.UNDOING, S.UNDO_FAILED, S.UNDO_UNKNOWN])
+@pytest.mark.parametrize("recovered", [False, True])
+def test_an_apply_known_to_have_written_must_be_found_in_any_state(state: RequestState, recovered: bool) -> None:
+    # verified -> undo refused (4xx) -> undo_failed, then the apply's marker is gone: the history an undo would be
+    # built on is not trustworthy, so a retried undo must stop (and likewise from verify_failed).
+    apply = (APPLY, 1, OC.UNKNOWN, FOUND) if recovered else (APPLY, 1, OC.ACCEPTED)
+    undo: dict[RequestState, list[tuple[AttemptKind, int, Outcome | None]]] = {
+        S.UNDOING: [(UNDO, 1, None)],
+        S.UNDO_FAILED: [(UNDO, 1, OC.REFUSED)],
+        S.UNDO_UNKNOWN: [(UNDO, 1, OC.UNKNOWN)],
+    }
+    one = request(state, apply, *undo.get(state, []))
+    assert check(one, [m(APPLY, 1)]) == []
+    assert check(one) == [(MISSING, m(APPLY, 1))]
+    assert check_markers([one], {ID_1: []}, item_gone=[m(APPLY, 1)]) == []
+
+
+@pytest.mark.parametrize("state", [S.VERIFY_FAILED, S.ACCEPTED])
+def test_an_undo_known_to_have_written_must_be_found_in_any_state(state: RequestState) -> None:
+    one = request(state, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.UNKNOWN, FOUND))
+    assert check(one, [m(APPLY, 1), m(UNDO, 1)]) == []
+    assert check(one, [m(APPLY, 1)]) == [(MISSING, m(UNDO, 1))]
 
 
 # The whole post

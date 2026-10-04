@@ -1369,8 +1369,11 @@ class Store:
         - for an apply: the plan is not current, a read-back of the post found something unexpected,
           an earlier revision left a stock change behind, or an earlier request of the plan is not
           verified (requests run in order and stop at the first failure; rejected ones are skipped);
-        - for an undo: an earlier undo of the request wrote (recovery found its marker but the
-          quantities differed, so the request is `verify_failed`): the operator accepts the state.
+        - another attempt of the same kind of this request was not refused by InvenTree: it wrote, or its outcome
+          is unknown, and a write whose outcome is unknown may still land however long recovery waited (design
+          section 7, "Unknown outcomes and recovery"). Only an attempt InvenTree refused may be tried again;
+        - for an apply: a write of any request of the post has an unknown outcome whose marker recovery did not
+          find, for the same reason: a new revision or the next request would add to it.
         """
         target = S.APPLYING if kind is AttemptKind.APPLY else S.UNDOING
         check_transition(expected, target, actor)
@@ -1403,15 +1406,27 @@ class Store:
             ).fetchone()
             if count >= MAX_ATTEMPT:
                 raise WriteBlocked(f"{MAX_ATTEMPT} attempts is the limit")
+            name = "apply" if kind is AttemptKind.APPLY else "undo"
+            if self._db.execute(
+                "SELECT 1 FROM request_attempts WHERE request_id = ? AND kind = ? AND outcome IS NOT 'refused'",
+                (row.id, kind.value),
+            ).fetchone():
+                raise WriteBlocked(
+                    f"an earlier {name} of this request was not refused by InvenTree: it wrote, or it may still land,"
+                    " so another would write twice"
+                )
             if (
-                kind is AttemptKind.UNDO
+                kind is AttemptKind.APPLY
                 and self._db.execute(
-                    "SELECT 1 FROM request_attempts WHERE request_id = ? AND kind = 'u'"
-                    " AND (outcome = 'accepted' OR marker_found = 1)",
-                    (row.id,),
+                    "SELECT 1 FROM request_attempts a JOIN requests r ON r.id = a.request_id"
+                    " JOIN plans p ON p.id = r.plan_id WHERE p.post_id = ? AND a.outcome = 'unknown'"
+                    " AND a.marker_found IS NOT 1",
+                    (post_id,),
                 ).fetchone()
             ):
-                raise WriteBlocked("an earlier undo of this request wrote: a second would reverse the stock twice")
+                raise WriteBlocked(
+                    "a write of this post has an outcome recovery could not establish: it may still land"
+                )
             marker = Marker(row.marker_id, kind, int(count) + 1)
             self._set_state(row.id, expected, target, actor)
             cursor = self._db.execute(

@@ -62,7 +62,7 @@ TRANSITIONS: dict[tuple[RequestState, RequestState], frozenset[Actor]] = {
     (S.APPLYING, S.UNKNOWN): frozenset({A.APPLIER}),
     (S.FAILED, S.APPROVED): frozenset({A.HUMAN}),  # a new attempt, never automatic
     (S.UNKNOWN, S.APPLIED): frozenset({A.RECOVERY}),
-    (S.UNKNOWN, S.FAILED): frozenset({A.RECOVERY}),  # no marker, nothing changed: a human may try again
+    (S.UNKNOWN, S.FAILED): frozenset({A.RECOVERY}),  # no marker, nothing changed; never sent again (ADR 0015)
     (S.UNKNOWN, S.VERIFY_FAILED): frozenset({A.RECOVERY}),
     (S.APPLIED, S.VERIFIED): frozenset({A.APPLIER}),
     (S.APPLIED, S.VERIFY_FAILED): frozenset({A.APPLIER}),
