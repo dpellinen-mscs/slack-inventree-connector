@@ -1046,7 +1046,9 @@ independently, and each one alone can block.
 
 1. **Switch.** `writes.enabled` is true. The default is false. Turning it
    on is an explicit configuration step, and the connector logs it at
-   startup.
+   startup. The InvenTree API version must also be in the tested range:
+   an untested server blocks every plan the same way, whatever the
+   switch, the policy or an approver says.
 2. **Policy.** The policy allows this movement
    ([0004](decisions/0004-default-write-policy.md)). By default a
    `take_to_vehicle` or `take_to_site` movement with no review reason
@@ -1065,7 +1067,7 @@ version can change in between.
 **Where (built: `gate.py`, nothing calls it yet).** `judge` takes the
 post's views, their apply markers, the policy as read from the settings
 at that moment, and who clicked Apply. Its verdict is `blocked` (writes
-off, a plan a "no" rejected, or a plan `plan_requests` refuses), `waits`
+off, an untested server version, a plan a "no" rejected, or a plan `plan_requests` refuses), `waits`
 (decided, but needs an approver's click) or `allowed`, and only an
 `allowed` verdict carries the requests to send. A click counts only from
 someone who is an approver when the gate is judged. The notes of the

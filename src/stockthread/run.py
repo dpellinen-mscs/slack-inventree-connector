@@ -29,7 +29,7 @@ from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import Settings
 from stockthread.core.matching import Catalog
 from stockthread.core.resolve import StockItem, stock_items
-from stockthread.inventree import InvenTreeError, InvenTreeReader, check_version
+from stockthread.inventree import InvenTreeError, InvenTreeReader, VersionCheck, check_version
 from stockthread.llm.extract import LLMExtractor, WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
 from stockthread.setup_check import Finding, Level, check_posters, check_roles, check_vehicles, lacks_catalog_view
@@ -252,12 +252,13 @@ def read_within(read: Callable[[], Coroutine[Any, Any, _T]], limit: float, what:
     return asyncio.run(limited())
 
 
-def check_inventree(settings: Settings) -> str:
-    """The version line to log. Raises InvenTreeError when the server cannot be read."""
+def check_inventree(settings: Settings) -> VersionCheck:
+    """The server's version check, which every write judgement needs (`gate.Policy`). Raises InvenTreeError when
+    the server cannot be read."""
 
-    async def read() -> str:
+    async def read() -> VersionCheck:
         async with InvenTreeReader(settings.inventree, settings.secrets.inventree_token) as reader:
-            return check_version(await reader.server_info()).message
+            return check_version(await reader.server_info())
 
     return asyncio.run(read())
 
@@ -338,7 +339,7 @@ def run(
     slack_client: WebClient | None = None,
     catalog: Callable[[], Catalog] | None = None,
     stock: StockReader | None = None,
-    check: Callable[[Settings], str] = check_inventree,
+    check: Callable[[Settings], VersionCheck] = check_inventree,
     connect: Callable[[Any, Settings], Connection] = serve,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> int:
@@ -381,7 +382,8 @@ def run(
             worker.beat(now=True)
             if stop.is_set():
                 return 0
-            log.info(check(settings))
+            version = check(settings)
+            log.log(logging.INFO if version.writes_allowed else logging.WARNING, "%s", version.message)
             worker.beat(now=True)
             cache()
             worker.beat(now=True)

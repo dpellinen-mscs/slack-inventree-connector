@@ -4,6 +4,8 @@
 the write, because the switch, the approver list and the stock can change in between. Nothing here writes. A write
 is sent only from the requests of a verdict that `allowed`, and only the requests that verdict carries.
 
+An InvenTree whose API version CI has not tested blocks every plan, as the switch does (`check_version`).
+
 Validation is `plan_requests`: a plan it refuses is blocked whole. The policy then says who may approve it:
 
 - An approver's Apply click approves any decided plan, counted only if the clicker is an approver when judged.
@@ -26,6 +28,7 @@ from stockthread.config import Settings
 from stockthread.core.marker import Marker
 from stockthread.core.model import Match, MatchRule, MovementType, ReasonSource
 from stockthread.core.write_request import WriteRequest
+from stockthread.inventree import VersionCheck
 from stockthread.plan import NotDecided, plan_requests
 from stockthread.slack.replies import MovementView
 
@@ -63,11 +66,13 @@ class Policy:
     writes_enabled: bool
     auto_apply: Collection[MovementType]
     approvers: Collection[str]
+    server: VersionCheck
+    """The InvenTree version check; writes need `writes_allowed` even when the switch is on."""
 
     @classmethod
-    def of(cls, settings: Settings) -> Policy:
+    def of(cls, settings: Settings, server: VersionCheck) -> Policy:
         auto_apply = frozenset(MovementType(value) for value in settings.policy.auto_apply)
-        return cls(settings.writes.enabled, auto_apply, frozenset(settings.slack.approvers))
+        return cls(settings.writes.enabled, auto_apply, frozenset(settings.slack.approvers), server)
 
 
 def judge(
@@ -94,6 +99,9 @@ def judge(
     """
     if not policy.writes_enabled:
         return Judgement(Verdict.BLOCKED, "stock writes are off")
+    if not policy.server.writes_allowed:
+        info = policy.server.info
+        return Judgement(Verdict.BLOCKED, f"InvenTree {info.version} (API {info.api_version}) is not tested for writes")
     if rejected:
         return Judgement(Verdict.BLOCKED, "the plan was rejected in the thread")
     approver = clicked_by if clicked_by is not None and clicked_by in policy.approvers else None

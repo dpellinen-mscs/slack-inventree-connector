@@ -67,7 +67,7 @@ Slack (workspace, users, bots) ──► connector ──► InvenTree REST API
 | T14 | Two connector instances write at once | A single-instance lock with a heartbeat, checked in the same transaction that starts a write. It cannot cover two instances on different databases, and the docs warn against that setup. | Built (#21) |
 | T15 | Someone tampers with the audit trail or idempotency keys, or a bug does | Triggers reject updates and deletes of `audit_log`, changes to key columns, `REPLACE` collisions and changes to the recorded intent of a write. | Built (#21) |
 | T16 | Undo does more harm than the original write | Undo reverses what was observed, only if nothing else touched the stock since, and it goes through the same protocol. Otherwise it refuses and becomes a review item. | Designed |
-| T17 | Unsafe configuration: writes on with no approvers, broad policy, wrong server | Unknown keys, wrong types and secrets in the file are refused. Startup prints the effective settings and whether writes are on. The API version is checked, and writes stay off outside the tested range. | Config built (#10). Version check built (#16) |
+| T17 | Unsafe configuration: writes on with no approvers, broad policy, wrong server | Unknown keys, wrong types and secrets in the file are refused. Startup prints the effective settings and whether writes are on. The API version is checked, and writes stay off outside the tested range: the gate blocks every plan on an untested server. | Config built (#10). Version check built (#16), in the gate (#106) |
 
 ## Out of scope
 
