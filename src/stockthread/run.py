@@ -267,7 +267,7 @@ def check_setup(settings: Settings) -> list[Finding]:
 
     async def read() -> list[Finding]:
         async with InvenTreeReader(settings.inventree, settings.secrets.inventree_token) as reader:
-            return await inventree_findings(reader, settings.vehicles)
+            return await inventree_findings(reader, settings.vehicles, writes=settings.writes.enabled)
 
     return [
         *asyncio.run(read()),
@@ -275,13 +275,13 @@ def check_setup(settings: Settings) -> list[Finding]:
     ]
 
 
-async def inventree_findings(reader: InvenTreeReader, vehicles: Mapping[str, str]) -> list[Finding]:
+async def inventree_findings(reader: InvenTreeReader, vehicles: Mapping[str, str], *, writes: bool) -> list[Finding]:
     """Version, roles, and `[vehicles]` paths. A catalog that cannot be read is a finding, so the roles still print."""
     version = check_version(await reader.server_info())
     roles = await reader.user_roles()
     found = [
         Finding(Level.OK if version.writes_allowed else Level.WARN, f"inventree: {version.message}"),
-        *check_roles(roles),
+        *check_roles(roles, writes=writes),
     ]
     if lacks_catalog_view(roles):
         return [*found, Finding(Level.WARN, "vehicles: not checked until part and stock_location have view")]
