@@ -132,8 +132,8 @@ def test_char_roles_endpoint_shows_the_minimum_as_the_setup_check_reads_it(api: 
     body = response.json()
     assert body["roles"]["stock"] == ["view", "add", "change"]
     assert body["roles"]["admin"] is None
-    assert [finding.level for finding in check_roles(body)] == [Level.OK]
-    admin = check_roles(api.get("/api/user/roles/"))
+    assert [finding.level for finding in check_roles(body, writes=True)] == [Level.OK]
+    admin = check_roles(api.get("/api/user/roles/"), writes=True)
     assert Level.ERROR not in {finding.level for finding in admin}
     assert "roles: the token's user is a superuser; use a dedicated user" in [finding.text for finding in admin]
 
@@ -147,5 +147,15 @@ def test_char_user_without_part_view_cannot_read_the_catalog(api: RawApi, restri
     body = user.get("/api/user/roles/").json()
     assert lacks_catalog_view(body)
     assert "roles: part lacks view, needed for dry runs (the catalog cannot be read)" in [
-        finding.text for finding in check_roles(body)
+        finding.text for finding in check_roles(body, writes=True)
     ]
+
+
+def test_char_the_quickstarts_read_only_token_passes_while_writes_are_off(api: RawApi, restricted: Any) -> None:
+    """README step 4's token views parts and stock and nothing else: InvenTree lists stock as view only, and the
+    setup check passes it with writes off and fails it with writes on (audit #108)."""
+    group, _ = _group(api, {**MINIMUM_ROLES, "stock": {"can_view": True}})
+    body = restricted(group).get("/api/user/roles/").json()
+    assert body["roles"]["stock"] == ["view"]
+    assert Level.ERROR not in {finding.level for finding in check_roles(body, writes=False)}
+    assert Level.ERROR in {finding.level for finding in check_roles(body, writes=True)}

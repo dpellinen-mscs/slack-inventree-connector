@@ -1019,7 +1019,10 @@ needs.
   reads the roles of the token's user (`/api/user/roles/`) and reports
   what is missing, as an error that says what it breaks, and what is more
   than needed, as a warning. "Change" on Stock Item is not reported, since
-  it comes with "add". A superuser gets one warning. According
+  it comes with "add". While `writes.enabled` is false, a dry run needs
+  only the view permissions: a token without "add" on Stock Item passes
+  the check with a note, and "add" is never reported as more than needed.
+  A superuser gets one warning. According
   to the research, tokens expire after one year by default. Where the API
   exposes the expiry, the connector reports it at startup.
 - **Pack units.** A container unit or a stated pack size is always a

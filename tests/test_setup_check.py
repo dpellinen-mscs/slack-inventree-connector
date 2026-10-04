@@ -41,14 +41,14 @@ def levels(findings: list[Finding]) -> list[Level]:
 
 
 def test_the_minimum_roles_pass_and_change_on_stock_is_not_reported() -> None:
-    findings = check_roles(MINIMUM)
+    findings = check_roles(MINIMUM, writes=True)
     assert levels(findings) == [Level.OK]
     assert exit_code(findings) == 0
 
 
 def test_a_missing_permission_is_an_error_that_says_what_it_breaks() -> None:
     body = {**MINIMUM, "roles": {**MINIMUM["roles"], "stock": ["view", "change"], "part": None}}
-    findings = check_roles(body)
+    findings = check_roles(body, writes=True)
     assert [f.text for f in findings if f.level is Level.ERROR] == [
         "roles: part lacks view, needed for dry runs (the catalog cannot be read)",
         "roles: stock lacks add, needed for writes (every stock adjustment is refused)",
@@ -57,31 +57,31 @@ def test_a_missing_permission_is_an_error_that_says_what_it_breaks() -> None:
 
 
 def test_an_admin_token_works_but_is_warned_about_once() -> None:
-    findings = check_roles(ADMIN)
+    findings = check_roles(ADMIN, writes=True)
     assert [f.text for f in findings] == ["roles: the token's user is a superuser; use a dedicated user"]
     assert exit_code(findings) == 0
 
 
 def test_roles_beyond_the_minimum_are_named() -> None:
-    texts = [f.text for f in check_roles({**ADMIN, "is_staff": False, "is_superuser": False})]
+    texts = [f.text for f in check_roles({**ADMIN, "is_staff": False, "is_superuser": False}, writes=True)]
     assert "roles: stock has delete, more than needed" in texts
     assert "roles: admin has add, change, delete, view, more than needed" in texts
-    assert Level.ERROR not in levels(check_roles({**ADMIN, "is_superuser": False}))
+    assert Level.ERROR not in levels(check_roles({**ADMIN, "is_superuser": False}, writes=True))
 
 
 def test_staff_alone_is_warned_about() -> None:
-    texts = [f.text for f in check_roles({**MINIMUM, "is_staff": True})]
+    texts = [f.text for f in check_roles({**MINIMUM, "is_staff": True}, writes=True)]
     assert texts == ["roles: the token's user is staff; use a dedicated user"]
 
 
 @pytest.mark.parametrize("body", [{}, {"roles": None}, {"roles": ["part"]}])
 def test_roles_the_server_does_not_give_are_an_error(body: dict[str, Any]) -> None:
-    assert levels(check_roles(body)) == [Level.ERROR]
+    assert levels(check_roles(body, writes=True)) == [Level.ERROR]
 
 
 def test_odd_permission_values_count_as_none() -> None:
     body = {**MINIMUM, "roles": {**MINIMUM["roles"], "part": "view", "stock_location": [1, "view"]}}
-    texts = [f.text for f in check_roles(body) if f.level is Level.ERROR]
+    texts = [f.text for f in check_roles(body, writes=True) if f.level is Level.ERROR]
     assert texts == ["roles: part lacks view, needed for dry runs (the catalog cannot be read)"]
 
 
@@ -220,7 +220,7 @@ async def test_a_missing_catalog_view_prints_the_roles_error_and_skips_the_catal
     roles = {**MINIMUM, "roles": {**MINIMUM["roles"], "part": None}}
     client, asked = inventree(roles, forbidden=frozenset({"/api/part/"}))
     async with client:
-        findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"})
+        findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
     assert [(f.level, f.text) for f in findings[1:]] == [
         (Level.ERROR, "roles: part lacks view, needed for dry runs (the catalog cannot be read)"),
         (Level.WARN, "vehicles: not checked until part and stock_location have view"),
@@ -233,7 +233,7 @@ async def test_a_missing_catalog_view_prints_the_roles_error_and_skips_the_catal
 async def test_a_catalog_refused_despite_the_roles_is_an_error_and_the_roles_still_print() -> None:
     client, _ = inventree(MINIMUM, forbidden=frozenset({"/api/stock/location/"}))
     async with client:
-        findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"})
+        findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
     assert levels(findings) == [Level.OK, Level.OK, Level.ERROR]
     assert findings[2].text.startswith("vehicles: not checked, the catalog could not be read: ")
 
@@ -242,5 +242,41 @@ async def test_a_catalog_refused_despite_the_roles_is_an_error_and_the_roles_sti
 async def test_a_readable_catalog_checks_the_vehicle_paths() -> None:
     client, _ = inventree(MINIMUM)
     async with client:
-        findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"})
+        findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
     assert findings[2] == Finding(Level.OK, "vehicles: every one of the 1 paths is a stock location")
+
+
+READ_ONLY: dict[str, Any] = {**MINIMUM, "roles": {**MINIMUM["roles"], "stock": ["view"]}}
+"""The quickstart's token: view on parts, stock locations and stock, nothing else."""
+
+
+def test_with_writes_off_a_read_only_token_passes_with_a_note() -> None:
+    findings = check_roles(READ_ONLY, writes=False)
+    assert [(f.level, f.text) for f in findings] == [
+        (Level.OK, "roles: stock lacks add, needed only once writes are on (writes are off)")
+    ]
+    assert exit_code(findings) == 0
+
+
+def test_with_writes_on_a_read_only_token_is_an_error() -> None:
+    findings = check_roles(READ_ONLY, writes=True)
+    assert [f.text for f in findings] == [
+        "roles: stock lacks add, needed for writes (every stock adjustment is refused)"
+    ]
+    assert exit_code(findings) == 1
+
+
+def test_with_writes_off_the_write_minimum_is_not_more_than_needed() -> None:
+    assert [f.text for f in check_roles(MINIMUM, writes=False)] == [
+        "roles: the token's user has the minimum roles and no more"
+    ]
+
+
+def test_with_writes_off_a_view_is_still_needed() -> None:
+    body = {**MINIMUM, "roles": {**MINIMUM["roles"], "stock": None}}
+    findings = check_roles(body, writes=False)
+    assert [(f.level, f.text) for f in findings] == [
+        (Level.ERROR, "roles: stock lacks view, needed for source selection (stock items cannot be read)"),
+        (Level.OK, "roles: stock lacks add, needed only once writes are on (writes are off)"),
+    ]
+    assert exit_code(findings) == 1
