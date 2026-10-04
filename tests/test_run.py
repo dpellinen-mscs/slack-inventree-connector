@@ -35,7 +35,7 @@ from stockthread.config import InvenTreeSettings, Settings, parse_settings
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.core.model import PostKey
 from stockthread.core.resolve import StockItem
-from stockthread.inventree import InvenTreeError, InvenTreeReader
+from stockthread.inventree import InvenTreeError, InvenTreeReader, ServerInfo, VersionCheck, check_version
 from stockthread.llm.extract import WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
 from stockthread.run import CatalogCache, run, with_vehicles
@@ -48,6 +48,7 @@ CATALOG = Catalog(
     locations=(LocationRecord(10, "Warehouse/Main Stock"), LocationRecord(11, "Vehicles/Truck 1")),
 )
 ENV = {"SLACK_BOT_TOKEN": "xoxb-synthetic", "SLACK_APP_TOKEN": "xapp-synthetic", "INVENTREE_TOKEN": "inv-synthetic"}
+TESTED = check_version(ServerInfo("1.5.6", 530))
 
 
 def settings(
@@ -170,7 +171,7 @@ def test_a_queued_post_gets_its_dry_run_then_the_lock_is_released(tmp_path: Path
         slack_client=client,
         catalog=lambda: CATALOG,
         stock=one_item,
-        check=lambda _: "InvenTree 1.5.6 (API 530) is tested.",
+        check=lambda _: TESTED,
         connect=lambda app, token: connection,
         clock=lambda: datetime.fromtimestamp(1790000030, UTC),
     )
@@ -196,7 +197,7 @@ def test_a_second_instance_on_the_same_database_refuses_to_start(tmp_path: Path,
         slack_client=FakeClient(stop),
         catalog=lambda: CATALOG,
         stock=one_item,
-        check=lambda _: "",
+        check=lambda _: TESTED,
         connect=lambda app, token: connection,
     )
     holder.close()
@@ -211,10 +212,10 @@ def test_startup_checks_stop_before_connecting_and_free_the_lock(
     database = tmp_path / "stockthread.db"
     connection = FakeConnection()
 
-    def check(_: Settings) -> str:
+    def check(_: Settings) -> VersionCheck:
         if failure == "inventree":
             raise InvenTreeError("GET /api/ failed: ConnectError")
-        return ""
+        return TESTED
 
     def catalog() -> Catalog:
         if failure == "catalog":
@@ -284,7 +285,7 @@ def test_a_post_delivered_over_http_gets_its_dry_run(tmp_path: Path, stop: threa
                 slack_client=client,
                 catalog=lambda: CATALOG,
                 stock=one_item,
-                check=lambda _: "",
+                check=lambda _: TESTED,
                 clock=lambda: datetime.fromtimestamp(1790000030, UTC),
             )
         )
@@ -322,7 +323,7 @@ def test_http_mode_stops_with_exit_2_when_the_port_is_taken(tmp_path: Path, stop
             slack_client=FakeClient(stop),
             catalog=lambda: CATALOG,
             stock=one_item,
-            check=lambda _: "",
+            check=lambda _: TESTED,
         )
     assert code == 2
     assert lock_is_free(tmp_path / "stockthread.db")
@@ -421,7 +422,7 @@ def run_with(database: Path, stop: threading.Event, connection: FakeConnection, 
         "slack_client": FakeClient(stop),
         "catalog": lambda: CATALOG,
         "stock": one_item,
-        "check": lambda _: "",
+        "check": lambda _: TESTED,
         "connect": lambda app, token: connection,
         "clock": lambda: datetime.fromtimestamp(1790000030, UTC),
     }
@@ -431,9 +432,9 @@ def run_with(database: Path, stop: threading.Event, connection: FakeConnection, 
 def test_a_stop_during_startup_ends_before_connecting(tmp_path: Path, stop: threading.Event) -> None:
     connection = FakeConnection()
 
-    def check(_: Settings) -> str:
+    def check(_: Settings) -> VersionCheck:
         stop.set()  # Ctrl-C while InvenTree is being checked
-        return ""
+        return TESTED
 
     assert run_with(tmp_path / "stockthread.db", stop, connection, check=check) == 0
     assert connection.calls == []
@@ -857,7 +858,7 @@ def test_a_post_the_rules_decline_is_sent_to_the_configured_model(
         slack_client=client,
         catalog=lambda: CATALOG,
         stock=one_item,
-        check=lambda _: "InvenTree 1.5.6 (API 530) is tested.",
+        check=lambda _: TESTED,
         connect=lambda app, token: FakeConnection(),
         clock=lambda: datetime.fromtimestamp(1790000030, UTC),
     )
@@ -994,7 +995,7 @@ def test_my_truck_in_a_post_is_the_posters_vehicle_and_nobody_elses(
         slack_client=client,
         catalog=with_vehicles(lambda: CATALOG, configured),
         stock=one_item,
-        check=lambda _: "InvenTree 1.5.6 (API 530) is tested.",
+        check=lambda _: TESTED,
         connect=lambda app, token: FakeConnection(),
         clock=lambda: datetime.fromtimestamp(1790000030, UTC),
     )
@@ -1071,7 +1072,7 @@ def test_a_first_run_reads_no_history_and_with_zero_hours_no_run_does(tmp_path: 
         slack_client=client,
         catalog=lambda: CATALOG,
         stock=one_item,
-        check=lambda _: "",
+        check=lambda _: TESTED,
         connect=lambda app, token: FakeConnection(),
         clock=lambda: datetime.fromtimestamp(1790000030, UTC),
     )
@@ -1140,3 +1141,14 @@ def test_catch_up_that_cannot_open_the_database_keeps_trying_with_its_first_swee
         run_module.catch_up(settings(database), client, clock, Decimal(1790000030), halt)
     assert "catch-up failed (OperationalError)" in caplog.text
     assert [call["latest"] for call in client.listed] == ["1790000030.000000"]
+
+
+@pytest.mark.parametrize("api_version", [530, 531])
+def test_the_version_check_is_logged_as_a_warning_when_untested(
+    tmp_path: Path, stop: threading.Event, caplog: pytest.LogCaptureFixture, api_version: int
+) -> None:
+    version = check_version(ServerInfo("1.x", api_version))
+    with caplog.at_level(logging.INFO, logger="stockthread.run"):
+        assert run_with(tmp_path / "stockthread.db", stop, FakeConnection(), check=lambda _: version) == 0
+    (record,) = [record for record in caplog.records if record.getMessage() == version.message]
+    assert record.levelno == (logging.INFO if version.writes_allowed else logging.WARNING)
