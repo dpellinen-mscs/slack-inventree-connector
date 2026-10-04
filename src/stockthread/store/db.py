@@ -29,6 +29,7 @@ from typing import Any, Literal
 
 from stockthread.core.grouping import Arrival, Placed, choose_post, seconds
 from stockthread.core.marker import MAX_ATTEMPT, AttemptKind, Marker, new_marker_id
+from stockthread.core.marker_check import Outcome, RecordedAttempt, RecordedRequest
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import (
     UNSETTLED,
@@ -56,6 +57,26 @@ OUTCOMES: dict[RequestState, str] = {
 NOT_READ_BACK: frozenset[RequestState] = UNSETTLED | {S.APPLIED}
 """While a request of a post is in one of these, no other write of the post may start: its read-back
 compares quantities with its snapshot, and another write would change them."""
+
+RECOVERED_FOUND: dict[tuple[RequestState, RequestState], bool] = {
+    (S.UNKNOWN, S.APPLIED): True,
+    (S.UNKNOWN, S.FAILED): False,
+    (S.UNDO_UNKNOWN, S.UNDONE): True,
+    (S.UNDO_UNKNOWN, S.VERIFIED): False,
+}
+"""What recovery must have concluded about the marker for these transitions (design section 7, the recovery
+table). `unknown` or `undo_unknown` to `verify_failed` follows either conclusion."""
+
+
+def _check_recovered(expected: RequestState, target: RequestState, marker_found: bool | None) -> None:
+    if expected not in (S.UNKNOWN, S.UNDO_UNKNOWN):
+        if marker_found is not None:
+            raise ValueError("only recovery of an unknown outcome concludes whether the marker was found")
+        return
+    if marker_found is None:
+        raise ValueError("recovery records whether it found the marker")
+    if RECOVERED_FOUND.get((expected, target), marker_found) is not marker_found:
+        raise ValueError(f"{expected} to {target} does not follow a marker {'found' if marker_found else 'not found'}")
 
 
 class SchemaTooNew(Exception):
@@ -1263,16 +1284,30 @@ class Store:
         ).fetchall()
         return [(int(revision), int(sequence), S(state)) for revision, sequence, state in rows]
 
-    def transition(self, key: RequestKey, *, expected: RequestState, target: RequestState, actor: Actor) -> None:
+    def transition(
+        self,
+        key: RequestKey,
+        *,
+        expected: RequestState,
+        target: RequestState,
+        actor: Actor,
+        marker_found: bool | None = None,
+    ) -> None:
         """Move a request from `expected` to `target`, or raise and change nothing.
 
         Raises IllegalTransition, StateConflict when the request is not in `expected`, and
         WriteBlocked when an approval is not allowed for the post now. Starting a write goes
         through `begin_attempt`, never through this method.
+
+        `marker_found`: what recovery concluded about the unknown attempt's marker, required when
+        the request leaves `unknown` or `undo_unknown` and recorded on that attempt (the marker
+        check reads it). It must agree with the target: found for `applied` and `undone`, not
+        found for `failed` and back to `verified`.
         """
         if target in (S.APPLYING, S.UNDOING):
             raise ValueError("a write starts with begin_attempt, which records its intent")
         check_transition(expected, target, actor)
+        _check_recovered(expected, target, marker_found)
         with self._transaction():
             row, _, post_id = self._request(key)
             if row.state != expected:
@@ -1287,9 +1322,46 @@ class Store:
                 ]
                 if not may_approve_new_revision(earlier):
                     raise WriteBlocked("an earlier revision of this post left a stock change behind")
+                self._check_no_unknown_write(row.id, post_id, AttemptKind.APPLY)
             if row.state in (S.APPLYING, S.UNDOING):
                 self._finish_attempt(row.id, target)
+            if marker_found is not None:
+                self._recovered(row.id, marker_found)
             self._set_state(row.id, expected, target, actor)
+
+    def _check_no_unknown_write(self, request_id: int, post_id: int, kind: AttemptKind) -> None:
+        """WriteBlocked unless every earlier attempt of `kind` of the request was refused by InvenTree, and, for an
+        apply, no write of the post has an unknown outcome whose marker recovery did not find (ADR 0015): a write
+        whose outcome is unknown may still land, and another write would add to it. Checked at approval and again
+        when the write starts."""
+        name = "apply" if kind is AttemptKind.APPLY else "undo"
+        if self._db.execute(
+            "SELECT 1 FROM request_attempts WHERE request_id = ? AND kind = ? AND outcome IS NOT 'refused'",
+            (request_id, kind.value),
+        ).fetchone():
+            raise WriteBlocked(
+                f"an earlier {name} of this request was not refused by InvenTree: it wrote, or it may still land,"
+                " so another would write twice"
+            )
+        if (
+            kind is AttemptKind.APPLY
+            and self._db.execute(
+                "SELECT 1 FROM request_attempts a JOIN requests r ON r.id = a.request_id"
+                " JOIN plans p ON p.id = r.plan_id WHERE p.post_id = ? AND a.outcome = 'unknown'"
+                " AND a.marker_found IS NOT 1",
+                (post_id,),
+            ).fetchone()
+        ):
+            raise WriteBlocked("a write of this post has an outcome recovery could not establish: it may still land")
+
+    def _recovered(self, request_id: int, marker_found: bool) -> None:
+        cursor = self._db.execute(
+            "UPDATE request_attempts SET marker_found = ?1 WHERE id = (SELECT max(id) FROM request_attempts"
+            " WHERE request_id = ?2) AND outcome = 'unknown' AND marker_found IS NULL",
+            (int(marker_found), request_id),
+        )
+        if cursor.rowcount != 1:
+            raise AssertionError(f"request {request_id} has no last attempt with an unknown outcome to recover")
 
     def _finish_attempt(self, request_id: int, target: RequestState) -> None:
         outcome = OUTCOMES.get(target)
@@ -1322,7 +1394,12 @@ class Store:
         - another write of the post is in flight or not yet read back (`applied`);
         - for an apply: the plan is not current, a read-back of the post found something unexpected,
           an earlier revision left a stock change behind, or an earlier request of the plan is not
-          verified (requests run in order and stop at the first failure; rejected ones are skipped).
+          verified (requests run in order and stop at the first failure; rejected ones are skipped);
+        - another attempt of the same kind of this request was not refused by InvenTree: it wrote, or its outcome
+          is unknown, and a write whose outcome is unknown may still land however long recovery waited (design
+          section 7, "Unknown outcomes and recovery"). Only an attempt InvenTree refused may be tried again;
+        - for an apply: a write of any request of the post has an unknown outcome whose marker recovery did not
+          find, for the same reason: a new revision or the next request would add to it.
         """
         target = S.APPLYING if kind is AttemptKind.APPLY else S.UNDOING
         check_transition(expected, target, actor)
@@ -1355,6 +1432,7 @@ class Store:
             ).fetchone()
             if count >= MAX_ATTEMPT:
                 raise WriteBlocked(f"{MAX_ATTEMPT} attempts is the limit")
+            self._check_no_unknown_write(row.id, post_id, kind)
             marker = Marker(row.marker_id, kind, int(count) + 1)
             self._set_state(row.id, expected, target, actor)
             cursor = self._db.execute(
@@ -1381,6 +1459,32 @@ class Store:
             "SELECT marker FROM request_attempts WHERE request_id = ? ORDER BY id", (row.id,)
         ).fetchall()
         return [Marker.parse(marker) for (marker,) in rows]
+
+    def recorded_requests(self, post: PostKey) -> list[RecordedRequest]:
+        """Every request of the post, of every revision, with its attempts oldest first: what the marker check of
+        the apply protocol compares the stock history with (`core.marker_check`)."""
+        rows = self._db.execute(  # one statement, so one consistent read of requests and attempts
+            "SELECT p.revision, r.sequence, r.operation, r.state, r.marker_id, a.marker, a.outcome, a.marker_found"
+            " FROM requests r JOIN plans p ON p.id = r.plan_id JOIN posts o ON o.id = p.post_id"
+            " LEFT JOIN request_attempts a ON a.request_id = r.id"
+            " WHERE o.workspace_id = ? AND o.channel_id = ? AND o.ts = ? ORDER BY p.revision, r.sequence, a.id",
+            (post.workspace_id, post.channel_id, post.ts),
+        ).fetchall()
+        requests: dict[tuple[int, int], tuple[str, str, str, list[RecordedAttempt]]] = {}
+        for revision, sequence, operation, state, marker_id, marker, outcome, found in rows:
+            _, _, _, attempts = requests.setdefault((revision, sequence), (operation, state, marker_id, []))
+            if marker is not None:
+                attempts.append(
+                    RecordedAttempt(
+                        Marker.parse(marker),
+                        None if outcome is None else Outcome(outcome),
+                        None if found is None else bool(found),
+                    )
+                )
+        return [
+            RecordedRequest(RequestKey(post, revision, sequence), Operation(op), S(state), marker_id, tuple(attempts))
+            for (revision, sequence), (op, state, marker_id, attempts) in requests.items()
+        ]
 
     # The single-instance lock
 

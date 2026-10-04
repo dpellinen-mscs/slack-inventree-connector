@@ -1224,14 +1224,14 @@ A plan has its own state: `current`, `stale`, `expired`, `applied`,
 | `planned` | Part of a current plan | `approved`, `rejected`, `cancelled` (plan became stale), `expired` |
 | `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present), `cancelled` (plan became stale) |
 | `applying` | Intent stored, write about to be sent or sent | `applied`, `failed`, `unknown` |
-| `failed` | InvenTree refused the request. Nothing was written | `approved`, by a human, as a new attempt |
+| `failed` | InvenTree refused the request, or recovery found no marker and no change | `approved`, by a human, as a new attempt, only if every earlier attempt was refused (ADR 0015) |
 | `unknown` | The outcome is not known | `applied`, `failed` (no marker and nothing changed) or `verify_failed`, by recovery |
 | `applied` | InvenTree accepted the request | `verified`, `verify_failed` |
 | `verified` | Read-back agrees with the plan | `undoing` |
 | `verify_failed` | Read-back or recovery found something unexpected | `accepted` or `undoing`, by the operator |
 | `accepted` | The operator accepted the observed state. Final | |
 | `undoing` | Undo intent stored | `undone`, `undo_failed`, `undo_unknown` |
-| `undo_failed` | InvenTree refused the undo. Nothing was written | `undoing`, by a human, as a new attempt |
+| `undo_failed` | InvenTree refused the undo. Nothing was written | `undoing`, by a human, as a new attempt (only after refused undos) |
 | `undo_unknown` | The outcome of the undo is not known | `undone`, `verified` or `verify_failed`, by recovery |
 | `undone` | The undo is verified. Final | |
 | `rejected`, `cancelled`, `expired` | Never applied. Final | |
@@ -1287,6 +1287,21 @@ connector never has two InvenTree writes in flight and cannot race itself.
    post are compared with their recorded states in the same way: a
    verified request must have its marker, and a request that never ran
    must not.
+   Built: `core/marker_check.check_markers` compares the markers found
+   per request with `Store.recorded_requests` (each request's state and
+   its attempts with their outcomes). A `hit` is a found marker that no
+   recorded attempt explains, that InvenTree refused, whose marker
+   recovery concluded was not found (a late write), that belongs to a
+   request that never wrote, or a second attempt of one kind (apply or
+   undo) that also wrote, in any state. A `missing` finding is an
+   attempt the store knows wrote (InvenTree accepted it, or recovery
+   found its marker) whose marker is not found, in any state: an undo may
+   start from `verify_failed` or `undo_failed`, and must not be built on
+   a history that lost a known write. The only excuse is the caller
+   seeing its stock item answer 404 (the 1.4.3 depletion case). An
+   attempt recovery did not find is not known to have written, so its
+   absence is no finding (the request reached its state on that
+   conclusion).
 3. **Snapshot and precondition.** Read every stock item of each part in
    the plan, at the source and at the destination location, without
    sub-locations. Compare with what the plan was built on. If a source
@@ -1363,13 +1378,27 @@ server, so recovery waits before it concludes anything:
 | --- | --- | --- |
 | Found | Match the plan | Continue with read-back, then `verified` |
 | Found | Anything else | `verify_failed` |
-| Not found | Unchanged | `failed`: the operator may approve a new attempt |
+| Not found | Unchanged | `failed`: never tried again by the connector (below) |
 | Not found | Changed | `verify_failed` |
 
-A new attempt, after a failure or after recovery, gets a new attempt
-number in its marker. It runs the whole protocol again, and step 2
-searches for the markers of **all** earlier attempts, so a late write from
-an earlier attempt blocks it. A retry never happens without a human.
+Recovery records its conclusion about the marker on the attempt. A marker
+found later for an attempt that recovery did not find is a late write:
+the state recovery chose does not account for it, and an undo built on
+the history observed at apply time would reverse the stock twice. Step 2
+of the next apply or undo reports it as a `hit` and stops.
+
+A new attempt gets a new attempt number in its marker, runs the whole
+protocol again, and step 2 searches for the markers of **all** earlier
+attempts. A retry never happens without a human, and only after attempts
+that InvenTree refused (ADR 0015). A write whose outcome is unknown may
+still land after recovery's wait, after the marker check of a new attempt,
+and after that attempt is sent: the writer lock cannot stop a request the
+server is already running, and no settle time proves it stopped. So after
+an unknown outcome the request is never sent again, and while any write of
+the post has an unknown outcome whose marker recovery did not find, no
+apply of the post starts (a new revision would add to the late landing).
+The operator records the movement in InvenTree by hand if it is still
+wanted. If the write lands late, the marker check reports it.
 
 `verify_failed` blocks further writes for the post. The operator sees the
 snapshot, the plan and the current state side by side, and chooses: accept
@@ -1380,6 +1409,11 @@ the state as it is, or reverse the change that was observed.
 Undo reverses **what was observed** in the stock history at apply time, not
 what the message or the plan said. It goes through the same protocol, with
 its own marker, read-back and recovery.
+
+A request is undone at most once. A new undo is refused unless every
+earlier undo of the request was refused by InvenTree: an undo that wrote,
+or whose outcome is unknown (even one recovery did not find), would
+reverse the apply a second time. The operator accepts the state as it is.
 
 Undo is allowed only if the stock the apply touched has no later history
 entries except the connector's own, and the condition in the table holds.
@@ -1417,7 +1451,7 @@ and needs no extra service.
 | `matches` | Match results with candidates and the rule that matched |
 | `review_items` | One question per dry run that asked one: the question as ids and codes, approvers only or not, the message it was asked in, open, answered or stale, the answer and who answered (migration 0010); the poster and when its plan expires (0011); where its buttons stand (0012); when it expired unanswered (0014) |
 | `requests` | The state machine of section 7, unique on the request key, with the marker id |
-| `request_attempts` | One row per apply or undo attempt: marker, snapshot, request body, outcome |
+| `request_attempts` | One row per apply or undo attempt: marker, snapshot, request body, outcome, and for an unknown outcome whether recovery found the marker (migration 0016) |
 | `interactions` | One row per button: its random id, its question and the answer it stands for (migration 0010) |
 | `instance_lock` | The single-instance lock with its heartbeat |
 | `api_calls` | Every InvenTree request and response, redacted |

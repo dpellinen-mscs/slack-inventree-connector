@@ -62,7 +62,7 @@ TRANSITIONS: dict[tuple[RequestState, RequestState], frozenset[Actor]] = {
     (S.APPLYING, S.UNKNOWN): frozenset({A.APPLIER}),
     (S.FAILED, S.APPROVED): frozenset({A.HUMAN}),  # a new attempt, never automatic
     (S.UNKNOWN, S.APPLIED): frozenset({A.RECOVERY}),
-    (S.UNKNOWN, S.FAILED): frozenset({A.RECOVERY}),  # no marker, nothing changed: a human may try again
+    (S.UNKNOWN, S.FAILED): frozenset({A.RECOVERY}),  # no marker, nothing changed; never sent again (ADR 0015)
     (S.UNKNOWN, S.VERIFY_FAILED): frozenset({A.RECOVERY}),
     (S.APPLIED, S.VERIFIED): frozenset({A.APPLIER}),
     (S.APPLIED, S.VERIFY_FAILED): frozenset({A.APPLIER}),
@@ -81,7 +81,9 @@ TRANSITIONS: dict[tuple[RequestState, RequestState], frozenset[Actor]] = {
 FINAL: frozenset[RequestState] = frozenset({S.ACCEPTED, S.UNDONE, S.REJECTED, S.CANCELLED, S.EXPIRED})
 
 LEFT_NO_CHANGE: frozenset[RequestState] = frozenset({S.UNDONE, S.REJECTED, S.CANCELLED, S.EXPIRED, S.FAILED})
-"""States in which a request left no stock change behind. `failed` counts: InvenTree refused it."""
+"""States in which a request left no stock change behind. `failed` counts: InvenTree refused it, or recovery found
+no marker and no change. The second may still land, so the store also refuses every apply of such a post (ADR
+0015)."""
 
 UNSETTLED: frozenset[RequestState] = frozenset({S.APPLYING, S.UNKNOWN, S.UNDOING, S.UNDO_UNKNOWN})
 """States in which a write may be in flight. Nothing else may be sent for the post."""

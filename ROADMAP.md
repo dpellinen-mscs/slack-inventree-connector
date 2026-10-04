@@ -122,6 +122,7 @@ payloads whose channel or message does not fit the stored id.
   - [ ] Judged at approval and again before the write (with the apply protocol)
 - [ ] Apply protocol: writer lock, marker check, snapshot, single write, read-back
   - [x] Marker search: every attempt of one request, whole markers only (`InvenTreeReader.marker_entries`)
+  - [x] Marker check: the markers found agree with the recorded states of every request of the post (`core/marker_check.py`, `Store.recorded_requests`)
   - [x] Single write: one request sent once, its outcome accepted, refused or unknown (`InvenTreeWriter.send`)
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
 - [ ] Plans with several requests, and the `partially_applied` state

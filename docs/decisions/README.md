@@ -14,12 +14,13 @@ editing history.
 | [0006](0006-python-tooling.md) | Python tooling: hatchling, ruff, mypy strict, pytest, make | Accepted |
 | [0007](0007-inventree-read-client.md) | The InvenTree read client: httpx, GET only, a tested API range | Accepted |
 | [0008](0008-mit-license.md) | The project is licensed under MIT | Accepted |
-| [0009](0009-audit-store.md) | The audit store: stdlib sqlite3, SQL migrations, guards in the database | Accepted |
+| [0009](0009-audit-store.md) | The audit store: stdlib sqlite3, SQL migrations, guards in the database | Accepted, one bullet superseded by 0015 |
 | [0010](0010-no-attribution.md) | No attribution of prior work or users | Accepted |
 | [0011](0011-llm-after-the-rules.md) | The model reads only what the rules decline, and only when configured | Accepted |
 | [0012](0012-first-confirmation-becomes-alias.md) | A whole-word match is confirmed once, and that confirmation becomes an alias | Accepted |
 | [0013](0013-http-serving-with-waitress.md) | HTTP mode is served by waitress, in the connector's own process | Accepted |
 | [0014](0014-dev-workspace-capture-fixtures.md) | Two Slack fixtures may come from the dev workspace capture | Accepted |
+| [0015](0015-unknown-writes-are-never-retried.md) | Recovery's conclusion lives on the attempt, and an unknown write is never retried | Accepted |
 
 ## Template
 

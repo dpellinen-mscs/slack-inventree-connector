@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from stockthread.core.marker import AttemptKind, Marker
+from stockthread.core.marker_check import Outcome, RecordedAttempt, check_markers
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, IllegalTransition, RequestState
 from stockthread.store import (
@@ -319,7 +320,7 @@ def test_the_outcome_follows_the_state(store: Store, path: Path) -> None:
     verified(store, key())
     begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
     store.transition(key(), expected=S.UNDOING, target=S.UNDO_UNKNOWN, actor=A.APPLIER)
-    store.transition(key(), expected=S.UNDO_UNKNOWN, target=S.UNDONE, actor=A.RECOVERY)
+    store.transition(key(), expected=S.UNDO_UNKNOWN, target=S.UNDONE, actor=A.RECOVERY, marker_found=True)
     outcomes = raw(path).execute("SELECT kind, outcome FROM request_attempts ORDER BY id").fetchall()
     assert outcomes == [("a", "accepted"), ("u", "unknown")]
 
@@ -728,4 +729,265 @@ def test_questions_closed_before_buttons_were_taken_down_are_left_as_they_are(
     upgraded = Store.open(path)
     assert upgraded.closed_with_buttons(limit=10) == []  # never edited after the upgrade
     assert raw(path).execute("SELECT buttons, buttons_tries FROM review_items").fetchall() == [("left", 0)]
+    upgraded.close()
+
+
+# What the marker check reads
+
+
+def test_recorded_requests_hold_every_request_of_the_post_with_its_attempts(store: Store) -> None:
+    plan(store, Operation.TRANSFER, Operation.REMOVE)
+    approve(store, key(1, 1))
+    first = begin(store, key(1, 1))
+    store.transition(key(1, 1), expected=S.APPLYING, target=S.FAILED, actor=A.APPLIER)
+    store.transition(key(1, 1), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
+    second = begin(store, key(1, 1))
+    other_post = PostKey("T0ACME", "C0STOCK", "1727600099.000100")
+    store.create_post(other_post)
+    store.create_plan(other_post, HASH, (Operation.ADD,))
+
+    recorded = store.recorded_requests(POST)
+
+    assert [(r.key, r.operation, r.state) for r in recorded] == [
+        (key(1, 1), Operation.TRANSFER, S.APPLYING),
+        (key(1, 2), Operation.REMOVE, S.PLANNED),
+    ]
+    assert [r.marker_id for r in recorded] == [store.request(key(1, 1)).marker_id, store.request(key(1, 2)).marker_id]
+    assert recorded[0].attempts == (RecordedAttempt(first, Outcome.REFUSED), RecordedAttempt(second, None))
+    assert recorded[1].attempts == ()
+
+
+def test_recorded_requests_span_revisions_and_feed_the_marker_check(store: Store) -> None:
+    plan(store)
+    approve(store, key())
+    applied = begin(store, key())
+    store.transition(key(), expected=S.APPLYING, target=S.UNKNOWN, actor=A.APPLIER)
+    store.create_plan(POST, HASH, (Operation.TRANSFER,))
+
+    recorded = store.recorded_requests(POST)
+
+    assert [(r.key, r.state) for r in recorded] == [(key(1, 1), S.UNKNOWN), (key(2, 1), S.PLANNED)]
+    assert recorded[0].attempts == (RecordedAttempt(applied, Outcome.UNKNOWN),)
+    found: dict[str, list[Marker]] = {r.marker_id: [] for r in recorded} | {applied.marker_id: [applied]}
+    assert check_markers(recorded, found) == []
+
+
+def test_recorded_requests_of_an_unknown_post_are_none(store: Store) -> None:
+    assert store.recorded_requests(POST) == []
+
+
+# What recovery concluded about the marker
+
+
+def unknown(store: Store, request: RequestKey, expected: S | None = None) -> None:
+    if expected is S.FAILED:
+        store.transition(request, expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
+    else:
+        approve(store, request)
+    begin(store, request)
+    store.transition(request, expected=S.APPLYING, target=S.UNKNOWN, actor=A.APPLIER)
+
+
+def refused(store: Store, request: RequestKey) -> None:
+    approve(store, request)
+    begin(store, request)
+    store.transition(request, expected=S.APPLYING, target=S.FAILED, actor=A.APPLIER)
+
+
+@pytest.mark.parametrize(
+    ("target", "found"),
+    [(S.APPLIED, True), (S.FAILED, False), (S.VERIFY_FAILED, True), (S.VERIFY_FAILED, False)],
+)
+def test_recovery_records_whether_it_found_the_marker(store: Store, path: Path, target: S, found: bool) -> None:
+    plan(store)
+    unknown(store, key())
+    store.transition(key(), expected=S.UNKNOWN, target=target, actor=A.RECOVERY, marker_found=found)
+    assert store.request(key()).state is target
+    assert raw(path).execute("SELECT outcome, marker_found FROM request_attempts").fetchall() == [("unknown", found)]
+    (recorded,) = store.recorded_requests(POST)
+    assert [attempt.marker_found for attempt in recorded.attempts] == [found]
+
+
+def test_recovery_of_an_undo_records_it_on_the_undo(store: Store, path: Path) -> None:
+    plan(store)
+    verified(store, key())
+    begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+    store.transition(key(), expected=S.UNDOING, target=S.UNDO_UNKNOWN, actor=A.APPLIER)
+    store.transition(key(), expected=S.UNDO_UNKNOWN, target=S.VERIFY_FAILED, actor=A.RECOVERY, marker_found=False)
+    rows = raw(path).execute("SELECT kind, marker_found FROM request_attempts ORDER BY id").fetchall()
+    assert rows == [("a", None), ("u", 0)]
+
+
+@pytest.mark.parametrize(
+    ("expected", "target", "found"),
+    [
+        (S.UNKNOWN, S.APPLIED, False),
+        (S.UNKNOWN, S.FAILED, True),
+        (S.UNDO_UNKNOWN, S.UNDONE, False),
+        (S.UNDO_UNKNOWN, S.VERIFIED, True),
+    ],
+)
+def test_recovery_must_agree_with_the_target(expected: S, target: S, found: bool) -> None:
+    with pytest.raises(ValueError, match="does not follow"):
+        store_db._check_recovered(expected, target, found)
+
+
+def test_recovery_must_say_whether_it_found_the_marker(store: Store, path: Path) -> None:
+    plan(store)
+    unknown(store, key())
+    with pytest.raises(ValueError, match="whether it found"):
+        store.transition(key(), expected=S.UNKNOWN, target=S.VERIFY_FAILED, actor=A.RECOVERY)
+    with pytest.raises(ValueError, match="does not follow"):
+        store.transition(key(), expected=S.UNKNOWN, target=S.APPLIED, actor=A.RECOVERY, marker_found=False)
+    assert store.request(key()).state is S.UNKNOWN
+    assert raw(path).execute("SELECT marker_found FROM request_attempts").fetchall() == [(None,)]
+
+
+def test_only_recovery_of_an_unknown_outcome_records_a_marker_conclusion(store: Store) -> None:
+    plan(store)
+    approve(store, key())
+    begin(store, key())
+    with pytest.raises(ValueError, match="only recovery"):
+        store.transition(key(), expected=S.APPLYING, target=S.APPLIED, actor=A.APPLIER, marker_found=True)
+    assert store.request(key()).state is S.APPLYING
+
+
+def test_a_recovered_conclusion_is_recorded_once_and_only_on_an_unknown_outcome(store: Store, path: Path) -> None:
+    plan(store)
+    refused(store, key())
+    unknown(store, key(), expected=S.FAILED)
+    store.transition(key(), expected=S.UNKNOWN, target=S.FAILED, actor=A.RECOVERY, marker_found=False)
+    db = raw(path)
+    with pytest.raises(sqlite3.IntegrityError, match="recovery concludes once"):
+        db.execute("UPDATE request_attempts SET marker_found = 1 WHERE outcome = 'unknown'")
+    with pytest.raises(sqlite3.IntegrityError, match="recovery concludes once"):
+        db.execute("UPDATE request_attempts SET marker_found = 1 WHERE outcome = 'refused'")
+    with pytest.raises(sqlite3.IntegrityError, match="starts unrecovered"):
+        db.execute(
+            "INSERT INTO request_attempts (request_id, kind, attempt, marker, snapshot, request_body, started_at,"
+            " marker_found) SELECT request_id, 'u', 1, marker || 'x', '{}', '{}', started_at, 0 FROM request_attempts"
+            " LIMIT 1"
+        )
+    assert db.execute("SELECT marker_found FROM request_attempts ORDER BY id").fetchall() == [(None,), (0,)]
+
+
+def test_recovery_concludes_about_the_last_attempt_only(store: Store, path: Path) -> None:
+    plan(store)
+    refused(store, key())
+    unknown(store, key(), expected=S.FAILED)
+    store.transition(key(), expected=S.UNKNOWN, target=S.APPLIED, actor=A.RECOVERY, marker_found=True)
+    assert raw(path).execute("SELECT attempt, outcome, marker_found FROM request_attempts ORDER BY id").fetchall() == [
+        (1, "refused", None),
+        (2, "unknown", 1),
+    ]
+
+
+def test_a_request_leaves_unknown_only_with_recoverys_conclusion(store: Store, path: Path) -> None:
+    plan(store)
+    unknown(store, key())
+    with pytest.raises(sqlite3.IntegrityError, match="before the request leaves"):
+        raw(path).execute("UPDATE requests SET state = 'failed'")
+    assert store.request(key()).state is S.UNKNOWN
+
+
+def found_undo_then_verify_failed(store: Store) -> None:
+    verified(store, key())
+    begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+    store.transition(key(), expected=S.UNDOING, target=S.UNDO_UNKNOWN, actor=A.APPLIER)
+    store.transition(key(), expected=S.UNDO_UNKNOWN, target=S.VERIFY_FAILED, actor=A.RECOVERY, marker_found=True)
+
+
+def test_a_second_undo_after_one_that_wrote_is_blocked(store: Store) -> None:
+    # Recovery found the undo's marker but the quantities differed: the undo wrote. Another would reverse twice.
+    plan(store)
+    found_undo_then_verify_failed(store)
+    with pytest.raises(WriteBlocked, match="earlier undo"):
+        begin(store, key(), AttemptKind.UNDO, expected=S.VERIFY_FAILED, actor=A.HUMAN)
+    assert store.request(key()).state is S.VERIFY_FAILED
+    store.transition(key(), expected=S.VERIFY_FAILED, target=S.ACCEPTED, actor=A.HUMAN)
+
+
+def test_a_new_undo_after_one_recovery_did_not_find_is_blocked(store: Store) -> None:
+    # u01 timed out and recovery found no marker but changed quantities. A missing marker proves nothing (u01 may
+    # still land, or its history entry was never saved), so u02 could reverse the apply a second time.
+    plan(store)
+    verified(store, key())
+    begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+    store.transition(key(), expected=S.UNDOING, target=S.UNDO_UNKNOWN, actor=A.APPLIER)
+    store.transition(key(), expected=S.UNDO_UNKNOWN, target=S.VERIFY_FAILED, actor=A.RECOVERY, marker_found=False)
+    with pytest.raises(WriteBlocked, match="earlier undo of this request was not refused"):
+        begin(store, key(), AttemptKind.UNDO, expected=S.VERIFY_FAILED, actor=A.HUMAN)
+    assert store.request(key()).state is S.VERIFY_FAILED
+
+
+def test_a_new_undo_after_a_refused_one_may_start(store: Store) -> None:
+    plan(store)
+    verified(store, key())
+    begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+    store.transition(key(), expected=S.UNDOING, target=S.UNDO_FAILED, actor=A.APPLIER)
+    marker = begin(store, key(), AttemptKind.UNDO, expected=S.UNDO_FAILED, actor=A.HUMAN)
+    assert (marker.kind, marker.attempt) == (AttemptKind.UNDO, 2)
+
+
+def test_a_new_apply_after_a_refused_one_may_start(store: Store) -> None:
+    plan(store)
+    refused(store, key())
+    store.transition(key(), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
+    marker = begin(store, key())
+    assert (marker.kind, marker.attempt) == (AttemptKind.APPLY, 2)
+
+
+def test_a_new_apply_after_one_recovery_did_not_find_is_blocked(store: Store, path: Path) -> None:
+    # a01 timed out; recovery found no marker and unchanged quantities, so the request is failed. a01 may still be
+    # running on the server and commit after any check the connector makes: a02 would then write twice.
+    plan(store)
+    unknown(store, key())
+    store.transition(key(), expected=S.UNKNOWN, target=S.FAILED, actor=A.RECOVERY, marker_found=False)
+    with pytest.raises(WriteBlocked, match="earlier apply of this request was not refused"):
+        store.transition(key(), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
+    assert store.request(key()).state is S.FAILED
+    raw(path).execute("UPDATE requests SET state = 'approved' WHERE id = ?", (store.request(key()).id,))
+    with pytest.raises(WriteBlocked, match="earlier apply of this request was not refused"):
+        begin(store, key())  # begin_attempt checks again itself
+
+
+def test_a_write_of_the_post_recovery_did_not_find_blocks_a_new_revision(store: Store, path: Path) -> None:
+    # A failed request left no stock change behind, so a new revision of the post could be approved, but the same
+    # late landing would add to it.
+    plan(store)
+    unknown(store, key())
+    store.transition(key(), expected=S.UNKNOWN, target=S.FAILED, actor=A.RECOVERY, marker_found=False)
+    store.create_plan(POST, "1" * 64, [Operation.TRANSFER])
+    with pytest.raises(WriteBlocked, match="recovery could not establish"):
+        approve(store, key(2, 1))
+    assert store.request(key(2, 1)).state is S.PLANNED
+    raw(path).execute("UPDATE requests SET state = 'approved' WHERE id = ?", (store.request(key(2, 1)).id,))
+    with pytest.raises(WriteBlocked, match="recovery could not establish"):
+        begin(store, key(2, 1))
+
+
+def test_a_file_from_before_migration_0016_gets_the_recovery_column(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = store_db._migrations()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real[:15])
+    old = Store.open(path)
+    old.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
+    plan(old)
+    old.close()
+    db = raw(path)  # an apply the code of migration 0015 accepted (today's begin_attempt reads marker_found)
+    request_id, marker_id = db.execute("SELECT id, marker_id FROM requests").fetchone()
+    db.execute("UPDATE requests SET state = 'applied' WHERE id = ?", (request_id,))
+    db.execute(
+        "INSERT INTO request_attempts (request_id, kind, attempt, marker, snapshot, request_body, started_at, outcome,"
+        " finished_at) VALUES (?, 'a', 1, ?, '{}', '{}', '2026-10-01T00:00:00+00:00', 'accepted',"
+        " '2026-10-01T00:00:01+00:00')",
+        (request_id, str(Marker(marker_id, AttemptKind.APPLY, 1))),
+    )
+    monkeypatch.setattr(store_db, "_migrations", lambda: real)
+    upgraded = Store.open(path)
+    assert upgraded.schema_version == len(real)
+    (recorded,) = upgraded.recorded_requests(POST)
+    assert [(a.outcome, a.marker_found) for a in recorded.attempts] == [(Outcome.ACCEPTED, None)]
+    upgraded.transition(key(), expected=S.APPLIED, target=S.VERIFIED, actor=A.APPLIER)
     upgraded.close()
