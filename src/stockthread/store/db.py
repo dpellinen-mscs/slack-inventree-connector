@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from stockthread.core.grouping import Arrival, Placed, choose_post, seconds
-from stockthread.core.marker import MAX_ATTEMPT, AttemptKind, Marker, new_marker_id
+from stockthread.core.marker import MAX_ATTEMPT, AttemptKind, Marker, marked, new_marker_id
 from stockthread.core.marker_check import Outcome, RecordedAttempt, RecordedRequest
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import (
@@ -1361,7 +1361,8 @@ class Store:
     ) -> Attempt:
         """Store the intent of a write, and move the request to `applying` or `undoing`, in one transaction.
 
-        Returns the marker to write into the notes. The caller sends the write only after this returns.
+        Returns the marker of the attempt, which `request_body` must already lead its notes with
+        (`next_marker` says which; ValueError otherwise). The caller sends the write only after this returns.
         Raises LockLost unless `lock_owner` holds the instance lock, StateConflict if someone else
         moved the request first, and WriteBlocked if the post or plan forbids a write now:
 
@@ -1413,6 +1414,8 @@ class Store:
             ):
                 raise WriteBlocked("an earlier undo of this request wrote: a second would reverse the stock twice")
             marker = Marker(row.marker_id, kind, int(count) + 1)
+            if marked(request_body.get("notes"), row.marker_id) != marker:
+                raise ValueError(f"the request's notes must lead with this attempt's marker, {marker}")
             self._set_state(row.id, expected, target, actor)
             cursor = self._db.execute(
                 "INSERT INTO request_attempts (request_id, kind, attempt, marker, snapshot, request_body, started_at)"
@@ -1430,6 +1433,17 @@ class Store:
             attempt_id = int(cursor.lastrowid or 0)
             self._audit(actor, "attempt_started", post_id=post_id, request_id=row.id, attempt_id=attempt_id)
             return Attempt(attempt_id, marker)
+
+    def next_marker(self, key: RequestKey, kind: AttemptKind) -> Marker:
+        """The marker the next attempt of `kind` will carry, to build its request body with. `begin_attempt` checks
+        the body against the marker it assigns, so a request moved on in between fails there, not in InvenTree."""
+        row = self.request(key)
+        (count,) = self._db.execute(
+            "SELECT count(*) FROM request_attempts WHERE request_id = ? AND kind = ?", (row.id, kind.value)
+        ).fetchone()
+        if count >= MAX_ATTEMPT:
+            raise WriteBlocked(f"{MAX_ATTEMPT} attempts is the limit")
+        return Marker(row.marker_id, kind, int(count) + 1)
 
     def markers(self, key: RequestKey) -> list[Marker]:
         """Every marker written or about to be written for the request, apply and undo, oldest first."""
