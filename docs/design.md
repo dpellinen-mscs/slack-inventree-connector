@@ -1310,6 +1310,11 @@ connector never has two InvenTree writes in flight and cannot race itself.
    Also record the ids of the history entries that already exist on each
    source stock item the request takes from. Otherwise store the snapshot,
    the exact request body and the move to `applying` in one transaction.
+   Built (the transaction): `Store.begin_attempt`. The body is built
+   before it, with the marker `Store.next_marker` names, and
+   `begin_attempt` refuses a body whose notes do not lead with the marker
+   it assigns, so a stored intent always names the marker its write
+   carries.
 4. **Write.** Send the request once. A request that InvenTree refuses
    with a 4xx changes nothing: all lines succeed or fail together
    (`test_char_multi_item_request_is_atomic`). A 5xx is not that safe. On

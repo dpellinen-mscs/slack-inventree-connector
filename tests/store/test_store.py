@@ -14,6 +14,7 @@ from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.marker_check import Outcome, RecordedAttempt, check_markers
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, IllegalTransition, RequestState
+from stockthread.core.write_request import write_notes
 from stockthread.store import (
     InstanceLocked,
     LockLost,
@@ -30,7 +31,8 @@ POST = PostKey("T0ACME", "C0STOCK", "1727600000.000100")
 HASH = "0" * 64
 SNAPSHOT = {"items": [{"pk": 7, "location": 3, "quantity": "10"}]}
 OWNER = "test-instance"
-BODY = {"items": [{"pk": 7, "quantity": "2"}], "location": 4, "notes": "marker goes here"}
+BODY = {"items": [{"pk": 7, "quantity": "2"}], "location": 4}
+"""A request body without its notes: `begin` adds notes that lead with the attempt's marker."""
 
 
 class Clock:
@@ -77,10 +79,11 @@ def begin(store: Store, request: RequestKey, kind: AttemptKind = AttemptKind.APP
         "expected": S.APPROVED,
         "actor": A.APPLIER,
         "snapshot": SNAPSHOT,
-        "request_body": BODY,
         "lock_owner": OWNER,
     }
     options.update(kwargs)
+    if "request_body" not in options:
+        options["request_body"] = BODY | {"notes": write_notes(store.next_marker(request, kind), "U0SAM")}
     return store.begin_attempt(request, kind, **options).marker  # type: ignore[arg-type]
 
 
@@ -282,9 +285,54 @@ def test_begin_attempt_stores_the_intent_and_returns_the_marker(store: Store, pa
     assert stored == (
         str(marker),
         '{"items":[{"location":3,"pk":7,"quantity":"10"}]}',
-        '{"items":[{"pk":7,"quantity":"2"}],"location":4,"notes":"marker goes here"}',
+        f'{{"items":[{{"pk":7,"quantity":"2"}}],"location":4,"notes":"{marker} U0SAM"}}',
         None,
     )
+
+
+@pytest.mark.parametrize(
+    "notes",
+    [
+        None,
+        "",
+        "U0SAM",
+        "{other} U0SAM",  # another request's marker
+        "{retry} U0SAM",  # the next attempt's
+        "{undo} U0SAM",  # the other kind's
+        "U0SAM {this}",  # not first
+    ],
+)
+def test_begin_attempt_refuses_a_body_whose_notes_do_not_lead_with_its_marker(
+    store: Store, path: Path, notes: str | None
+) -> None:
+    plan(store, Operation.TRANSFER, Operation.REMOVE)
+    approve(store, key())
+    this = store.next_marker(key(), AttemptKind.APPLY)
+    markers = {
+        "this": this,
+        "other": store.next_marker(key(1, 2), AttemptKind.APPLY),
+        "retry": Marker(this.marker_id, AttemptKind.APPLY, 2),
+        "undo": Marker(this.marker_id, AttemptKind.UNDO, 1),
+    }
+    body = BODY if notes is None else BODY | {"notes": notes.format(**markers)}
+    with pytest.raises(ValueError, match="lead with this attempt's marker"):
+        begin(store, key(), request_body=body)
+    assert store.request(key()).state is S.APPROVED
+    assert raw(path).execute("SELECT count(*) FROM request_attempts").fetchone()[0] == 0
+    assert begin(store, key()) == this
+
+
+def test_next_marker_counts_per_kind_and_stops_at_the_limit(store: Store, monkeypatch: pytest.MonkeyPatch) -> None:
+    plan(store)
+    approve(store, key())
+    assert store.next_marker(key(), AttemptKind.UNDO).attempt == 1
+    begin(store, key())
+    store.transition(key(), expected=S.APPLYING, target=S.FAILED, actor=A.APPLIER)
+    assert store.next_marker(key(), AttemptKind.APPLY).attempt == 2
+    assert store.next_marker(key(), AttemptKind.UNDO).attempt == 1
+    monkeypatch.setattr(store_db, "MAX_ATTEMPT", 1)
+    with pytest.raises(WriteBlocked, match="limit"):
+        store.next_marker(key(), AttemptKind.APPLY)
 
 
 def test_a_failed_intent_leaves_no_attempt(store: Store, path: Path) -> None:
@@ -561,7 +609,11 @@ def test_the_attempt_limit(store: Store) -> None:
         store.transition(key(), expected=S.APPLYING, target=S.FAILED, actor=A.APPLIER)
         store.transition(key(), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
     with pytest.raises(WriteBlocked, match="limit"):
-        begin(store, key())
+        store.next_marker(key(), AttemptKind.APPLY)
+    # A body built before the limit was reached: begin_attempt holds the limit itself.
+    last = Marker(store.request(key()).marker_id, AttemptKind.APPLY, 99)
+    with pytest.raises(WriteBlocked, match="limit"):
+        begin(store, key(), request_body=BODY | {"notes": write_notes(last, "U0SAM")})
 
 
 # REPLACE deletes a row without firing DELETE triggers (unless recursive_triggers is on, which a
