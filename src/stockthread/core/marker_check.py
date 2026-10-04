@@ -10,20 +10,19 @@ attempt whose marker recovery concluded was not found (a late write: the state r
 it, do not account for it), an apply of a request that left no stock change behind, or a second attempt of a
 request that is already applied once.
 
-A marker that is not found proves nothing on its own, but a request the store records as verified or undone wrote
-its marker, and a history that no longer shows it cannot be trusted to show the others either (an admin deleted
-history, or another database wrote). That is a `MISSING` finding, with two excuses only. On 1.4.3 a write that
-deleted its stock item cannot be found by search (design section 5, Depletion): the caller passes the markers whose
-item answered 404 (`item_gone`); the operation alone excuses nothing, because a partial remove keeps its marker. And
-the apply of an undone request whose marker recovery did not find may never have written: recovery moved "not found,
-changed" to `verify_failed`, and the operator's undo reversed what was observed (or, recovered as "not found,
-unchanged", left it `verified`). An unknown attempt that recovery found has no excuse. A record of an unknown attempt
-without recovery's conclusion, in a request that left `unknown` or `undo_unknown`, is refused.
+A marker that is not found proves nothing on its own, but an attempt the store knows wrote (InvenTree accepted it,
+or recovery found its marker) left its marker, and a history that no longer shows it cannot be trusted to show the
+others either (an admin deleted history, or another database wrote). That is a `MISSING` finding in every state,
+because an undo or a retry may start from several of them (`verify_failed`, `undo_failed`) and must not act on
+that history. There is one excuse: on 1.4.3 a write that deleted its stock item cannot be found by search (design
+section 5, Depletion): the caller passes the markers whose loss it has excused (`item_gone`). An attempt that
+recovery did not find is not known to have written, so its absence is no finding (the request reached its state on
+that conclusion). A record of an unknown attempt without recovery's conclusion, in a request that left `unknown` or
+`undo_unknown`, is refused.
 
 In any state, at most one attempt of each kind may have written: a request is applied once and undone once, so two
 found apply markers, or two found undo markers, are a `HIT`. For a verified or undone request it must be the last
-attempt. Requests in the other states (in flight, `verify_failed`, `accepted`) are checked for that and for hits no
-attempt explains.
+attempt.
 """
 
 from __future__ import annotations
@@ -151,38 +150,28 @@ def _check(request: RecordedRequest, hits: set[Marker], item_gone: frozenset[Mar
     # In every other state, at most one attempt of each kind wrote: a request is applied once and undone once. A
     # verified or undone request records which one: the last.
     for attempts in (applies, undos):
-        wrote = [attempt.marker for attempt in attempts if attempt.marker in explained]
+        found = [attempt.marker for attempt in attempts if attempt.marker in explained]
         if request.state in (S.VERIFIED, S.UNDONE) and attempts:
-            for marker in wrote:
+            for marker in found:
                 if marker != attempts[-1].marker:
                     yield hit(marker, "the store records another attempt of this request as the one that wrote")
         else:
-            for marker in wrote[:-1]:
+            for marker in found[:-1]:
                 yield hit(marker, "a later attempt of this request also wrote")
     if request.state is S.VERIFIED:
         for attempt in undos:
             if attempt.marker in explained:
                 yield hit(attempt.marker, "the request is verified, yet this undo wrote")
-    if request.state in (S.VERIFIED, S.UNDONE):
-        yield from _missing(request, applies, explained, item_gone)
-    if request.state is S.UNDONE:
-        yield from _missing(request, undos, explained, item_gone)
-
-
-def _missing(
-    request: RecordedRequest,
-    attempts: list[RecordedAttempt],
-    explained: set[Marker],
-    item_gone: frozenset[Marker],
-) -> Iterable[Finding]:
-    """The last of `attempts` wrote, so it must be found unless its item is gone, or unless recovery concluded it
-    was not found: then the request reached this state on that conclusion (an apply recovered as "not found,
-    changed", whose undo reversed what was observed or itself was recovered as "not found, unchanged")."""
-    if not attempts:
+    if (request.state is S.VERIFIED and not applies) or (request.state is S.UNDONE and not (applies and undos)):
         raise ValueError(f"a {request.state} request has an attempt of each kind it went through")
-    last = attempts[-1]
-    if last.marker in explained or last.marker in item_gone:
-        return
-    if last.marker_found is False:
-        return
-    yield Finding(request.key, FindingKind.MISSING, last.marker, f"the request is {request.state}, but not found")
+    for attempt in request.attempts:
+        if wrote(attempt) and attempt.marker not in explained and attempt.marker not in item_gone:
+            yield Finding(
+                request.key, FindingKind.MISSING, attempt.marker, f"the request is {request.state}, but not found"
+            )
+
+
+def wrote(attempt: RecordedAttempt) -> bool:
+    """The store knows the attempt wrote: InvenTree accepted it, or recovery found its marker. Every other attempt
+    may not have written (refused, in flight, not recovered yet, or recovered as not found)."""
+    return attempt.outcome is Outcome.ACCEPTED or attempt.marker_found is True

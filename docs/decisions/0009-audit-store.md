@@ -1,6 +1,6 @@
 # 0009: The audit store: stdlib sqlite3, SQL migrations, guards in the database
 
-- Status: Accepted
+- Status: Accepted; the bullet on an attempt's `outcome` is superseded by [0015](0015-unknown-writes-are-never-retried.md)
 - Date: 2026-09-29
 - Decided by: agent (FYI to Dan)
 
