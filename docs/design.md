@@ -1327,18 +1327,27 @@ connector never has two InvenTree writes in flight and cannot race itself.
    decimal string (`{"stock_items": {"7": "3"}}`). Otherwise store the snapshot,
    the exact request body and the move to `applying` in one transaction.
    Built (the check, pure): `precondition.check` takes the movement's
-   decided view and the stock items of every pair `precondition.pairs`
-   names (each line's part where the movement acts, and at a transfer's
-   destination), read now. It refuses (`Stale`, with the line and item)
-   when a named item is no longer at that location, lacks a serial number
-   the line names, or, for a transfer or a remove, is no longer available
-   or holds less than the movement's lines take from it together; for an
-   add or a count, when the target is gone or now serialized (an emptied
-   target is still a target). Otherwise it returns the snapshot: each named
-   item's quantity and the total at each pair, stored as
+   decided view, the request built from it (whose lines must be the
+   view's takes merged by item), and the stock items of every pair
+   `precondition.pairs` names (each line's part where the movement acts,
+   and at a transfer's destination), read now with
+   `InvenTreeReader.stock_items`. It refuses (`Stale`, naming the line or
+   item) when a named item is no longer at that location; for a transfer
+   or a remove, when an item is no longer available, holds less than the
+   lines take from it together, or is serialized and not moved whole (a
+   remove never takes a serialized item); for an add or a count, when the
+   item is no longer the one unserialized target of the pair. A line that
+   names serial numbers takes only items carrying one; a line that names
+   none and takes serialized items must still take every available
+   serialized item of an unmixed pair. A line a person chose the stock
+   for keeps the choice: it is not held to the one-target and
+   every-serialized-item rules. Otherwise it returns the snapshot: each
+   named item's quantity and the total at each pair, stored as
    `{"stock_items": {"<pk>": "<qty>"}, "totals": {"<part>@<location>":
-   "<qty>"}}`. Not built yet: the comparison with the stock the plan was
-   built on, and the history entry ids.
+   "<qty>"}}`; the read-back must read the totals with the same call. An
+   emptied add or count target is a target only once the stock read
+   includes depleted items (#112). Not built yet: the comparison with the
+   stock the plan was built on, and the history entry ids.
    Built (the transaction): `Store.begin_attempt`. The body is built
    before it, with the marker `Store.next_marker` names, and
    `begin_attempt` refuses a body whose notes do not lead with the marker
