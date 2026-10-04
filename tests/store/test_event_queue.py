@@ -273,7 +273,8 @@ def test_retries_and_restarts_share_one_attempt_budget(store: Store) -> None:
         (event,) = store.claim_events(OWNER)
         store.retry_event_later(OWNER, event.id, timedelta(0))
     (event,) = store.claim_events(OWNER)  # and the process dies while processing it
-    restart(store, OTHER)
+    store.acquire_lock(OTHER, stale_after=timedelta(0))
+    store.requeue_unfinished(OTHER)
     assert store.event_status(event.id) == (EventStatus.FAILED, MAX_EVENT_ATTEMPTS, "too_many_attempts")
 
 
@@ -285,3 +286,29 @@ def test_an_event_is_put_off_only_as_it_goes_back_to_the_queue(store: Store, pat
     store.finish_event(OWNER, event.id, EventStatus.DONE)
     with raw(path) as connection, pytest.raises(sqlite3.IntegrityError, match="put off only"):
         connection.execute("UPDATE slack_events SET not_before = '2026-10-04T12:00:00.000000+00:00'")
+
+
+def test_an_event_put_off_past_the_longest_delay_is_claimable_at_once(path: Path) -> None:
+    """The clock stepped back after the event was put off: it does not wait for the clock to catch up."""
+    now = [datetime(2026, 10, 4, 12, 0, tzinfo=UTC)]
+    store = Store.open(path, clock=lambda: now[0])
+    store.acquire_lock(OWNER, stale_after=timedelta(days=1))
+    store.enqueue_event("Ev1", "event", BODY)
+    (event,) = store.claim_events(OWNER)
+    store.retry_event_later(OWNER, event.id, store_db.MAX_EVENT_RETRY_DELAY)
+    assert store.claim_events(OWNER) == []  # within the longest delay: it waits
+    now[0] -= timedelta(hours=1)
+    (again,) = store.claim_events(OWNER)
+    assert again.id == event.id
+    with pytest.raises(ValueError, match="no more than"):
+        store.retry_event_later(OWNER, event.id, store_db.MAX_EVENT_RETRY_DELAY + timedelta(microseconds=1))
+    store.close()
+
+
+def test_the_worker_takes_up_its_own_events_left_processing(store: Store) -> None:
+    store.enqueue_event("Ev1", "event", BODY)
+    store.enqueue_event("Ev2", "event", BODY)
+    store.claim_events(OWNER)
+    assert store.events_pending()
+    assert store.requeue_unfinished(OWNER, own=True) == 2
+    assert [event.attempts for event in store.claim_events(OWNER)] == [2, 2]

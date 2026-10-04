@@ -187,8 +187,11 @@ needs.
   `pending` only at startup or after a transient failure. A transient
   failure (the database busy or locked, a disk or network error) puts the
   event back with a time before which it is not claimed again: 5 s, then
-  10 s. While such an event waits the queue is not empty, so no post is due
-  without it. Any other error fails the event at once. An event claimed 3
+  30 s, then 2 min (a time more than 5 min away can only come from the
+  clock stepping back, and is ignored). While such an event waits the
+  queue is not empty, so no post is due without it. An error that cuts a
+  drain off leaves its claimed events to the next drain, which puts them
+  back first. Any other error fails the event at once. An event claimed 4
   times without finishing, by retries and restarts together, is `failed`,
   so one bad payload cannot crash the connector in a loop. Only
   the holder of the instance lock claims and finishes events, and startup

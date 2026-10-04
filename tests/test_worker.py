@@ -1087,7 +1087,7 @@ def test_an_event_that_fails_transiently_is_tried_again_later_and_holds_its_post
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
 ) -> None:
-    monkeypatch.setattr("stockthread.worker.EVENT_RETRY_SECONDS", 0)
+    monkeypatch.setattr("stockthread.worker.EVENT_RETRY_SECONDS", (0, 0, 0))
     failing_place(store, monkeypatch, error, times=1)
     enqueue(store, message("1790000001.000000", "took 2 Disc 40 from main stock"))
     enqueue(store, message("1790000002.000000", "to truck 1"))
@@ -1109,7 +1109,7 @@ def test_an_event_that_fails_transiently_is_tried_again_later_and_holds_its_post
 def test_an_event_that_keeps_failing_transiently_fails_on_its_last_attempt(
     worker: Worker, store: Store, path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("stockthread.worker.EVENT_RETRY_SECONDS", 0)
+    monkeypatch.setattr("stockthread.worker.EVENT_RETRY_SECONDS", (0, 0, 0))
     calls = failing_place(store, monkeypatch, sqlite3.OperationalError("database is locked"), times=10**6)
     enqueue(store, message("1790000000.000100", "took 2 Disc 40 from main stock to truck 1"))
     for _ in range(MAX_EVENT_ATTEMPTS + 2):
@@ -1135,7 +1135,7 @@ def test_an_event_put_off_waits_before_it_is_tried_again(
     worker.step()
     worker.step()  # too soon: the event is not claimed again yet
     assert len(calls) == 1
-    assert delays == [timedelta(seconds=EVENT_RETRY_SECONDS)]
+    assert delays == [timedelta(seconds=EVENT_RETRY_SECONDS[0])]
     assert statuses(path) == [("pending", None)]
 
 
@@ -4433,3 +4433,29 @@ def test_the_trail_shows_each_dry_run_with_its_reasons_and_who_answered(store: S
         assert words not in shown  # ids and codes only, unless asked
     assert '"Disc 40"' in "\n".join(worded)
     assert '"main stock"' in "\n".join(worded)
+
+
+def test_a_drain_cut_off_by_an_error_leaves_no_event_claimed(
+    worker: Worker, store: Store, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Putting the event off fails too: the drain stops, and the next one takes up what it left claimed."""
+    monkeypatch.setattr("stockthread.worker.EVENT_RETRY_SECONDS", (0, 0, 0))
+    failing_place(store, monkeypatch, sqlite3.OperationalError("database is locked"), times=1)
+    real = store.retry_event_later
+    calls: list[int] = []
+
+    def retry_later(*args: Any) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        real(*args)
+
+    monkeypatch.setattr(store, "retry_event_later", retry_later)
+    enqueue(store, message("1790000001.000000", "took 2 Disc 40 from main stock"))
+    enqueue(store, message("1790000002.000000", "to truck 1"))
+    with pytest.raises(sqlite3.OperationalError):
+        worker.step()
+    assert statuses(path) == [("processing", None), ("processing", None)]
+    assert worker.drain() == (2, True)
+    assert statuses(path) == [("done", None), ("done", None)]
+    assert audit(path) == []  # no post was due while its messages were left processing

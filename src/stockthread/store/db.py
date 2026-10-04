@@ -44,8 +44,11 @@ S = RequestState
 MIN_SQLITE = (3, 37, 0)
 """STRICT tables."""
 
-MAX_EVENT_ATTEMPTS = 3
+MAX_EVENT_ATTEMPTS = 4
 """Claims of one Slack event, by retries after a transient failure and by restarts alike: the last one fails."""
+MAX_EVENT_RETRY_DELAY = timedelta(minutes=5)
+"""The longest an event may be put off. A later `not_before` can only come from the clock stepping back: such an
+event is claimable at once, so it neither waits for the clock nor keeps the queue from being empty."""
 
 OUTCOMES: dict[RequestState, str] = {
     S.APPLIED: "accepted",
@@ -421,7 +424,11 @@ class Store:
         return now
 
     def _now(self) -> str:
-        return self._clock_now().astimezone(UTC).isoformat(timespec="microseconds")
+        return self._stamp(self._clock_now())
+
+    @staticmethod
+    def _stamp(at: datetime) -> str:
+        return at.astimezone(UTC).isoformat(timespec="microseconds")
 
     def _audit(self, actor: str, event: str, **ids: Any) -> None:
         columns = ["at", "actor", "event", *ids]
@@ -1595,8 +1602,8 @@ class Store:
             self._check_lock(owner)
             rows = self._db.execute(
                 "SELECT id, event_key, kind, body, attempts FROM slack_events WHERE status = 'pending'"
-                " AND (not_before IS NULL OR not_before <= ?) ORDER BY id LIMIT ?",
-                (self._now(), limit),
+                " AND (not_before IS NULL OR not_before <= ? OR not_before > ?) ORDER BY id LIMIT ?",
+                (self._now(), self._stamp(self._clock_now() + MAX_EVENT_RETRY_DELAY), limit),
             ).fetchall()
             for row in rows:
                 self._db.execute(
@@ -1624,34 +1631,40 @@ class Store:
             self._audit("ingest", f"event_{status.value}", slack_event_id=event_id)
 
     def events_pending(self) -> bool:
-        """Whether any event waits in the queue, including one that may not be claimed yet."""
-        return self._db.execute("SELECT 1 FROM slack_events WHERE status = 'pending' LIMIT 1").fetchone() is not None
+        """Whether any event is unfinished: waiting in the queue, including one that may not be claimed yet, or left
+        processing."""
+        row = self._db.execute("SELECT 1 FROM slack_events WHERE status IN ('pending', 'processing') LIMIT 1")
+        return row.fetchone() is not None
 
     def retry_event_later(self, owner: str, event_id: int, after: timedelta) -> None:
         """Put an event this instance is processing back in the queue after a transient failure, not to be claimed
         again before `after` has passed (`Worker.drain`). Its attempts are kept, so the retries stay bounded."""
+        if not timedelta(0) <= after <= MAX_EVENT_RETRY_DELAY:
+            raise ValueError("an event is put off for no more than MAX_EVENT_RETRY_DELAY")
         with self._transaction():
             self._check_lock(owner)
             cursor = self._db.execute(
                 "UPDATE slack_events SET status = 'pending', claimed_by = NULL, not_before = ? WHERE id = ?"
                 " AND status = 'processing' AND claimed_by = ?",
-                ((self._clock_now() + after).astimezone(UTC).isoformat(timespec="microseconds"), event_id, owner),
+                (self._stamp(self._clock_now() + after), event_id, owner),
             )
             if cursor.rowcount != 1:
                 raise StateConflict("the event is not being processed by this instance")
             self._audit("ingest", "event_retry_later", slack_event_id=event_id)
 
-    def requeue_unfinished(self, owner: str, *, max_attempts: int = MAX_EVENT_ATTEMPTS) -> int:
+    def requeue_unfinished(self, owner: str, *, max_attempts: int = MAX_EVENT_ATTEMPTS, own: bool = False) -> int:
         """At startup, put events that an earlier instance left processing back in the queue.
 
-        Events claimed by `owner` itself are left alone: they are still being processed. An event claimed
-        `max_attempts` times fails, so one bad payload cannot crash the connector in a loop. Returns how many
-        events went back to pending.
+        Events claimed by `owner` itself are left alone: they are still being processed. With `own`, only those are
+        put back instead: the worker does so before each drain, when none of its events is in flight, for the
+        events a drain cut off by an error left claimed. An event claimed `max_attempts` times fails, so one bad
+        payload cannot crash the connector in a loop. Returns how many events went back to pending.
         """
         with self._transaction():
             self._check_lock(owner)
             rows = self._db.execute(
-                "SELECT id, attempts FROM slack_events WHERE status = 'processing' AND claimed_by IS NOT ?", (owner,)
+                "SELECT id, attempts FROM slack_events WHERE status = 'processing' AND (claimed_by IS ?) = ?",
+                (owner, own),
             ).fetchall()
             requeued = 0
             for event_id, attempts in rows:

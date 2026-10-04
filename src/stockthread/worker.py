@@ -167,8 +167,9 @@ HEARTBEAT_SECONDS = 10.0
 (Slack or InvenTree slow to answer) never lets the lock look stale."""
 MAX_POSTS_PER_STEP = 20
 DRAIN_BATCH = 50
-EVENT_RETRY_SECONDS = 5
-"""The wait before the first retry of an event that failed transiently; it doubles for each retry after that."""
+EVENT_RETRY_SECONDS = (5, 30, 120)
+"""The wait before each retry of an event that failed transiently, by the attempt that failed. Within
+MAX_EVENT_ATTEMPTS and MAX_EVENT_RETRY_DELAY."""
 MAX_DRAIN_BATCHES = 20
 """A step drains at most this many batches. While events are still pending no post is due, so a backlog
 never splits siblings."""
@@ -347,6 +348,7 @@ class Worker:
         """Handle pending events: how many, and whether the queue is empty now. An event put off after a transient
         failure keeps it from being empty until it is finished, so no post is due without it."""
         done = 0
+        self.store.requeue_unfinished(self.owner, own=True)  # what an error cut a drain off from, if anything
         for _ in range(MAX_DRAIN_BATCHES):
             self.beat()
             events = self.store.claim_events(self.owner, limit=DRAIN_BATCH)
@@ -359,8 +361,9 @@ class Worker:
                 except Exception as error:
                     _log_failure("event", event.id, error)
                     if _transient(error) and event.attempts < MAX_EVENT_ATTEMPTS:
-                        after = timedelta(seconds=EVENT_RETRY_SECONDS * 2 ** (event.attempts - 1))
+                        after = timedelta(seconds=EVENT_RETRY_SECONDS[event.attempts - 1])
                         self.store.retry_event_later(self.owner, event.id, after)
+                        done -= 1
                         continue
                     status, outcome = EventStatus.FAILED, _code(error)
                 self.store.finish_event(self.owner, event.id, status, outcome)
