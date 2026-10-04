@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - "src/stockthread/inventree.py"
+      - "src/stockthread/apply.py"
+      - "src/stockthread/core/marker_check.py"
       - "src/stockthread/writer.py"
       - "src/stockthread/catalog.py"
       - "src/stockthread/config.py"
@@ -20,6 +22,8 @@ on:
     branches: [main]
     paths:
       - "src/stockthread/inventree.py"
+      - "src/stockthread/apply.py"
+      - "src/stockthread/core/marker_check.py"
       - "src/stockthread/writer.py"
       - "src/stockthread/catalog.py"
       - "src/stockthread/config.py"

@@ -123,6 +123,9 @@ class InvenTreeReader:
 
     async def get(self, path: str, params: Mapping[str, str | int | bool] | None = None) -> Any:
         """GET one API path, such as `/api/part/`, and return the decoded JSON."""
+        return _decode(path, await self._response(path, params))
+
+    async def _response(self, path: str, params: Mapping[str, str | int | bool] | None = None) -> httpx.Response:
         if not _API_PATH.fullmatch(path):
             raise InvenTreeError(f"refused to read {path!r}: only plain paths below /api/, ending in a slash")
         query = {key: str(value).lower() if isinstance(value, bool) else value for key, value in (params or {}).items()}
@@ -135,7 +138,7 @@ class InvenTreeReader:
             if response.status_code == httpx.codes.TOO_MANY_REQUESTS and attempt < MAX_ATTEMPTS:
                 await self._sleep(_retry_after(response, attempt))
                 continue
-            return _decode(path, response)
+            return response
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def list_all(self, path: str, params: Mapping[str, str | int | bool] | None = None) -> list[dict[str, Any]]:
@@ -193,6 +196,27 @@ class InvenTreeReader:
                 raise InvenTreeError("a stock history entry has no valid pk, item or deltas")
             found.append(MarkedEntry(pk, item, marker, deltas or {}))
         return found
+
+    async def stock_item_gone(self, pk: int) -> bool:
+        """True if InvenTree answers that stock item `pk` does not exist: its own 404, a `detail` string alone. False if
+        it answers with the item. Anything else (a proxy's 404, another status) raises: "gone" excuses a missing
+        marker (design section 5, Depletion), so only InvenTree may say it."""
+        if type(pk) is not int or pk < 1:
+            raise ValueError("a stock item pk is a positive number")
+        path = f"/api/stock/{pk}/"
+        response = await self._response(path)
+        if response.status_code == httpx.codes.NOT_FOUND:
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and set(body) == {"detail"} and isinstance(body["detail"], str):
+                return True
+            raise InvenTreeError(f"GET {path} returned a 404 that is not InvenTree's")
+        item = _decode(path, response)
+        if not isinstance(item, dict) or item.get("pk") != pk:
+            raise InvenTreeError(f"GET {path} did not return that stock item")
+        return False
 
     async def user_roles(self) -> dict[str, Any]:
         """The roles of the token's user (`roles`: role name -> permissions or null, `is_staff`, `is_superuser`)."""

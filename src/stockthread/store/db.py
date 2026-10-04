@@ -1453,6 +1453,20 @@ class Store:
         ).fetchall()
         return [Marker.parse(marker) for (marker,) in rows]
 
+    def attempt_items(self, marker: Marker) -> list[int]:
+        """The stock item pks of the request body stored for the attempt with `marker`, in its order. KeyError if
+        no attempt carries it."""
+        row = self._db.execute("SELECT request_body FROM request_attempts WHERE marker = ?", (str(marker),)).fetchone()
+        if row is None:
+            raise KeyError(f"no attempt carries {marker}")
+        lines = json.loads(row[0]).get("items")
+        if not isinstance(lines, list) or not all(isinstance(line, dict) for line in lines):
+            raise ValueError(f"the stored body of {marker} has no list of items")
+        pks = [line.get("pk") for line in lines]
+        if not all(type(pk) is int for pk in pks):
+            raise ValueError(f"the stored body of {marker} has an item without a pk")
+        return pks
+
     def recorded_requests(self, post: PostKey) -> list[RecordedRequest]:
         """Every request of the post, of every revision, with its attempts oldest first: what the marker check of
         the apply protocol compares the stock history with (`core.marker_check`)."""

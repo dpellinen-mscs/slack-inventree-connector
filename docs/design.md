@@ -1298,6 +1298,12 @@ connector never has two InvenTree writes in flight and cannot race itself.
    one, not found, unless the caller saw its stock item answer 404 (the
    1.4.3 depletion case) or recovery concluded it was not found (the
    request reached its state on that conclusion).
+   Built (the caller): `apply.check_post_markers` searches every
+   request's marker id (`InvenTreeReader.marker_entries`) and, for a
+   `missing` marker, asks for every stock item of the attempt's stored
+   body; only when all of them answer InvenTree's own 404 (a `detail`
+   alone, `InvenTreeReader.stock_item_gone`) is the marker excused. A
+   proxy's 404 or any read error raises, and nothing is written.
 3. **Snapshot and precondition.** Read every stock item of each part in
    the plan, at the source and at the destination location, without
    sub-locations. Compare with what the plan was built on. If a source
