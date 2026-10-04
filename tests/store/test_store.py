@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from stockthread.core.marker import AttemptKind, Marker
+from stockthread.core.marker_check import Outcome, RecordedAttempt, check_markers
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, IllegalTransition, RequestState
 from stockthread.store import (
@@ -729,3 +730,47 @@ def test_questions_closed_before_buttons_were_taken_down_are_left_as_they_are(
     assert upgraded.closed_with_buttons(limit=10) == []  # never edited after the upgrade
     assert raw(path).execute("SELECT buttons, buttons_tries FROM review_items").fetchall() == [("left", 0)]
     upgraded.close()
+
+
+# What the marker check reads
+
+
+def test_recorded_requests_hold_every_request_of_the_post_with_its_attempts(store: Store) -> None:
+    plan(store, Operation.TRANSFER, Operation.REMOVE)
+    approve(store, key(1, 1))
+    first = begin(store, key(1, 1))
+    store.transition(key(1, 1), expected=S.APPLYING, target=S.FAILED, actor=A.APPLIER)
+    store.transition(key(1, 1), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
+    second = begin(store, key(1, 1))
+    other_post = PostKey("T0ACME", "C0STOCK", "1727600099.000100")
+    store.create_post(other_post)
+    store.create_plan(other_post, HASH, (Operation.ADD,))
+
+    recorded = store.recorded_requests(POST)
+
+    assert [(r.key, r.operation, r.state) for r in recorded] == [
+        (key(1, 1), Operation.TRANSFER, S.APPLYING),
+        (key(1, 2), Operation.REMOVE, S.PLANNED),
+    ]
+    assert [r.marker_id for r in recorded] == [store.request(key(1, 1)).marker_id, store.request(key(1, 2)).marker_id]
+    assert recorded[0].attempts == (RecordedAttempt(first, Outcome.REFUSED), RecordedAttempt(second, None))
+    assert recorded[1].attempts == ()
+
+
+def test_recorded_requests_span_revisions_and_feed_the_marker_check(store: Store) -> None:
+    plan(store)
+    approve(store, key())
+    applied = begin(store, key())
+    store.transition(key(), expected=S.APPLYING, target=S.UNKNOWN, actor=A.APPLIER)
+    store.create_plan(POST, HASH, (Operation.TRANSFER,))
+
+    recorded = store.recorded_requests(POST)
+
+    assert [(r.key, r.state) for r in recorded] == [(key(1, 1), S.UNKNOWN), (key(2, 1), S.PLANNED)]
+    assert recorded[0].attempts == (RecordedAttempt(applied, Outcome.UNKNOWN),)
+    found: dict[str, list[Marker]] = {r.marker_id: [] for r in recorded} | {applied.marker_id: [applied]}
+    assert check_markers(recorded, found) == []
+
+
+def test_recorded_requests_of_an_unknown_post_are_none(store: Store) -> None:
+    assert store.recorded_requests(POST) == []

@@ -29,6 +29,7 @@ from typing import Any, Literal
 
 from stockthread.core.grouping import Arrival, Placed, choose_post, seconds
 from stockthread.core.marker import MAX_ATTEMPT, AttemptKind, Marker, new_marker_id
+from stockthread.core.marker_check import Outcome, RecordedAttempt, RecordedRequest
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import (
     UNSETTLED,
@@ -1381,6 +1382,26 @@ class Store:
             "SELECT marker FROM request_attempts WHERE request_id = ? ORDER BY id", (row.id,)
         ).fetchall()
         return [Marker.parse(marker) for (marker,) in rows]
+
+    def recorded_requests(self, post: PostKey) -> list[RecordedRequest]:
+        """Every request of the post, of every revision, with its attempts oldest first: what the marker check of
+        the apply protocol compares the stock history with (`core.marker_check`)."""
+        rows = self._db.execute(  # one statement, so one consistent read of requests and attempts
+            "SELECT p.revision, r.sequence, r.operation, r.state, r.marker_id, a.marker, a.outcome"
+            " FROM requests r JOIN plans p ON p.id = r.plan_id JOIN posts o ON o.id = p.post_id"
+            " LEFT JOIN request_attempts a ON a.request_id = r.id"
+            " WHERE o.workspace_id = ? AND o.channel_id = ? AND o.ts = ? ORDER BY p.revision, r.sequence, a.id",
+            (post.workspace_id, post.channel_id, post.ts),
+        ).fetchall()
+        requests: dict[tuple[int, int], tuple[str, str, str, list[RecordedAttempt]]] = {}
+        for revision, sequence, operation, state, marker_id, marker, outcome in rows:
+            _, _, _, attempts = requests.setdefault((revision, sequence), (operation, state, marker_id, []))
+            if marker is not None:
+                attempts.append(RecordedAttempt(Marker.parse(marker), None if outcome is None else Outcome(outcome)))
+        return [
+            RecordedRequest(RequestKey(post, revision, sequence), Operation(op), S(state), marker_id, tuple(attempts))
+            for (revision, sequence), (op, state, marker_id, attempts) in requests.items()
+        ]
 
     # The single-instance lock
 

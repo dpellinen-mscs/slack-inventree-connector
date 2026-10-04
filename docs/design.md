@@ -1287,6 +1287,16 @@ connector never has two InvenTree writes in flight and cannot race itself.
    post are compared with their recorded states in the same way: a
    verified request must have its marker, and a request that never ran
    must not.
+   Built: `core/marker_check.check_markers` compares the markers found
+   per request with `Store.recorded_requests` (each request's state and
+   its attempts with their outcomes). A `hit` is a found marker that no
+   recorded attempt explains, that InvenTree refused, that belongs to a
+   request that never wrote, or that belongs to an earlier attempt of a
+   request applied (or undone) once. A `missing` finding is the last
+   apply of a verified or undone request, or the last undo of an undone
+   one, not found, except a removal (the apply of a remove, the undo of
+   an add), whose marker 1.4.3 may lose on depletion. Requests in flight
+   or in front of the operator are checked for unexplained hits only.
 3. **Snapshot and precondition.** Read every stock item of each part in
    the plan, at the source and at the destination location, without
    sub-locations. Compare with what the plan was built on. If a source
