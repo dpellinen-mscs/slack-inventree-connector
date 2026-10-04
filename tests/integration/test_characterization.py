@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 
+from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM
+
 if TYPE_CHECKING:
     from conftest import RawApi, Scratch
 
@@ -37,10 +39,6 @@ def test_char_over_quantity_remove(api: RawApi, scratch: Scratch) -> None:
     response = api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 8}], "notes": "r"})
     assert response.status_code == 201, response.text[:500]
     assert float(scratch.item(item["pk"])["quantity"]) == 0
-
-
-DEPLETING_MARKER_FOUND_FROM = 530
-"""Measured: API 511 (1.4.3) does not find the marker of a removal that deleted the item, API 530 (1.5.6) does."""
 
 
 def search_rows(api: RawApi, marker: str) -> list[dict[str, Any]]:

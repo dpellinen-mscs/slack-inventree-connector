@@ -18,6 +18,7 @@ from stockthread.inventree import (
     ServerInfo,
     check_version,
 )
+from stockthread.writer import InvenTreeWriter
 
 pytestmark = pytest.mark.anyio
 
@@ -360,3 +361,72 @@ async def test_marker_entries_refuses_an_entry_that_comes_back_twice() -> None:
     async with client:
         with pytest.raises(InvenTreeError, match="came back twice"):
             await client.marker_entries(MARKER_ID)
+
+
+# Is a stock item gone? (design section 5, Depletion)
+
+
+async def test_stock_item_gone_is_inventrees_own_404() -> None:
+    client, recorder = reader(respond(404, {"detail": "No StockItem matches the given query."}))
+    async with client:
+        assert await client.stock_item_gone(7) is True
+    [request] = recorder.requests
+    assert request.url.path == "/inventree/api/stock/7/"
+
+
+async def test_a_stock_item_that_answers_is_not_gone() -> None:
+    client, _ = reader(respond(body={"pk": 7, "quantity": 3}))
+    async with client:
+        assert await client.stock_item_gone(7) is False
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(404, text="<html>Not Found</html>"),  # a proxy's page
+        httpx.Response(404, json={"detail": "gone", "code": 1}),
+        httpx.Response(404, json={"detail": None}),
+        httpx.Response(404, json=["gone"]),
+        httpx.Response(400, json={"detail": "bad"}),
+        httpx.Response(500, json={"detail": "oops"}),
+        httpx.Response(200, json={"pk": 8}),  # another item
+        httpx.Response(200, json=[{"pk": 7}]),
+    ],
+)
+async def test_only_inventree_may_say_a_stock_item_is_gone(response: httpx.Response) -> None:
+    client, _ = reader(lambda request: response)
+    async with client:
+        with pytest.raises(InvenTreeError):
+            await client.stock_item_gone(7)
+
+
+async def test_stock_item_gone_retries_a_429_like_any_read() -> None:
+    answers = iter([httpx.Response(429, headers={"Retry-After": "1"}), httpx.Response(404, json={"detail": "x"})])
+    sleeps: list[float] = []
+    client, _ = reader(lambda request: next(answers), sleeps)
+    async with client:
+        assert await client.stock_item_gone(7) is True
+    assert sleeps == [1.0]
+
+
+@pytest.mark.parametrize("pk", [0, -1, True, "7", 7.0])
+async def test_stock_item_gone_refuses_a_pk_that_is_not_one_without_asking(pk: object) -> None:
+    client, recorder = reader(respond(404, {"detail": "x"}))
+    async with client:
+        with pytest.raises(ValueError, match="positive number"):
+            await client.stock_item_gone(pk)  # type: ignore[arg-type]
+    assert recorder.requests == []
+
+
+@pytest.mark.parametrize("variable", ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"])
+async def test_reader_and_writer_take_the_same_route_whatever_the_environment_says(
+    monkeypatch: pytest.MonkeyPatch, variable: str
+) -> None:
+    # A proxy that only the reader used could answer the marker search or an item's 404 for a server the writer
+    # then writes to directly (review of PR #102).
+    monkeypatch.setenv(variable, "http://proxy.example:3128")
+    settings = SETTINGS
+    async with InvenTreeReader(settings, SecretStr("t")) as read, InvenTreeWriter(settings, SecretStr("t")) as write:
+        for client in (read._http, write._http):
+            assert client.trust_env is False
+            assert client._mounts == {}

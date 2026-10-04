@@ -5,12 +5,16 @@ on:
   pull_request:
     paths:
       - "src/stockthread/inventree.py"
+      - "src/stockthread/apply.py"
+      - "src/stockthread/core/marker_check.py"
       - "src/stockthread/writer.py"
       - "src/stockthread/catalog.py"
       - "src/stockthread/config.py"
       - "src/stockthread/core/marker.py"
       - "src/stockthread/core/resolve.py"
       - "src/stockthread/core/write_request.py"
+      - "src/stockthread/store/db.py"
+      - "src/stockthread/store/migrations/**"
       - "tests/integration/**"
       - "tests/support/**"
       - "eval/catalog/**"
@@ -20,12 +24,16 @@ on:
     branches: [main]
     paths:
       - "src/stockthread/inventree.py"
+      - "src/stockthread/apply.py"
+      - "src/stockthread/core/marker_check.py"
       - "src/stockthread/writer.py"
       - "src/stockthread/catalog.py"
       - "src/stockthread/config.py"
       - "src/stockthread/core/marker.py"
       - "src/stockthread/core/resolve.py"
       - "src/stockthread/core/write_request.py"
+      - "src/stockthread/store/db.py"
+      - "src/stockthread/store/migrations/**"
       - "tests/integration/**"
       - "tests/support/**"
       - "eval/catalog/**"

@@ -1474,6 +1474,35 @@ class Store:
         ).fetchall()
         return [Marker.parse(marker) for (marker,) in rows]
 
+    def attempt_lines(self, marker: Marker) -> list[tuple[int, Decimal]]:
+        """The stock item pk and quantity of each line of the request body stored for the attempt with `marker`, in
+        its order. KeyError if no attempt carries it."""
+        _, body = self._attempt_intent(marker)
+        lines = body.get("items") if isinstance(body, dict) else None
+        if not isinstance(lines, list) or not all(isinstance(line, dict) for line in lines):
+            raise ValueError(f"the stored body of {marker} has no list of items")
+        pks = [line.get("pk") for line in lines]
+        if not all(type(pk) is int for pk in pks):
+            raise ValueError(f"the stored body of {marker} has an item without a pk")
+        quantities = [line.get("quantity") for line in lines]
+        if not all(isinstance(quantity, str) for quantity in quantities):
+            raise ValueError(f"the stored body of {marker} has an item without a quantity")
+        return [(int(pk), Decimal(str(quantity))) for pk, quantity in zip(pks, quantities, strict=True)]
+
+    def attempt_snapshot(self, marker: Marker) -> Any:
+        """The snapshot stored for the attempt with `marker` (step 3 of the apply protocol). KeyError if no attempt
+        carries it."""
+        snapshot, _ = self._attempt_intent(marker)
+        return snapshot
+
+    def _attempt_intent(self, marker: Marker) -> tuple[Any, Any]:
+        row = self._db.execute(
+            "SELECT snapshot, request_body FROM request_attempts WHERE marker = ?", (str(marker),)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"no attempt carries {marker}")
+        return json.loads(row[0]), json.loads(row[1])
+
     def recorded_requests(self, post: PostKey) -> list[RecordedRequest]:
         """Every request of the post, of every revision, with its attempts oldest first: what the marker check of
         the apply protocol compares the stock history with (`core.marker_check`)."""

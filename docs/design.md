@@ -1302,13 +1302,29 @@ connector never has two InvenTree writes in flight and cannot race itself.
    attempt recovery did not find is not known to have written, so its
    absence is no finding (the request reached its state on that
    conclusion).
+   Built (the caller): `apply.check_post_markers` searches every
+   request's marker id (`InvenTreeReader.marker_entries`) and, for a
+   `missing` marker of a removal (the apply of a remove, the undo of an
+   add) on a server below API 530 (`DEPLETING_MARKER_FOUND_FROM`; 1.5.6
+   finds that marker), whose stored snapshot shows every line taking its
+   item's whole quantity (`apply.depletes`), asks for every stock item of
+   the attempt's stored body; only when all of them answer InvenTree's
+   own 404 (a `detail` alone, `InvenTreeReader.stock_item_gone`) is the
+   marker excused. Any other write has no excuse: a partial removal keeps
+   its item and its entry, and an item that 404s may never have existed
+   in this database (a restored backup, another instance). A proxy's 404
+   or any read error raises, and nothing is written. The reader, like the
+   writer, ignores proxies from the environment, so these reads reach the
+   server the write goes to.
 3. **Snapshot and precondition.** Read every stock item of each part in
    the plan, at the source and at the destination location, without
    sub-locations. Compare with what the plan was built on. If a source
    holds less than the plan takes from it, or anything relevant changed,
    stop: the request returns to `planned` and the post to review.
    Also record the ids of the history entries that already exist on each
-   source stock item the request takes from. Otherwise store the snapshot,
+   source stock item the request takes from. The snapshot holds
+   `stock_items`: each source item's pk and the quantity it held, as a
+   decimal string (`{"stock_items": {"7": "3"}}`). Otherwise store the snapshot,
    the exact request body and the move to `applying` in one transaction.
    Built (the transaction): `Store.begin_attempt`. The body is built
    before it, with the marker `Store.next_marker` names, and
