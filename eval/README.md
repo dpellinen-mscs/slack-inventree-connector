@@ -21,6 +21,7 @@ Current version: see [`VERSION`](VERSION).
 | `catalog/users.json` | Slack users and the vehicle assigned to each |
 | `catalog/aliases.json` | Aliases a human has already confirmed, in normalized form |
 | `questions.json` | The one question each case's dry run asks, by case id (`null`: none), reviewed by hand. A corpus change that changes a question updates it in the same change, with the reason in the PR |
+| `typed_answers.json` | Thread replies typed as the answer to one question (quantity, part, place, serials), with the reading a careful human expects (`null`: not an answer, read with the post). Versioned on its own; checked by `tests/core/test_typed_answers_eval.py` |
 | `schema/case-file.schema.json` | JSON Schema for a case file, with the lists of types, flags and tags |
 | `tools/validate_corpus.py` | Corpus checker, standard library only |
 | `tools/score.py` | Reference scorer, standard library only |
