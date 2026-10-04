@@ -16,8 +16,9 @@ history, or another database wrote). That is a `MISSING` finding, with two excus
 deleted its stock item cannot be found by search (design section 5, Depletion): the caller passes the markers whose
 item answered 404 (`item_gone`); the operation alone excuses nothing, because a partial remove keeps its marker. And
 the apply of an undone request whose marker recovery did not find may never have written: recovery moved "not found,
-changed" to `verify_failed`, and the operator's undo reversed what was observed. An unknown apply that recovery found
-has no excuse.
+changed" to `verify_failed`, and the operator's undo reversed what was observed (or, recovered as "not found,
+unchanged", left it `verified`). An unknown attempt that recovery found has no excuse. A record of an unknown attempt
+without recovery's conclusion, in a request that left `unknown` or `undo_unknown`, is refused.
 
 In any state, at most one attempt of each kind may have written: a request is applied once and undone once, so two
 found apply markers, or two found undo markers, are a `HIT`. For a verified or undone request it must be the last
@@ -80,6 +81,10 @@ class RecordedRequest:
             raise ValueError("an attempt of a request carries the request's marker id")
         if len({attempt.marker for attempt in self.attempts}) != len(self.attempts):
             raise ValueError("each attempt of a request has its own marker")
+        for attempt in self.attempts:
+            open_ = attempt is self.attempts[-1] and self.state in (S.UNKNOWN, S.UNDO_UNKNOWN)
+            if attempt.outcome is Outcome.UNKNOWN and attempt.marker_found is None and not open_:
+                raise ValueError("recovery recorded whether it found the marker of every unknown attempt it left")
 
 
 class FindingKind(StrEnum):
@@ -159,9 +164,9 @@ def _check(request: RecordedRequest, hits: set[Marker], item_gone: frozenset[Mar
             if attempt.marker in explained:
                 yield hit(attempt.marker, "the request is verified, yet this undo wrote")
     if request.state in (S.VERIFIED, S.UNDONE):
-        yield from _missing(request, applies, explained, item_gone, excused_if_not_found=request.state is S.UNDONE)
+        yield from _missing(request, applies, explained, item_gone)
     if request.state is S.UNDONE:
-        yield from _missing(request, undos, explained, item_gone, excused_if_not_found=False)
+        yield from _missing(request, undos, explained, item_gone)
 
 
 def _missing(
@@ -169,17 +174,15 @@ def _missing(
     attempts: list[RecordedAttempt],
     explained: set[Marker],
     item_gone: frozenset[Marker],
-    *,
-    excused_if_not_found: bool,
 ) -> Iterable[Finding]:
-    """The last of `attempts` wrote, so it must be found unless its item is gone. `excused_if_not_found`: an undone
-    apply whose marker recovery did not find may never have written (recovery found changed stock, and the operator
-    undid what was observed)."""
+    """The last of `attempts` wrote, so it must be found unless its item is gone, or unless recovery concluded it
+    was not found: then the request reached this state on that conclusion (an apply recovered as "not found,
+    changed", whose undo reversed what was observed or itself was recovered as "not found, unchanged")."""
     if not attempts:
         raise ValueError(f"a {request.state} request has an attempt of each kind it went through")
     last = attempts[-1]
     if last.marker in explained or last.marker in item_gone:
         return
-    if excused_if_not_found and last.marker_found is False:
+    if last.marker_found is False:
         return
     yield Finding(request.key, FindingKind.MISSING, last.marker, f"the request is {request.state}, but not found")

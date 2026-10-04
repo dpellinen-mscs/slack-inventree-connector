@@ -1368,7 +1368,9 @@ class Store:
         - another write of the post is in flight or not yet read back (`applied`);
         - for an apply: the plan is not current, a read-back of the post found something unexpected,
           an earlier revision left a stock change behind, or an earlier request of the plan is not
-          verified (requests run in order and stop at the first failure; rejected ones are skipped).
+          verified (requests run in order and stop at the first failure; rejected ones are skipped);
+        - for an undo: an earlier undo of the request wrote (recovery found its marker but the
+          quantities differed, so the request is `verify_failed`): the operator accepts the state.
         """
         target = S.APPLYING if kind is AttemptKind.APPLY else S.UNDOING
         check_transition(expected, target, actor)
@@ -1401,6 +1403,15 @@ class Store:
             ).fetchone()
             if count >= MAX_ATTEMPT:
                 raise WriteBlocked(f"{MAX_ATTEMPT} attempts is the limit")
+            if (
+                kind is AttemptKind.UNDO
+                and self._db.execute(
+                    "SELECT 1 FROM request_attempts WHERE request_id = ? AND kind = 'u'"
+                    " AND (outcome = 'accepted' OR marker_found = 1)",
+                    (row.id,),
+                ).fetchone()
+            ):
+                raise WriteBlocked("an earlier undo of this request wrote: a second would reverse the stock twice")
             marker = Marker(row.marker_id, kind, int(count) + 1)
             self._set_state(row.id, expected, target, actor)
             cursor = self._db.execute(

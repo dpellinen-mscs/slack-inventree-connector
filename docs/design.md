@@ -1296,8 +1296,8 @@ connector never has two InvenTree writes in flight and cannot race itself.
    undo) that also wrote, in any state. A `missing` finding is the last
    apply of a verified or undone request, or the last undo of an undone
    one, not found, unless the caller saw its stock item answer 404 (the
-   1.4.3 depletion case) or it is the apply of an undone request whose
-   marker recovery did not find.
+   1.4.3 depletion case) or recovery concluded it was not found (the
+   request reached its state on that conclusion).
 3. **Snapshot and precondition.** Read every stock item of each part in
    the plan, at the source and at the destination location, without
    sub-locations. Compare with what the plan was built on. If a source
@@ -1397,6 +1397,11 @@ the state as it is, or reverse the change that was observed.
 Undo reverses **what was observed** in the stock history at apply time, not
 what the message or the plan said. It goes through the same protocol, with
 its own marker, read-back and recovery.
+
+A request is undone at most once. When an earlier undo wrote (recovery
+found its marker, but the quantities did not match), a new undo would
+reverse the apply a second time, so it is refused and the operator
+accepts the state as it is.
 
 Undo is allowed only if the stock the apply touched has no later history
 entries except the connector's own, and the condition in the table holds.

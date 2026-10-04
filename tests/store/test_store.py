@@ -862,3 +862,73 @@ def test_a_recovered_conclusion_is_recorded_once_and_only_on_an_unknown_outcome(
             " LIMIT 1"
         )
     assert db.execute("SELECT marker_found FROM request_attempts ORDER BY id").fetchall() == [(0,), (None,)]
+
+
+def test_recovery_concludes_about_the_last_attempt_only(store: Store, path: Path) -> None:
+    plan(store)
+    unknown(store, key())
+    store.transition(key(), expected=S.UNKNOWN, target=S.FAILED, actor=A.RECOVERY, marker_found=False)
+    store.transition(key(), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
+    begin(store, key())
+    store.transition(key(), expected=S.APPLYING, target=S.UNKNOWN, actor=A.APPLIER)
+    store.transition(key(), expected=S.UNKNOWN, target=S.APPLIED, actor=A.RECOVERY, marker_found=True)
+    assert raw(path).execute("SELECT attempt, marker_found FROM request_attempts ORDER BY id").fetchall() == [
+        (1, 0),
+        (2, 1),
+    ]
+
+
+def test_a_request_leaves_unknown_only_with_recoverys_conclusion(store: Store, path: Path) -> None:
+    plan(store)
+    unknown(store, key())
+    with pytest.raises(sqlite3.IntegrityError, match="before the request leaves"):
+        raw(path).execute("UPDATE requests SET state = 'failed'")
+    assert store.request(key()).state is S.UNKNOWN
+
+
+def found_undo_then_verify_failed(store: Store) -> None:
+    verified(store, key())
+    begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+    store.transition(key(), expected=S.UNDOING, target=S.UNDO_UNKNOWN, actor=A.APPLIER)
+    store.transition(key(), expected=S.UNDO_UNKNOWN, target=S.VERIFY_FAILED, actor=A.RECOVERY, marker_found=True)
+
+
+def test_a_second_undo_after_one_that_wrote_is_blocked(store: Store) -> None:
+    # Recovery found the undo's marker but the quantities differed: the undo wrote. Another would reverse twice.
+    plan(store)
+    found_undo_then_verify_failed(store)
+    with pytest.raises(WriteBlocked, match="earlier undo"):
+        begin(store, key(), AttemptKind.UNDO, expected=S.VERIFY_FAILED, actor=A.HUMAN)
+    assert store.request(key()).state is S.VERIFY_FAILED
+    store.transition(key(), expected=S.VERIFY_FAILED, target=S.ACCEPTED, actor=A.HUMAN)
+
+
+def test_a_new_undo_after_one_recovery_did_not_find_may_start(store: Store) -> None:
+    plan(store)
+    verified(store, key())
+    begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+    store.transition(key(), expected=S.UNDOING, target=S.UNDO_UNKNOWN, actor=A.APPLIER)
+    store.transition(key(), expected=S.UNDO_UNKNOWN, target=S.VERIFY_FAILED, actor=A.RECOVERY, marker_found=False)
+    marker = begin(store, key(), AttemptKind.UNDO, expected=S.VERIFY_FAILED, actor=A.HUMAN)
+    assert (marker.kind, marker.attempt) == (AttemptKind.UNDO, 2)
+
+
+def test_a_file_from_before_migration_0016_gets_the_recovery_column(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = store_db._migrations()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real[:15])
+    old = Store.open(path)
+    old.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
+    plan(old)
+    approve(old, key())
+    begin(old, key())
+    old.transition(key(), expected=S.APPLYING, target=S.APPLIED, actor=A.APPLIER)
+    old.close()
+    monkeypatch.setattr(store_db, "_migrations", lambda: real)
+    upgraded = Store.open(path)
+    assert upgraded.schema_version == len(real)
+    (recorded,) = upgraded.recorded_requests(POST)
+    assert [(a.outcome, a.marker_found) for a in recorded.attempts] == [(Outcome.ACCEPTED, None)]
+    upgraded.transition(key(), expected=S.APPLIED, target=S.VERIFIED, actor=A.APPLIER)
+    upgraded.close()

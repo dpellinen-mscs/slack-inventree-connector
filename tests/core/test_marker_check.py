@@ -81,9 +81,11 @@ def test_a_late_write_of_an_unknown_attempt_recovered_as_failed_is_a_hit() -> No
 
 
 def test_a_new_attempt_after_a_failure_is_stopped_by_the_earlier_attempts_write() -> None:
-    approved_again = request(S.APPROVED, (APPLY, 1, OC.UNKNOWN))
+    approved_again = request(S.APPROVED, (APPLY, 1, OC.UNKNOWN, NOT_FOUND))
     findings = check_markers([approved_again], {ID_1: [m(APPLY, 1)]})
-    assert findings == [Finding(KEY_1, HIT, m(APPLY, 1), "the request is approved, yet this apply wrote")]
+    assert findings == [
+        Finding(KEY_1, HIT, m(APPLY, 1), "recovery did not find this attempt's marker, yet it wrote late")
+    ]
 
 
 @pytest.mark.parametrize("state", [S.FAILED, S.APPROVED, S.VERIFY_FAILED, S.ACCEPTED, S.UNKNOWN])
@@ -117,19 +119,20 @@ def test_a_verified_write_whose_item_is_gone_may_miss_its_marker() -> None:
 
 
 def test_an_earlier_attempt_that_wrote_is_a_hit_even_if_the_last_ones_item_is_gone() -> None:
-    twice = request(S.VERIFIED, (APPLY, 1, OC.UNKNOWN), (APPLY, 2, OC.ACCEPTED), operation=Operation.REMOVE)
+    twice = request(S.VERIFIED, (APPLY, 1, OC.UNKNOWN, NOT_FOUND), (APPLY, 2, OC.ACCEPTED), operation=Operation.REMOVE)
     findings = check_markers([twice], {ID_1: [m(APPLY, 1)]}, item_gone=[m(APPLY, 2)])
     assert [(finding.kind, finding.marker) for finding in findings] == [(HIT, m(APPLY, 1))]
 
 
 def test_an_earlier_apply_attempt_of_a_verified_request_that_also_wrote_is_a_hit() -> None:
-    twice = request(S.VERIFIED, (APPLY, 1, OC.UNKNOWN), (APPLY, 2, OC.ACCEPTED))
+    twice = request(S.VERIFIED, (APPLY, 1, OC.UNKNOWN, NOT_FOUND), (APPLY, 2, OC.ACCEPTED))
     assert check(twice, [m(APPLY, 2)]) == []
     assert check(twice, [m(APPLY, 1), m(APPLY, 2)]) == [(HIT, m(APPLY, 1))]
 
 
 def test_a_verified_request_found_only_by_an_earlier_attempt_is_a_hit_and_missing() -> None:
-    twice = request(S.VERIFIED, (APPLY, 1, OC.UNKNOWN), (APPLY, 2, OC.ACCEPTED))
+    # A history the state machine cannot produce (a found apply is applied, never tried again): the rule holds.
+    twice = request(S.VERIFIED, (APPLY, 1, OC.UNKNOWN, FOUND), (APPLY, 2, OC.ACCEPTED))
     findings = check_markers([twice], {ID_1: [m(APPLY, 1)]})
     assert findings == [
         Finding(KEY_1, HIT, m(APPLY, 1), "the store records another attempt of this request as the one that wrote"),
@@ -169,6 +172,14 @@ def test_an_undone_apply_whose_marker_recovery_did_not_find_may_miss_it() -> Non
     assert check(verified) == [(MISSING, m(APPLY, 1))]
 
 
+def test_a_verified_apply_whose_marker_recovery_did_not_find_may_miss_it() -> None:
+    # unknown -> verify_failed (not found, changed) -> undo unknown -> recovery: not found, unchanged -> verified.
+    # The request is verified on recovery's conclusion that the apply left no marker: that must not block forever.
+    verified = request(S.VERIFIED, (APPLY, 1, OC.UNKNOWN, NOT_FOUND), (UNDO, 1, OC.UNKNOWN, NOT_FOUND))
+    assert check(verified) == []
+    assert check(verified, [m(APPLY, 1)]) == [(HIT, m(APPLY, 1))]
+
+
 def test_an_undone_apply_whose_marker_recovery_found_must_still_be_found() -> None:
     # unknown -> applied (found) -> verified -> undone: the marker was proven present, so losing it is MISSING.
     undone = request(S.UNDONE, (APPLY, 1, OC.UNKNOWN, FOUND), (UNDO, 1, OC.ACCEPTED))
@@ -183,7 +194,7 @@ def test_an_undone_apply_whose_marker_recovery_did_not_find_is_a_hit_when_it_lan
 
 
 def test_an_earlier_undo_attempt_of_an_undone_request_that_also_wrote_is_a_hit() -> None:
-    undone = request(S.UNDONE, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.UNKNOWN), (UNDO, 2, OC.ACCEPTED))
+    undone = request(S.UNDONE, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.UNKNOWN, NOT_FOUND), (UNDO, 2, OC.ACCEPTED))
     assert check(undone, [m(APPLY, 1), m(UNDO, 1), m(UNDO, 2)]) == [(HIT, m(UNDO, 1))]
 
 
@@ -205,7 +216,12 @@ def test_a_verified_or_undone_request_with_no_attempt_is_refused(state: RequestS
     "state", [S.APPLYING, S.UNKNOWN, S.APPLIED, S.VERIFY_FAILED, S.ACCEPTED, S.UNDOING, S.UNDO_UNKNOWN]
 )
 def test_open_or_operator_states_are_checked_only_for_unexplained_hits(state: RequestState) -> None:
-    one = request(state, (APPLY, 1, None if state in (S.APPLYING,) else OC.UNKNOWN))
+    if state is S.APPLYING:
+        one = request(state, (APPLY, 1, None))
+    elif state in (S.UNKNOWN, S.UNDO_UNKNOWN):
+        one = request(state, (APPLY, 1, OC.UNKNOWN))
+    else:
+        one = request(state, (APPLY, 1, OC.UNKNOWN, FOUND))
     assert check(one) == []
     assert check(one, [m(APPLY, 1)]) == []
     assert check(one, [m(APPLY, 2)]) == [(HIT, m(APPLY, 2))]
@@ -254,14 +270,22 @@ def test_a_recorded_attempt_must_carry_the_requests_marker_id() -> None:
 @pytest.mark.parametrize("state", [S.VERIFY_FAILED, S.ACCEPTED, S.APPLIED, S.UNDO_FAILED, S.UNDOING, S.UNKNOWN])
 def test_two_apply_attempts_that_both_wrote_are_a_hit_in_any_state(state: RequestState) -> None:
     # unknown -> failed -> a new attempt -> verify_failed, and then the first attempt lands late.
-    twice = request(state, (APPLY, 1, OC.UNKNOWN), (APPLY, 2, OC.ACCEPTED))
+    twice = request(state, (APPLY, 1, OC.UNKNOWN, NOT_FOUND), (APPLY, 2, OC.ACCEPTED))
     assert check(twice, [m(APPLY, 2)]) == []
     assert check(twice, [m(APPLY, 1), m(APPLY, 2)]) == [(HIT, m(APPLY, 1))]
 
 
 @pytest.mark.parametrize("state", [S.VERIFY_FAILED, S.ACCEPTED, S.UNDO_UNKNOWN, S.UNDOING])
 def test_two_undo_attempts_that_both_wrote_are_a_hit_in_any_state(state: RequestState) -> None:
-    twice = request(state, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.UNKNOWN), (UNDO, 2, OC.UNKNOWN))
+    second: tuple[AttemptKind, int, Outcome | None] | tuple[AttemptKind, int, Outcome | None, bool]
+    second = (
+        (UNDO, 2, OC.UNKNOWN)
+        if state is S.UNDO_UNKNOWN
+        else (UNDO, 2, None)
+        if state is S.UNDOING
+        else (UNDO, 2, OC.UNKNOWN, FOUND)
+    )
+    twice = request(state, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.UNKNOWN, NOT_FOUND), second)
     assert check(twice, [m(APPLY, 1), m(UNDO, 2)]) == []
     assert check(twice, [m(APPLY, 1), m(UNDO, 1), m(UNDO, 2)]) == [(HIT, m(UNDO, 1))]
 
@@ -297,3 +321,19 @@ def test_an_attempt_recovery_found_explains_its_marker(state: RequestState) -> N
 def test_only_an_unknown_attempt_is_recovered(outcome: Outcome | None, found: bool) -> None:
     with pytest.raises(ValueError, match="unknown outcome"):
         RecordedAttempt(m(APPLY, 1), outcome, found)
+
+
+@pytest.mark.parametrize("state", [S.VERIFY_FAILED, S.ACCEPTED, S.VERIFIED, S.UNDONE, S.FAILED, S.APPROVED])
+def test_an_unknown_attempt_without_recoverys_conclusion_is_refused_once_the_request_left_unknown(
+    state: RequestState,
+) -> None:
+    attempts = [(APPLY, 1, OC.UNKNOWN)] + ([(UNDO, 1, OC.ACCEPTED)] if state is S.UNDONE else [])
+    with pytest.raises(ValueError, match="recovery recorded"):
+        request(state, *attempts)
+
+
+def test_an_unknown_attempt_waiting_for_recovery_has_no_conclusion_yet() -> None:
+    assert check(request(S.UNKNOWN, (APPLY, 1, OC.UNKNOWN))) == []
+    assert check(request(S.UNDO_UNKNOWN, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.UNKNOWN)), [m(APPLY, 1)]) == []
+    with pytest.raises(ValueError, match="recovery recorded"):
+        request(S.UNDO_UNKNOWN, (APPLY, 1, OC.UNKNOWN), (UNDO, 1, OC.UNKNOWN))

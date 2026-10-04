@@ -13,3 +13,7 @@ BEGIN SELECT RAISE(ABORT, 'recovery concludes once, about an attempt whose outco
 CREATE TRIGGER attempts_born_unrecovered BEFORE INSERT ON request_attempts
 WHEN NEW.marker_found IS NOT NULL
 BEGIN SELECT RAISE(ABORT, 'an attempt starts unrecovered'); END;
+CREATE TRIGGER requests_leave_unknown_recovered BEFORE UPDATE OF state ON requests
+WHEN OLD.state IN ('unknown', 'undo_unknown') AND NEW.state IS NOT OLD.state
+    AND (SELECT marker_found FROM request_attempts WHERE request_id = OLD.id ORDER BY id DESC LIMIT 1) IS NULL
+BEGIN SELECT RAISE(ABORT, 'recovery records whether it found the marker before the request leaves its state'); END;
