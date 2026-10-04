@@ -1,7 +1,9 @@
 import json
 from collections.abc import Callable
 from decimal import Decimal
+from pathlib import Path
 
+import certifi
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -11,6 +13,7 @@ from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.model import Operation
 from stockthread.core.resolve import Take
 from stockthread.core.write_request import PATHS, WriteRequest, build_request
+from stockthread.inventree import InvenTreeReader
 from stockthread.writer import InvenTreeWriter, Outcome, Sent, WriteRefused, _check
 
 pytestmark = pytest.mark.anyio
@@ -176,6 +179,7 @@ async def test_no_message_repeats_the_body_or_the_token(handler: Handler) -> Non
         WriteRequest(Operation.TRANSFER, REQUEST.path, {**REQUEST.body, "notes": f"{MARKER} U0SAM0001 {LINK} more"}),
         WriteRequest(Operation.TRANSFER, REQUEST.path, {**REQUEST.body, "notes": f"{MARKER}  U0SAM0001"}),
         WriteRequest(Operation.TRANSFER, REQUEST.path, {**REQUEST.body, "extra": 1}),
+        WriteRequest(Operation.TRANSFER, REQUEST.path, {**REQUEST.body, "extra": Decimal(1)}),  # not JSON
         WriteRequest(Operation.TRANSFER, REQUEST.path, {**REQUEST.body, "location": True}),
         WriteRequest(
             Operation.TRANSFER, REQUEST.path, {**REQUEST.body, "items": [{"pk": 57, "quantity": 2.0, "merge": False}]}
@@ -257,6 +261,30 @@ async def test_the_hook_lets_a_marked_post_to_each_stock_path_out() -> None:
 
 async def test_proxies_from_the_environment_are_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.example:3128")
     client = InvenTreeWriter(SETTINGS, SecretStr(TOKEN))
     async with client:
-        assert client._http.trust_env is False
+        http = client._http
+        assert http._transport_for_url(httpx.URL(SETTINGS.url)) is http._transport
+
+
+def _ca_certs(client: httpx.AsyncClient) -> list[object]:
+    return client._transport._pool._ssl_context.get_ca_certs()  # type: ignore[attr-defined,no-any-return]
+
+
+async def test_the_writer_trusts_the_ca_file_from_the_environment_as_the_reader_does(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # One CA out of certifi's bundle stands in for an internal CA: a context that loaded the file holds it alone.
+    bundle = Path(certifi.where()).read_text()
+    end = "-----END CERTIFICATE-----"
+    ca_file = tmp_path / "internal-ca.pem"
+    ca_file.write_text(bundle[bundle.index("-----BEGIN CERTIFICATE-----") : bundle.index(end) + len(end)] + "\n")
+    monkeypatch.setenv("SSL_CERT_FILE", str(ca_file))
+    async with (
+        InvenTreeWriter(SETTINGS, SecretStr(TOKEN)) as client,
+        InvenTreeReader(SETTINGS, SecretStr(TOKEN)) as reader,
+    ):
+        writer_cas = _ca_certs(client._http)
+        assert len(writer_cas) == 1
+        assert writer_cas == _ca_certs(reader._http)
