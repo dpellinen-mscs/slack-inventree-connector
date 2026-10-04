@@ -81,7 +81,9 @@ TRANSITIONS: dict[tuple[RequestState, RequestState], frozenset[Actor]] = {
 FINAL: frozenset[RequestState] = frozenset({S.ACCEPTED, S.UNDONE, S.REJECTED, S.CANCELLED, S.EXPIRED})
 
 LEFT_NO_CHANGE: frozenset[RequestState] = frozenset({S.UNDONE, S.REJECTED, S.CANCELLED, S.EXPIRED, S.FAILED})
-"""States in which a request left no stock change behind. `failed` counts: InvenTree refused it."""
+"""States in which a request left no stock change behind. `failed` counts: InvenTree refused it, or recovery found
+no marker and no change. The second may still land, so the store also refuses every apply of such a post (ADR
+0015)."""
 
 UNSETTLED: frozenset[RequestState] = frozenset({S.APPLYING, S.UNKNOWN, S.UNDOING, S.UNDO_UNKNOWN})
 """States in which a write may be in flight. Nothing else may be sent for the post."""

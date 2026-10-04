@@ -35,9 +35,15 @@ on 1.5.6 with PostgreSQL) or may have been deleted.
 - `begin_attempt` refuses every apply of a post that has an unknown write
   whose marker recovery did not find: a new revision, or the next request,
   would add to it if it lands.
-- Such a request stays where recovery put it (`failed` or `verify_failed`)
-  for the operator, who records the movement in InvenTree by hand if it is
-  still wanted. A late landing is still reported by the marker check.
+- Approval refuses the same cases, so such a request stays where recovery
+  put it (`failed` or `verify_failed`) for the operator, who records the
+  movement in InvenTree by hand if it is still wanted. A late landing is
+  still reported by the marker check.
+- An undo stays allowed from `verify_failed` reached by "not found,
+  changed": the operator chose to reverse what was observed. If the apply
+  lands after that undo, the stock carries the apply once and nothing is
+  reversed twice; the marker check reports the late apply as a `hit`, and
+  the post takes no further writes.
 
 ## Consequences
 

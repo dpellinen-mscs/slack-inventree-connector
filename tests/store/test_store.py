@@ -937,29 +937,33 @@ def test_a_new_apply_after_a_refused_one_may_start(store: Store) -> None:
     assert (marker.kind, marker.attempt) == (AttemptKind.APPLY, 2)
 
 
-def test_a_new_apply_after_one_recovery_did_not_find_is_blocked(store: Store) -> None:
+def test_a_new_apply_after_one_recovery_did_not_find_is_blocked(store: Store, path: Path) -> None:
     # a01 timed out; recovery found no marker and unchanged quantities, so the request is failed. a01 may still be
     # running on the server and commit after any check the connector makes: a02 would then write twice.
     plan(store)
     unknown(store, key())
     store.transition(key(), expected=S.UNKNOWN, target=S.FAILED, actor=A.RECOVERY, marker_found=False)
-    store.transition(key(), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
     with pytest.raises(WriteBlocked, match="earlier apply of this request was not refused"):
-        begin(store, key())
-    assert store.request(key()).state is S.APPROVED
+        store.transition(key(), expected=S.FAILED, target=S.APPROVED, actor=A.HUMAN)
+    assert store.request(key()).state is S.FAILED
+    raw(path).execute("UPDATE requests SET state = 'approved' WHERE id = ?", (store.request(key()).id,))
+    with pytest.raises(WriteBlocked, match="earlier apply of this request was not refused"):
+        begin(store, key())  # begin_attempt checks again itself
 
 
-def test_a_write_of_the_post_recovery_did_not_find_blocks_a_new_revision(store: Store) -> None:
+def test_a_write_of_the_post_recovery_did_not_find_blocks_a_new_revision(store: Store, path: Path) -> None:
     # A failed request left no stock change behind, so a new revision of the post could be approved, but the same
     # late landing would add to it.
     plan(store)
     unknown(store, key())
     store.transition(key(), expected=S.UNKNOWN, target=S.FAILED, actor=A.RECOVERY, marker_found=False)
     store.create_plan(POST, "1" * 64, [Operation.TRANSFER])
-    approve(store, key(2, 1))
+    with pytest.raises(WriteBlocked, match="recovery could not establish"):
+        approve(store, key(2, 1))
+    assert store.request(key(2, 1)).state is S.PLANNED
+    raw(path).execute("UPDATE requests SET state = 'approved' WHERE id = ?", (store.request(key(2, 1)).id,))
     with pytest.raises(WriteBlocked, match="recovery could not establish"):
         begin(store, key(2, 1))
-    assert store.request(key(2, 1)).state is S.APPROVED
 
 
 def test_a_file_from_before_migration_0016_gets_the_recovery_column(

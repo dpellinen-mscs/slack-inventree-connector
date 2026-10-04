@@ -1322,11 +1322,37 @@ class Store:
                 ]
                 if not may_approve_new_revision(earlier):
                     raise WriteBlocked("an earlier revision of this post left a stock change behind")
+                self._check_no_unknown_write(row.id, post_id, AttemptKind.APPLY)
             if row.state in (S.APPLYING, S.UNDOING):
                 self._finish_attempt(row.id, target)
             if marker_found is not None:
                 self._recovered(row.id, marker_found)
             self._set_state(row.id, expected, target, actor)
+
+    def _check_no_unknown_write(self, request_id: int, post_id: int, kind: AttemptKind) -> None:
+        """WriteBlocked unless every earlier attempt of `kind` of the request was refused by InvenTree, and, for an
+        apply, no write of the post has an unknown outcome whose marker recovery did not find (ADR 0015): a write
+        whose outcome is unknown may still land, and another write would add to it. Checked at approval and again
+        when the write starts."""
+        name = "apply" if kind is AttemptKind.APPLY else "undo"
+        if self._db.execute(
+            "SELECT 1 FROM request_attempts WHERE request_id = ? AND kind = ? AND outcome IS NOT 'refused'",
+            (request_id, kind.value),
+        ).fetchone():
+            raise WriteBlocked(
+                f"an earlier {name} of this request was not refused by InvenTree: it wrote, or it may still land,"
+                " so another would write twice"
+            )
+        if (
+            kind is AttemptKind.APPLY
+            and self._db.execute(
+                "SELECT 1 FROM request_attempts a JOIN requests r ON r.id = a.request_id"
+                " JOIN plans p ON p.id = r.plan_id WHERE p.post_id = ? AND a.outcome = 'unknown'"
+                " AND a.marker_found IS NOT 1",
+                (post_id,),
+            ).fetchone()
+        ):
+            raise WriteBlocked("a write of this post has an outcome recovery could not establish: it may still land")
 
     def _recovered(self, request_id: int, marker_found: bool) -> None:
         cursor = self._db.execute(
@@ -1406,27 +1432,7 @@ class Store:
             ).fetchone()
             if count >= MAX_ATTEMPT:
                 raise WriteBlocked(f"{MAX_ATTEMPT} attempts is the limit")
-            name = "apply" if kind is AttemptKind.APPLY else "undo"
-            if self._db.execute(
-                "SELECT 1 FROM request_attempts WHERE request_id = ? AND kind = ? AND outcome IS NOT 'refused'",
-                (row.id, kind.value),
-            ).fetchone():
-                raise WriteBlocked(
-                    f"an earlier {name} of this request was not refused by InvenTree: it wrote, or it may still land,"
-                    " so another would write twice"
-                )
-            if (
-                kind is AttemptKind.APPLY
-                and self._db.execute(
-                    "SELECT 1 FROM request_attempts a JOIN requests r ON r.id = a.request_id"
-                    " JOIN plans p ON p.id = r.plan_id WHERE p.post_id = ? AND a.outcome = 'unknown'"
-                    " AND a.marker_found IS NOT 1",
-                    (post_id,),
-                ).fetchone()
-            ):
-                raise WriteBlocked(
-                    "a write of this post has an outcome recovery could not establish: it may still land"
-                )
+            self._check_no_unknown_write(row.id, post_id, kind)
             marker = Marker(row.marker_id, kind, int(count) + 1)
             self._set_state(row.id, expected, target, actor)
             cursor = self._db.execute(

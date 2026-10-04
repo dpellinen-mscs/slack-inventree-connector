@@ -1224,7 +1224,7 @@ A plan has its own state: `current`, `stale`, `expired`, `applied`,
 | `planned` | Part of a current plan | `approved`, `rejected`, `cancelled` (plan became stale), `expired` |
 | `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present), `cancelled` (plan became stale) |
 | `applying` | Intent stored, write about to be sent or sent | `applied`, `failed`, `unknown` |
-| `failed` | InvenTree refused the request, or recovery found no marker and no change | `approved`, by a human, as a new attempt; `begin_attempt` refuses it unless every earlier attempt was refused (ADR 0015) |
+| `failed` | InvenTree refused the request, or recovery found no marker and no change | `approved`, by a human, as a new attempt, only if every earlier attempt was refused (ADR 0015) |
 | `unknown` | The outcome is not known | `applied`, `failed` (no marker and nothing changed) or `verify_failed`, by recovery |
 | `applied` | InvenTree accepted the request | `verified`, `verify_failed` |
 | `verified` | Read-back agrees with the plan | `undoing` |
@@ -1293,15 +1293,15 @@ connector never has two InvenTree writes in flight and cannot race itself.
    recorded attempt explains, that InvenTree refused, whose marker
    recovery concluded was not found (a late write), that belongs to a
    request that never wrote, or a second attempt of one kind (apply or
-   undo) that also wrote, in any state. A `missing` finding is the last
-   apply of a verified or undone request, or the last undo of an undone
-   one, not found, unless the caller saw its stock item answer 404 (the
-   1.4.3 depletion case) or recovery concluded it was not found (the
-   request reached its state on that conclusion).
-   An attempt the store knows wrote (accepted, or found by recovery)
-   must be found in every state, not only in `verified` and `undone`:
-   an undo may start from `verify_failed` or `undo_failed`, and must not
-   be built on a history that lost a known write.
+   undo) that also wrote, in any state. A `missing` finding is an
+   attempt the store knows wrote (InvenTree accepted it, or recovery
+   found its marker) whose marker is not found, in any state: an undo may
+   start from `verify_failed` or `undo_failed`, and must not be built on
+   a history that lost a known write. The only excuse is the caller
+   seeing its stock item answer 404 (the 1.4.3 depletion case). An
+   attempt recovery did not find is not known to have written, so its
+   absence is no finding (the request reached its state on that
+   conclusion).
 3. **Snapshot and precondition.** Read every stock item of each part in
    the plan, at the source and at the destination location, without
    sub-locations. Compare with what the plan was built on. If a source
