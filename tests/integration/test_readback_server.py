@@ -45,6 +45,17 @@ def histories(pks: set[int]) -> dict[int, list[int]]:
     return anyio.run(search)
 
 
+def gone_items(pks: set[int]) -> list[int]:
+    """The stock items InvenTree itself answers are gone (`stock_item_gone`), as the apply protocol asks."""
+
+    async def ask() -> list[int]:
+        found = settings()
+        async with InvenTreeReader(found.inventree, found.secrets.inventree_token) as reader:
+            return [pk for pk in sorted(pks) if await reader.stock_item_gone(pk)]
+
+    return anyio.run(ask)
+
+
 def entries(marker_id: str) -> list[MarkedEntry]:
     async def search() -> list[MarkedEntry]:
         found = settings()
@@ -81,7 +92,7 @@ def apply(api: RawApi, movement: MovementView, between: Any = None) -> tuple[str
         between()
     response = api.post(request.path, dict(request.body))
     assert response.status_code == 201, response.text[:500]
-    gone = [pk for pk in sorted(named) if api.status(f"/api/stock/{pk}/") == 404]
+    gone = gone_items(named)
     version = int(api.get("/api/")["apiVersion"])
     found = entries(marker.marker_id)
     now = histories((named - set(gone)) | created(found))

@@ -161,6 +161,8 @@ class InvenTreeReader:
                 or not isinstance(page.get("results"), list)
             ):
                 raise InvenTreeError(f"GET {path} did not return a paginated list")
+            if page["count"] < 0:
+                raise InvenTreeError(f"GET {path} gave a negative count")
             batch = page["results"]
             if not all(isinstance(entry, dict) for entry in batch):
                 raise InvenTreeError(f"GET {path} returned a list entry that is not an object")
@@ -171,6 +173,9 @@ class InvenTreeReader:
             count = page["count"]
             results.extend(batch)
             if len(results) >= count:
+                # More rows than the count is as wrong as fewer: the list is not the one the count describes.
+                if len(results) != count:
+                    raise InvenTreeError(f"GET {path} gave {len(results)} rows for a count of {count}")
                 return results
         raise InvenTreeError(f"GET {path} returned more than {MAX_PAGES} pages")
 
@@ -272,6 +277,11 @@ class InvenTreeReader:
         pks = [row.get("pk") for row in rows]
         if not all(type(pk) is int for pk in pks) or len(set(pks)) != len(pks):
             raise InvenTreeError("GET /api/stock/ gave a stock item without a pk, or one both in stock and depleted")
+        # A filter the server ignored would make another part's or place's item a pick, a precondition or a target.
+        if any(type(row.get("part")) is not int or row["part"] != part for row in rows) or any(
+            type(row.get("location")) is not int or row["location"] != location for row in rows
+        ):
+            raise InvenTreeError("GET /api/stock/ gave a stock item of another part or location")
         return sorted(rows, key=lambda row: int(row["pk"]))
 
 

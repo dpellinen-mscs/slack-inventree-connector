@@ -205,6 +205,8 @@ async def test_booleans_are_sent_the_way_django_filters_read_them() -> None:
 def stock_rows(in_stock: list[object], depleted: list[object]) -> Handler:
     def handler(request: httpx.Request) -> httpx.Response:
         rows = depleted if request.url.params.get("depleted") == "true" else in_stock
+        # The rows are of the pair the tests read (part 7, location 12) unless a row says otherwise.
+        rows = [{"part": 7, "location": 12, **row} if isinstance(row, dict) else row for row in rows]
         return httpx.Response(200, json={"count": len(rows), "results": rows})
 
     return handler
@@ -271,6 +273,29 @@ async def test_stock_items_refuse_a_row_read_twice_or_without_a_pk(
             await client.stock_items(part=7, location=12)
 
 
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"pk": 4, "quantity": 1, "part": 8},
+        {"pk": 4, "quantity": 1, "location": 13},
+        {"pk": 4, "quantity": 1, "location": None},
+        {"pk": 4, "quantity": 1, "part": "7"},
+    ],
+)
+async def test_stock_items_refuse_an_item_of_another_part_or_location(row: dict[str, object]) -> None:
+    client, _ = reader(stock_rows([{"pk": 9, "quantity": 5}, row], []))
+    async with client:
+        with pytest.raises(InvenTreeError, match="another part or location"):
+            await client.stock_items(part=7, location=12)
+
+
+async def test_stock_items_refuse_a_depleted_item_of_another_location() -> None:
+    client, _ = reader(stock_rows([], [{"pk": 4, **EMPTY_IN_STOCK, "location": 13}]))
+    async with client:
+        with pytest.raises(InvenTreeError, match="another part or location"):
+            await client.stock_items(part=7, location=12)
+
+
 def paged(total: int) -> Handler:
     rows = [{"pk": pk} for pk in range(total)]
 
@@ -322,6 +347,28 @@ async def test_list_all_refuses_a_body_that_is_not_a_page(body: object) -> None:
     async with client:
         with pytest.raises(InvenTreeError):
             await client.list_all("/api/part/")
+
+
+@pytest.mark.parametrize("count", [-1, -50])
+async def test_list_all_refuses_a_negative_count(count: int) -> None:
+    # Review of #116: a count of -1 with no rows once passed for a whole, empty list, so an empty history.
+    client, _ = reader(respond(body={"count": count, "results": []}))
+    async with client:
+        with pytest.raises(InvenTreeError, match="negative count"):
+            await client.list_all("/api/stock/track/")
+
+
+@pytest.mark.parametrize(("count", "rows"), [(0, 1), (2, 3), (PAGE_SIZE + 1, PAGE_SIZE + 2)])
+async def test_list_all_refuses_more_rows_than_the_count(count: int, rows: int) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        offset = int(request.url.params["offset"])
+        page = [{"pk": pk} for pk in range(offset, min(rows, offset + PAGE_SIZE))]
+        return httpx.Response(200, json={"count": count, "results": page})
+
+    client, _ = reader(handler)
+    async with client:
+        with pytest.raises(InvenTreeError, match="rows for a count of"):
+            await client.list_all("/api/stock/track/")
 
 
 async def test_list_all_gives_up_on_a_server_that_never_ends(monkeypatch: pytest.MonkeyPatch) -> None:
