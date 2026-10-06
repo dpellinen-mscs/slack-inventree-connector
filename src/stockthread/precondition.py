@@ -11,8 +11,9 @@ The plan holds when every stock item a line names is still where the plan found 
 - for a transfer or a remove: the item is still available (status OK, nothing allocated) and holds at least what
   the lines of the movement take from it together. A serialized item is never removed, and is transferred whole
   only (design section 5, "Serialized stock"). A line that names serial numbers takes only items that carry one of
-  them; a line that names none and takes serialized items still takes every available serialized item of the pair,
-  and the pair is not mixed (`core.resolve.pick_source`);
+  them; a line that names none and takes serialized items still takes every available serialized item of the pair.
+  Whatever a line takes, and whoever chose it, the pair is not mixed serialized and unserialized now
+  (`core.resolve.pick_source`, `core.resolve._chosen`);
 - for an add or a count: the item is still the one target of the pair, not serialized (`core.resolve.target_item`).
 
 A line a person named the stock items for (`chosen`, design section 4, "The stock question") keeps the person's
@@ -152,6 +153,10 @@ def _line_stale(
     """Why one line's items no longer fit the rule that picked them, or None. `stock`: the line's stock as read;
     `left`: what the lines before it left of that."""
     serials = view.movement.line_items[line].serials
+    if operation in (Operation.TRANSFER, Operation.REMOVE):
+        pool = [item for item in left if item.available]
+        if any(item.serial for item in pool) and not all(item.serial for item in pool):
+            return "serialized and unserialized stock is mixed there now"  # whatever the line takes, or who chose
     if serials:
         missing = next((item for item in items if item.serial not in serials), None)
         return None if missing is None else f"stock item {missing.pk} no longer has a serial number the line names"
@@ -162,12 +167,8 @@ def _line_stale(
         if reasons or [pk] != [item.pk for item in items]:
             return f"the stock at location {_places(view)[1]} is no longer one target stock item"
         return None
-    if any(item.serial for item in items):
-        pool = [item for item in left if item.available]
-        if any(not item.serial for item in pool):
-            return "serialized and unserialized stock is mixed there now"
-        if {item.pk for item in pool} != {item.pk for item in items}:
-            return "the serialized stock there changed, and the line names no serial numbers"
+    if any(item.serial for item in items) and {item.pk for item in pool} != {item.pk for item in items}:
+        return "the serialized stock there changed, and the line names no serial numbers"
     return None
 
 

@@ -189,6 +189,19 @@ def test_serialized_stock_taken_with_no_serial_named_must_still_be_all_of_it() -
     assert check(planned, mixed) == Stale("line 1: serialized and unserialized stock is mixed there now")
 
 
+def test_serialized_stock_arriving_beside_an_unserialized_pick_makes_the_source_mixed() -> None:
+    """The plan takes unserialized item 57; serialized item 58 arrives before the write. `pick_source` would now
+    answer DETAIL_MIXED, and a choice does not settle that (`_chosen`), so the plan is stale (review of #113)."""
+    planned = view(stock=(picked((57, "2")),))
+    arrived = {(1, SOURCE): [item(57, "5"), item(58, "1", serial="SN-1")], (1, DESTINATION): []}
+    assert check(planned, arrived) == Stale("line 1: serialized and unserialized stock is mixed there now")
+    assert check(planned, arrived, chosen={0}) == Stale("line 1: serialized and unserialized stock is mixed there now")
+    consume = view(MovementType.CONSUME, stock=(picked((57, "2")),))
+    assert check(consume, arrived) == Stale("line 1: serialized and unserialized stock is mixed there now")
+    unavailable = {(1, SOURCE): [item(57, "5"), item(58, "1", status=65, serial="SN-1")], (1, DESTINATION): []}
+    assert isinstance(check(planned, unavailable), Snapshot)
+
+
 def test_a_line_with_no_serial_named_takes_what_the_lines_before_it_left() -> None:
     """ "1 ONT SN A" and "1 ONT": the resolver gives line 1 item 57 (A) and line 2 the one left, 58, and nothing
     changed, so the plan holds (review of #113). A third serialized item arriving still makes line 2 stale."""
