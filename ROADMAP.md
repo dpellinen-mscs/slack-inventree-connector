@@ -131,6 +131,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] Read-back, check 3: no entry without the marker on the named or created stock items since the snapshot (`InvenTreeReader.item_entries`, `Snapshot.history`)
   - [x] Apply orchestrator: writer lock, judge again, marker check, precondition, intent, send, read-back, state (`apply.apply_request`; not called by the worker yet)
   - [x] Read back a request a read error left `applied` (`apply.readback_request`; not called by the worker yet)
+  - [x] The views a write acts on, rebuilt from the dry-run record the thread was shown, refused unless the plan was made from it ([0016](docs/decisions/0016-apply-reads-the-dry-run-record.md), `plan_record.views_of`)
   - [ ] Worker: run `apply_request` for approved requests, and a read-back left undone by a read error (`applied`) run again
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
