@@ -3,6 +3,7 @@
 from stockthread.store.db import (
     MAX_EVENT_ATTEMPTS,
     Answered,
+    AppliedAttempt,
     Attempt,
     Button,
     DryRunOutcome,
@@ -30,6 +31,7 @@ from stockthread.store.db import (
 __all__ = [
     "MAX_EVENT_ATTEMPTS",
     "Answered",
+    "AppliedAttempt",
     "Attempt",
     "Button",
     "DryRunOutcome",

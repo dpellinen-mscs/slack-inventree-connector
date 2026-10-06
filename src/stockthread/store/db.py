@@ -140,6 +140,17 @@ class UnknownAttempt:
     """The request body as stored and sent."""
 
 
+@dataclass(frozen=True)
+class AppliedAttempt:
+    """The last attempt of an `applied` request: the write InvenTree accepted, or whose marker recovery found."""
+
+    marker: Marker
+    snapshot: Any
+    """As stored (`Snapshot.as_json`)."""
+    body: Any
+    """The request body as stored and sent."""
+
+
 EventKind = Literal["event", "interactive"]
 
 
@@ -1531,6 +1542,23 @@ class Store:
             raise AssertionError(f"request {key} has an unknown attempt with no time its outcome became unknown")
         age = self._clock_now() - datetime.fromisoformat(finished_at)
         return UnknownAttempt(Marker.parse(marker), age, json.loads(snapshot), json.loads(body))
+
+    def applied_attempt(self, key: RequestKey) -> AppliedAttempt:
+        """The last attempt of the `applied` request `key`, the one to read back: InvenTree accepted it, or recovery
+        found its marker. KeyError if the request is not `applied`."""
+        row = self.request(key)
+        if row.state is not S.APPLIED:
+            raise KeyError(f"request {key} is {row.state}, not applied")
+        found = self._db.execute(
+            "SELECT marker, snapshot, request_body FROM request_attempts"
+            " WHERE id = (SELECT max(id) FROM request_attempts WHERE request_id = ?)"
+            " AND (outcome = 'accepted' OR (outcome = 'unknown' AND marker_found = 1))",
+            (row.id,),
+        ).fetchone()
+        if found is None:
+            raise AssertionError(f"request {key} is applied, but its last attempt was neither accepted nor found")
+        marker, snapshot, body = found
+        return AppliedAttempt(Marker.parse(marker), json.loads(snapshot), json.loads(body))
 
     def attempt_snapshot(self, marker: Marker) -> Any:
         """The snapshot stored for the attempt with `marker` (step 3 of the apply protocol). KeyError if no attempt

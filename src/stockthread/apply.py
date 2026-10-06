@@ -166,8 +166,8 @@ async def apply_request(
     since the plan, `failed` when InvenTree refused the write (or the writer refused to send it), `unknown` when the
     outcome is not known (recovery's), `verified` or `verify_failed` after the read-back. A read error before the
     write leaves the request `approved` and raises; one in the read-back leaves it `applied` (not read back, which
-    blocks every other write of the post) and raises. Nothing is written twice: `begin_attempt` refuses a second
-    attempt of a write that was not refused.
+    blocks every other write of the post; `readback_request` concludes it) and raises. Nothing is written twice:
+    `begin_attempt` refuses a second attempt of a write that was not refused.
     """
     async with lock:
         row = store.request(key)
@@ -249,7 +249,8 @@ async def recover_request(
     running on the server. Then: the attempt's marker found, the request is
     `applied` and read back like any write (`verified` or `verify_failed`). Not found, and every named stock item, every
     total and every named item's history is as the stored snapshot has it: `failed`, and never sent again (ADR 0015).
-    Not found, and anything else: `verify_failed`. Read errors raise and change nothing. Nothing is written.
+    Not found, and anything else: `verify_failed`. Read errors raise and change nothing, but one in the
+    read-back leaves the request `applied` (`readback_request` concludes it). Nothing is written.
     """
     async with lock:
         row = store.request(key)
@@ -261,9 +262,7 @@ async def recover_request(
         if attempt.age < settle:
             return Applied(RequestState.UNKNOWN, "still settling: the write may be running on the server")
         snapshot = Snapshot.from_json(attempt.snapshot)
-        request = WriteRequest(row.operation, PATHS[row.operation], attempt.body)
-        if not built_from(view, request) or not str(request.body.get("notes", "")).startswith(str(attempt.marker)):
-            raise ValueError("the stored request was not built from this movement and marker")
+        request = _stored_request(row.operation, attempt.body, attempt.marker, view)
         named = sorted({int(line["pk"]) for line in request.body["items"]})
         found = await reader.marker_entries(attempt.marker.marker_id)
         if any(entry.marker == attempt.marker for entry in found):
@@ -285,6 +284,43 @@ async def recover_request(
         store.transition(key, expected=RequestState.UNKNOWN, target=target, actor=Actor.RECOVERY, marker_found=False)
         why = "marker not found; " + ("the stock changed" if changes else "nothing changed, so it never ran")
         return Applied(target, why, tuple(changes))
+
+
+async def readback_request(
+    key: RequestKey,
+    view: MovementView,
+    *,
+    store: Store,
+    reader: ApplyReader,
+    lock: anyio.Lock,
+) -> Applied:
+    """Read back the `applied` request `key` (steps 5 and 6 of design section 7), whose movement is `view`: the
+    request a read error in `apply_request`'s or `recover_request`'s read-back left `applied`, which blocks every
+    other write of the post until this concludes it. `verified` or `verify_failed`, from the stored request and
+    snapshot of its last attempt. Read errors raise and leave it `applied`. Nothing is written."""
+    async with lock:
+        row = store.request(key)
+        if row.state is not RequestState.APPLIED:
+            raise ValueError(f"request {key} is {row.state}, not applied")
+        attempt = store.applied_attempt(key)
+        if attempt.marker.kind is not AttemptKind.APPLY:
+            raise ValueError(f"the applied attempt of request {key} is not an apply")
+        request = _stored_request(row.operation, attempt.body, attempt.marker, view)
+        named = sorted({int(line["pk"]) for line in request.body["items"]})
+        snapshot = Snapshot.from_json(attempt.snapshot)
+        problems = await _read_back(reader, view, request, attempt.marker, snapshot, named)
+        target = RequestState.VERIFY_FAILED if problems else RequestState.VERIFIED
+        store.transition(key, expected=RequestState.APPLIED, target=target, actor=Actor.APPLIER)
+        return Applied(target, "read back: " + ("does not agree with the plan" if problems else "as planned"), problems)
+
+
+def _stored_request(operation: Operation, body: Any, marker: Marker, view: MovementView) -> WriteRequest:
+    """The request as stored for an attempt with `marker`; ValueError unless it was built from `view` and leads its
+    notes with `marker`."""
+    request = WriteRequest(operation, PATHS[operation], body)
+    if not built_from(view, request) or not str(request.body.get("notes", "")).startswith(str(marker)):
+        raise ValueError("the stored request was not built from this movement and marker")
+    return request
 
 
 async def _changes(reader: ApplyReader, view: MovementView, snapshot: Snapshot, named: Sequence[int]) -> list[str]:
