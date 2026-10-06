@@ -90,7 +90,7 @@ def check(
     now), or why the plan no longer holds. `request` is the request built from `view` (`plan.plan_requests`): its
     lines must be the view's takes, merged by item, or this raises ValueError. `chosen`: the lines (from 0) a person
     named the stock items for."""
-    operation, place, destination = places(view)
+    operation, place, _ = places(view)
     if len(view.stock) != len(view.items) or not view.items:
         raise ValueError("a decided movement has the stock of every line")
     totals: dict[Pair, Decimal] = {}
@@ -121,11 +121,7 @@ def check(
             operation, view, line, stock, left, [now[take.item] for take in pick.takes], line in chosen
         ):
             return Stale(f"line {line + 1}: {why}")
-    if (
-        {line["pk"]: Decimal(line["quantity"]) for line in request.body["items"]} != taken
-        or request.operation is not operation
-        or request.body.get("location") != destination
-    ):
+    if not built_from(view, request):
         raise ValueError("the request was not built from this movement")
     for pk, quantity in taken.items():
         item = held[pk]
@@ -139,6 +135,23 @@ def check(
         elif item.serial:
             return Stale(f"stock item {pk} is serialized now")
     return Snapshot({pk: item.quantity for pk, item in held.items()}, totals)
+
+
+def built_from(view: MovementView, request: WriteRequest) -> bool:
+    """Whether `request` is what `plan.plan_requests` builds from `view`: its operation, one line per stock item the
+    view's lines take, with what they take together, and a transfer's destination (no location for the others)."""
+    operation, _, destination = places(view)
+    taken: dict[int, Decimal] = {}
+    for pick in view.stock:
+        for take in () if pick is None else pick.takes:
+            taken[take.item] = taken.get(take.item, Decimal(0)) + take.quantity
+    lines = request.body["items"]
+    return (
+        request.operation is operation
+        and len(lines) == len(taken)
+        and {int(line["pk"]): Decimal(line["quantity"]) for line in lines} == taken
+        and request.body.get("location") == destination
+    )
 
 
 def _line_stale(

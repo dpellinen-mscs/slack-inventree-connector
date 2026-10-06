@@ -201,6 +201,42 @@ def test_inputs_that_do_not_belong_together_are_a_caller_error() -> None:
         applied.verify(split_entries(), AFTER_SPLIT, gone=(58,))
 
 
+def test_a_request_that_is_not_the_plans_is_a_caller_error_even_when_inventree_agrees_with_it() -> None:
+    """The plan moves 2 of item 57; a request for 1, whose entries and totals are those of 1, must not verify the
+    movement (review of #114). Nor may a request that drops a line, names an item twice, or goes elsewhere."""
+    applied = transfer()
+    body = applied.request.body
+
+    def sent(**changed: Any) -> WriteRequest:
+        return WriteRequest(applied.request.operation, applied.request.path, {**body, **changed})
+
+    after_one = {(1, SOURCE): [item(57, "4"), item(58, "1")], (1, DESTINATION): [item(80, "3"), item(NEW, "1")]}
+    for request in (
+        sent(items=[{**body["items"][0], "quantity": "1"}]),
+        sent(items=[]),
+        sent(items=[{**body["items"][0], "quantity": "1"}, {**body["items"][0], "quantity": "1"}]),
+        sent(location=DESTINATION + 1),
+    ):
+        with pytest.raises(ValueError, match="this movement and marker"):
+            verify(
+                applied.view,
+                request,
+                MARKER,
+                applied.snapshot,
+                split_entries(1.0, 4.0),
+                after_one,
+                gone=(),
+                api_version=530,
+            )
+    two = Applied(
+        view(lines=(("Disc 40", "2"), ("UPS", "1")), stock=(picked((57, "2")), picked((60, "1")))),
+        {(1, SOURCE): [item(57, "5")], (1, DESTINATION): [], (2, SOURCE): [item(60, "1")], (2, DESTINATION): []},
+    )
+    first_only = WriteRequest(two.request.operation, two.request.path, {**two.request.body, "items": body["items"]})
+    with pytest.raises(ValueError, match="this movement and marker"):
+        verify(two.view, first_only, MARKER, two.snapshot, split_entries(), AFTER_SPLIT, gone=(), api_version=530)
+
+
 def test_a_count_to_zero_that_deleted_its_item_leaves_an_entry_of_no_item() -> None:
     applied = Applied(
         view(MovementType.COUNT, stock=(picked((57, "0")),), lines=(("Disc", "0"),)),

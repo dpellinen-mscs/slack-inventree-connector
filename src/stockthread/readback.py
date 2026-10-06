@@ -35,7 +35,7 @@ from stockthread.core.model import Operation
 from stockthread.core.resolve import StockItem
 from stockthread.core.write_request import WriteRequest, _decimal
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, MarkedEntry
-from stockthread.precondition import Pair, Snapshot, pairs, places, record
+from stockthread.precondition import Pair, Snapshot, built_from, pairs, places, record
 from stockthread.slack.replies import MovementView
 
 COUNTED, ADDED, REMOVED, MOVED, SPLIT_FROM, SPLIT_CHILD = 10, 11, 12, 20, 40, 42
@@ -62,7 +62,7 @@ def verify(
     do not belong together."""
     operation, place, destination = places(view)
     lines = {int(line["pk"]): Decimal(line["quantity"]) for line in request.body["items"]}
-    if request.operation is not operation or not str(request.body["notes"]).startswith(str(marker)):
+    if not built_from(view, request) or not str(request.body["notes"]).startswith(str(marker)):
         raise ValueError("the request was not built from this movement and marker")
     if not lines.keys() <= snapshot.stock_items.keys() or not set(pairs(view)) <= snapshot.totals.keys():
         raise ValueError("the snapshot is not of this request")
