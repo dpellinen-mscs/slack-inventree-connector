@@ -73,13 +73,16 @@ class FakeReader:
         return pk in self.gone
 
 
-def verified(store: Store, key: RequestKey, pks: list[int], held: str = "1", quantity: str = "1") -> Marker:
+def verified(store: Store, key: RequestKey, pks: list[int], held: str = "1", quantity: str | list[str] = "1") -> Marker:
     """A verified write of `quantity` on each item (taking it, for a remove), whose snapshot shows each item holding
     `held` before it."""
     store.transition(key, expected=S.PLANNED, target=S.APPROVED, actor=A.HUMAN)
     marker = store.next_marker(key, AttemptKind.APPLY)
     body: dict[str, Any] = {
-        "items": [{"pk": pk, "quantity": quantity} for pk in pks],
+        "items": [
+            {"pk": pk, "quantity": each}
+            for pk, each in zip(pks, [quantity] * len(pks) if isinstance(quantity, str) else quantity, strict=True)
+        ],
         "notes": write_notes(marker, "U0SAM"),
     }
     snapshot = {"stock_items": {str(pk): held for pk in pks}}
@@ -132,10 +135,11 @@ async def test_a_missing_marker_of_a_partial_removal_is_missing_even_if_its_item
 
 
 @pytest.mark.parametrize(
-    ("quantity", "gone", "excused"), [("0", {7, 9}, True), ("1", {7, 9}, False), ("0", {7}, False)]
+    ("quantity", "gone", "excused"),
+    [("0", {7, 9}, True), ("1", {7, 9}, False), ("0", {7}, False), (["0", "1"], {7, 9}, False)],
 )
 async def test_a_missing_marker_of_a_count_is_excused_only_when_it_counted_every_item_to_0_and_they_are_gone(
-    tmp_path: Path, quantity: str, gone: set[int], excused: bool
+    tmp_path: Path, quantity: str | list[str], gone: set[int], excused: bool
 ) -> None:
     """A count to 0 deletes a delete_on_deplete item, whatever it held (`test_char_a_write_that_empties_an_item`)."""
     counts = Store.open(tmp_path / "counts.db")
@@ -218,11 +222,11 @@ async def test_only_a_removal_may_be_excused(store: Store) -> None:
     assert reader.asked == []
 
 
-def undone(store: Store, key: RequestKey, pks: list[int]) -> Marker:
+def undone(store: Store, key: RequestKey, pks: list[int], quantity: str = "1") -> Marker:
     verified(store, key, pks)
     marker = store.next_marker(key, AttemptKind.UNDO)
     body: dict[str, Any] = {
-        "items": [{"pk": pk, "quantity": "1"} for pk in pks],
+        "items": [{"pk": pk, "quantity": quantity} for pk in pks],
         "notes": write_notes(marker, "U0SAM"),
     }
     snapshot = {"stock_items": {str(pk): "1" for pk in pks}}
@@ -248,6 +252,22 @@ async def test_an_undo_is_excused_only_when_it_removes(tmp_path: Path, operation
     opened.create_plan(POST, "0" * 64, (operation,))
     apply_marker = Marker(opened.request(KEY_1).marker_id, AttemptKind.APPLY, 1)
     undo = undone(opened, KEY_1, [7])
+    findings = await check_post_markers(FakeReader({apply_marker: [7]}, gone={7}), opened, POST)
+    opened.close()
+    assert [(f.kind, f.marker) for f in findings] == ([] if excused else [(FindingKind.MISSING, undo)])
+
+
+@pytest.mark.parametrize(("quantity", "excused"), [("0", True), ("3", False)])
+async def test_an_undo_of_a_count_is_excused_only_when_it_counts_every_item_to_0(
+    tmp_path: Path, quantity: str, excused: bool
+) -> None:
+    """The undo of a count counts back; only a count back to 0 may delete the item (review of #115)."""
+    opened = Store.open(tmp_path / "undo-count.db")
+    opened.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
+    opened.create_post(POST)
+    opened.create_plan(POST, "0" * 64, (Operation.COUNT,))
+    apply_marker = Marker(opened.request(KEY_1).marker_id, AttemptKind.APPLY, 1)
+    undo = undone(opened, KEY_1, [7], quantity=quantity)
     findings = await check_post_markers(FakeReader({apply_marker: [7]}, gone={7}), opened, POST)
     opened.close()
     assert [(f.kind, f.marker) for f in findings] == ([] if excused else [(FindingKind.MISSING, undo)])
