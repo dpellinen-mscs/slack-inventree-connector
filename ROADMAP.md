@@ -134,8 +134,8 @@ payloads whose channel or message does not fit the stored id.
   - [ ] Worker: run `apply_request` for approved requests, and a read-back left undone by a read error (`applied`) run again
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
-  - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`; not called yet)
-  - [ ] Recovery of an unknown undo; the worker runs the crash sweep at start and recovery
+  - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`, run by `run.run` at start)
+  - [ ] Recovery of an unknown undo; the worker runs recovery
 - [ ] Plans with several requests, and the `partially_applied` state
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
 - [ ] Undo by button, authorized and idempotent, built from the observed history

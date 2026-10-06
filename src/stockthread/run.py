@@ -364,6 +364,14 @@ def run(
         requeued = store.requeue_unfinished(owner)
         if requeued:
             log.info("picked up %d events left unfinished", requeued)
+        # Before this process could send a write: one of its own in flight would become unknown too.
+        for key in store.conclude_crashed_writes(owner):
+            log.warning(
+                "post %s: request r%d/%d was left in flight by a crash: its outcome is unknown",
+                key.post.ts,
+                key.revision,
+                key.sequence,
+            )
         if settings.writes.enabled:
             log.warning("writes.enabled has no effect in this version: it has no apply step yet")
         log.info("This version only posts dry runs: no stock is ever written.")
