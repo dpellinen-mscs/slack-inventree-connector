@@ -17,6 +17,7 @@ from stockthread.inventree import (
     ReadOnlyViolation,
     ServerInfo,
     check_version,
+    in_stock_but_empty,
 )
 from stockthread.writer import InvenTreeWriter
 
@@ -195,15 +196,79 @@ async def test_booleans_are_sent_the_way_django_filters_read_them() -> None:
     client, recorder = reader(respond(body={"count": 0, "results": []}))
     async with client:
         await client.stock_items(part=7, location=12)
-    params = dict(recorder.requests[0].url.params)
-    assert params == {
-        "part": "7",
-        "location": "12",
-        "cascade": "false",
-        "in_stock": "true",
-        "limit": "100",
-        "offset": "0",
-    }
+    in_stock, depleted = (dict(request.url.params) for request in recorder.requests)
+    place = {"part": "7", "location": "12", "cascade": "false", "limit": "100", "offset": "0"}
+    assert in_stock == {**place, "in_stock": "true"}
+    assert depleted == {**place, "depleted": "true"}
+
+
+def stock_rows(in_stock: list[object], depleted: list[object]) -> Handler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        rows = depleted if request.url.params.get("depleted") == "true" else in_stock
+        return httpx.Response(200, json={"count": len(rows), "results": rows})
+
+    return handler
+
+
+EMPTY = {"quantity": 0, "status": 10, "customer": None, "belongs_to": None, "sales_order": None, "consumed_by": None}
+EMPTY_IN_STOCK = {**EMPTY, "is_building": False}
+
+
+async def test_stock_items_are_those_in_stock_and_those_depleted_by_pk() -> None:
+    rows = stock_rows([{"pk": 9, "quantity": 5}, {"pk": 3, "quantity": 1}], [{"pk": 4, **EMPTY_IN_STOCK}])
+    client, _ = reader(rows)
+    async with client:
+        assert [row["pk"] for row in await client.stock_items(part=7, location=12)] == [3, 4, 9]
+
+
+@pytest.mark.parametrize("status", [10, 50, 55])
+def test_an_empty_item_with_an_available_status_is_in_stock_but_empty(status: int) -> None:
+    assert in_stock_but_empty({**EMPTY_IN_STOCK, "status": status})
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {**EMPTY_IN_STOCK, "status": 70},  # lost
+        {**EMPTY_IN_STOCK, "status": 60},  # destroyed
+        {**EMPTY_IN_STOCK, "status": "10"},
+        {**EMPTY_IN_STOCK, "customer": 3},
+        {**EMPTY_IN_STOCK, "belongs_to": 8},
+        {**EMPTY_IN_STOCK, "sales_order": 2},
+        {**EMPTY_IN_STOCK, "consumed_by": 5},
+        {**EMPTY_IN_STOCK, "is_building": True},
+        EMPTY,  # no is_building: a field missing fails
+        {key: value for key, value in EMPTY_IN_STOCK.items() if key != "consumed_by"},
+        {key: value for key, value in EMPTY_IN_STOCK.items() if key != "status"},
+    ],
+)
+def test_an_empty_item_lost_sold_installed_or_unknown_is_not_read(row: dict[str, object]) -> None:
+    assert not in_stock_but_empty(row)
+
+
+async def test_stock_items_leave_out_a_depleted_item_that_is_not_in_stock_but_empty() -> None:
+    lost = {"pk": 4, **EMPTY_IN_STOCK, "status": 70}
+    client, _ = reader(stock_rows([{"pk": 9, "quantity": 5}], [lost, {"pk": 6, **EMPTY_IN_STOCK}]))
+    async with client:
+        assert [row["pk"] for row in await client.stock_items(part=7, location=12)] == [6, 9]
+
+
+@pytest.mark.parametrize(
+    ("in_stock", "depleted"),
+    [
+        ([{"pk": 4, "quantity": 1}], [{"pk": 4, **EMPTY_IN_STOCK}]),
+        ([{"quantity": 1}], []),
+        ([{"pk": "4"}], []),
+        ([], [EMPTY_IN_STOCK]),
+    ],
+)
+async def test_stock_items_refuse_a_row_read_twice_or_without_a_pk(
+    in_stock: list[object], depleted: list[object]
+) -> None:
+    client, _ = reader(stock_rows(in_stock, depleted))
+    async with client:
+        with pytest.raises(InvenTreeError, match="without a pk"):
+            await client.stock_items(part=7, location=12)
 
 
 def paged(total: int) -> Handler:

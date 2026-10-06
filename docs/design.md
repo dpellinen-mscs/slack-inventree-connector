@@ -184,8 +184,16 @@ needs.
   processing status. Rows that were not finished are picked up again at
   startup, so a restart loses nothing that was acknowledged. A row moves
   `pending` -> `processing` -> `done`, `dropped` or `failed`, and back to
-  `pending` only at startup. An event claimed 3 times without finishing is
-  `failed`, so one bad payload cannot crash the connector in a loop. Only
+  `pending` only at startup or after a transient failure. A transient
+  failure (the database busy or locked, a disk or network error) puts the
+  event back with a time before which it is not claimed again: 5 s, then
+  30 s, then 2 min (a time more than 5 min away can only come from the
+  clock stepping back, and is ignored). While such an event waits the
+  queue is not empty, so no post is due without it. An error that cuts a
+  drain off leaves its claimed events to the next drain, which puts them
+  back first. Any other error fails the event at once. An event claimed 4
+  times without finishing, by retries and restarts together, is `failed`,
+  so one bad payload cannot crash the connector in a loop. Only
   the holder of the instance lock claims and finishes events, and startup
   requeues only events an earlier instance left behind. Delivery is **at
   least once**: after a lock takeover, an event the old instance was still
@@ -940,7 +948,13 @@ needs.
 
   v1.0 never creates stock items or locations. When an add or a count has
   no single target stock item, that is a review reason, and a human creates
-  the item in InvenTree.
+  the item in InvenTree. An item emptied to zero (and kept, with
+  delete_on_deplete off) still counts as a target: the stock read takes
+  both InvenTree's `in_stock` rows and those of its `depleted` rows that
+  would be in stock but for their quantity (an available status; no
+  customer, parent item, sales order or consuming build; not being built).
+  An emptied item that is lost or sent out is no target. A pick for a
+  transfer or a remove never takes from an empty item.
 - **Request bodies** (built: `core/write_request.py`, pure). One request
   per movement: `POST /api/stock/<transfer|remove|add|count>/` with
   `items` (one `{pk, quantity}` per stock item the pick took, quantities as
@@ -1019,7 +1033,10 @@ needs.
   reads the roles of the token's user (`/api/user/roles/`) and reports
   what is missing, as an error that says what it breaks, and what is more
   than needed, as a warning. "Change" on Stock Item is not reported, since
-  it comes with "add". A superuser gets one warning. According
+  it comes with "add". While `writes.enabled` is false, a dry run needs
+  only the view permissions: a token without "add" on Stock Item passes
+  the check with a note, and "add" is never reported as more than needed.
+  A superuser gets one warning. According
   to the research, tokens expire after one year by default. Where the API
   exposes the expiry, the connector reports it at startup.
 - **Pack units.** A container unit or a stated pack size is always a
@@ -1046,7 +1063,9 @@ independently, and each one alone can block.
 
 1. **Switch.** `writes.enabled` is true. The default is false. Turning it
    on is an explicit configuration step, and the connector logs it at
-   startup.
+   startup. The InvenTree API version must also be in the tested range:
+   an untested server blocks every plan the same way, whatever the
+   switch, the policy or an approver says.
 2. **Policy.** The policy allows this movement
    ([0004](decisions/0004-default-write-policy.md)). By default a
    `take_to_vehicle` or `take_to_site` movement with no review reason
@@ -1065,7 +1084,7 @@ version can change in between.
 **Where (built: `gate.py`, nothing calls it yet).** `judge` takes the
 post's views, their apply markers, the policy as read from the settings
 at that moment, and who clicked Apply. Its verdict is `blocked` (writes
-off, a plan a "no" rejected, or a plan `plan_requests` refuses), `waits`
+off, an untested server version, a plan a "no" rejected, or a plan `plan_requests` refuses), `waits`
 (decided, but needs an approver's click) or `allowed`, and only an
 `allowed` verdict carries the requests to send. A click counts only from
 someone who is an approver when the gate is judged. The notes of the

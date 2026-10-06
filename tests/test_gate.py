@@ -22,12 +22,14 @@ from stockthread.core.model import (
 )
 from stockthread.core.resolve import SourcePick, Take
 from stockthread.gate import Policy, Verdict, judge
+from stockthread.inventree import MAX_API_VERSION, MIN_API_VERSION, ServerInfo, check_version
 from stockthread.slack.replies import MovementView
 
 SAM = "U0SAM0001"
 LUIS = "U0LUIS001"
 LINK = "https://acme-fiber.slack.com/archives/C0ACME0001/p1700000000000100"
-ON = Policy(True, frozenset({MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE}), frozenset({LUIS}))
+TESTED = check_version(ServerInfo("1.5.6", MAX_API_VERSION))
+ON = Policy(True, frozenset({MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE}), frozenset({LUIS}), TESTED)
 SECRET_PREFIXES = {"SLACK_BOT_TOKEN": "xoxb-", "SLACK_APP_TOKEN": "xapp-", "INVENTREE_TOKEN": ""}
 SAMS_TRUCK = 11
 """The destination `view` matches by default: Sam's mapped vehicle."""
@@ -114,7 +116,7 @@ def test_a_click_from_someone_who_is_not_an_approver_now_counts_for_nothing() ->
     judgement = run([view(MovementType.RETURN)], clicked_by=SAM)
     assert judgement.verdict is Verdict.WAITS
     assert judgement.approved_by is None
-    removed = Policy(True, ON.auto_apply, frozenset())
+    removed = Policy(True, ON.auto_apply, frozenset(), TESTED)
     assert run([view(MovementType.RETURN)], removed, clicked_by=LUIS).verdict is Verdict.WAITS
 
 
@@ -128,18 +130,31 @@ def test_a_click_from_someone_who_is_not_an_approver_never_names_them_in_the_not
 
 
 def test_an_empty_auto_apply_list_makes_every_movement_wait() -> None:
-    review_first = Policy(True, frozenset(), ON.approvers)
+    review_first = Policy(True, frozenset(), ON.approvers, TESTED)
     assert run([view()], review_first).verdict is Verdict.WAITS
     assert run([view()], review_first, clicked_by=LUIS).allowed
 
 
 @pytest.mark.parametrize("clicked_by", [None, LUIS])
 def test_the_switch_blocks_alone_whoever_clicks(clicked_by: str | None) -> None:
-    off = Policy(False, ON.auto_apply, ON.approvers)
+    off = Policy(False, ON.auto_apply, ON.approvers, TESTED)
     judgement = run([view()], off, clicked_by=clicked_by)
     assert judgement.verdict is Verdict.BLOCKED
     assert judgement.why == "stock writes are off"
     assert judgement.requests == ()
+
+
+@pytest.mark.parametrize("api_version", [MIN_API_VERSION - 1, MAX_API_VERSION + 1])
+@pytest.mark.parametrize("clicked_by", [None, LUIS])
+def test_an_untested_inventree_blocks_alone_whoever_clicks(api_version: int, clicked_by: str | None) -> None:
+    """Writes on, an automatic take-out and an approver's click: an untested API version still writes nothing."""
+    untested = Policy(True, ON.auto_apply, ON.approvers, check_version(ServerInfo("1.x", api_version)))
+    for movement_type in (MovementType.TAKE_TO_VEHICLE, MovementType.RETURN):
+        judgement = run([view(movement_type)], untested, clicked_by=clicked_by)
+        assert judgement.verdict is Verdict.BLOCKED
+        assert judgement.why == f"InvenTree 1.x (API {api_version}) is not tested for writes"
+        assert judgement.requests == ()
+        assert judgement.approved_by is None
 
 
 @pytest.mark.parametrize("clicked_by", [None, LUIS])
@@ -264,9 +279,11 @@ def test_the_gate_reads_the_settings_it_is_given() -> None:
         "inventree": {"url": "http://inventree.local:8000"},
     }
     environ = {name: prefix + "synthetic" for name, prefix in SECRET_PREFIXES.items()}
-    fresh = Policy.of(parse_settings(data, environ))
-    assert fresh == Policy(False, frozenset(TAKE_OUTS), frozenset({LUIS}))
+    fresh = Policy.of(parse_settings(data, environ), TESTED)
+    assert fresh == Policy(False, frozenset(TAKE_OUTS), frozenset({LUIS}), TESTED)
     assert run([view()], fresh).verdict is Verdict.BLOCKED
     data["writes"] = {"enabled": True}
     data["policy"] = {"auto_apply": []}
-    assert Policy.of(parse_settings(data, environ)) == Policy(True, frozenset(), frozenset({LUIS}))
+    assert Policy.of(parse_settings(data, environ), TESTED) == Policy(True, frozenset(), frozenset({LUIS}), TESTED)
+    untested = check_version(ServerInfo("1.x", MAX_API_VERSION + 1))
+    assert Policy.of(parse_settings(data, environ), untested).server is untested

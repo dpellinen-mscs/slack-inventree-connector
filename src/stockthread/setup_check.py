@@ -23,6 +23,8 @@ MINIMUM_ROLES: Mapping[str, frozenset[str]] = {
     "stock": frozenset({"view", "add"}),
 }
 """The documented minimum for the connector's user (design section 5, `test_char_restricted_user_can_adjust`)."""
+WRITE_ROLES: Mapping[str, frozenset[str]] = {"stock": frozenset({"add"})}
+"""The part of the minimum that only writes need: with writes off, lacking it is a note, not an error."""
 IMPLIED = {"stock": frozenset({"change"})}
 """Granted with "add" on Stock Item by the server itself: never reported as more than needed."""
 _NEEDED_FOR = {
@@ -64,29 +66,40 @@ def lacks_catalog_view(body: Mapping[str, Any]) -> bool:
     return any("view" not in granted.get(name, frozenset()) for name in ("part", "stock_location"))
 
 
-def check_roles(body: Mapping[str, Any]) -> list[Finding]:
-    """What the token's user (`GET /api/user/roles/`) lacks, and what it has beyond the minimum."""
+def check_roles(body: Mapping[str, Any], *, writes: bool) -> list[Finding]:
+    """What the token's user (`GET /api/user/roles/`) lacks, and what it has beyond the minimum. `writes`: whether
+    stock writes are on (`writes.enabled`). With them off a dry run needs only to view, so a lacking write
+    permission is noted and the check still passes; having it is never more than needed, since turning writes on
+    needs it."""
     granted = _granted(body)
     if granted is None:
         return [Finding(Level.ERROR, "roles: the server did not say which roles the token's user has")]
     found = []
+    later = []
     for name, needed in MINIMUM_ROLES.items():
         for permission in sorted(needed - granted.get(name, frozenset())):
+            if not writes and permission in WRITE_ROLES.get(name, frozenset()):
+                later.append(
+                    Finding(
+                        Level.OK, f"roles: {name} lacks {permission}, needed only once writes are on (writes are off)"
+                    )
+                )
+                continue
             found.append(
                 Finding(Level.ERROR, f"roles: {name} lacks {permission}, needed for {_NEEDED_FOR[(name, permission)]}")
             )
     if body.get("is_superuser") is True:  # every permission, whatever the roles say: listing them adds nothing
         found.append(Finding(Level.WARN, "roles: the token's user is a superuser; use a dedicated user"))
-        return found
+        return [*found, *later]
     if body.get("is_staff") is True:
         found.append(Finding(Level.WARN, "roles: the token's user is staff; use a dedicated user"))
     for name in sorted(granted):
         extra = granted[name] - MINIMUM_ROLES.get(name, frozenset()) - IMPLIED.get(name, frozenset())
         if extra:
             found.append(Finding(Level.WARN, f"roles: {name} has {', '.join(sorted(extra))}, more than needed"))
-    if not found:
+    if not found and not later:
         found.append(Finding(Level.OK, "roles: the token's user has the minimum roles and no more"))
-    return found
+    return [*found, *later]
 
 
 def check_vehicles(catalog: Catalog, vehicles: Mapping[str, str]) -> list[Finding]:
