@@ -130,10 +130,12 @@ payloads whose channel or message does not fit the stored id.
   - [x] Read-back, checks 1 and 2: the marker's entries carry the plan's deltas, and the totals are the snapshot plus the plan (`readback.verify`)
   - [x] Read-back, check 3: no entry without the marker on the named or created stock items since the snapshot (`InvenTreeReader.item_entries`, `Snapshot.history`)
   - [x] Apply orchestrator: writer lock, judge again, marker check, precondition, intent, send, read-back, state (`apply.apply_request`; not called by the worker yet)
+  - [x] Read back a request a read error left `applied` (`apply.readback_request`; not called by the worker yet)
   - [ ] Worker: run `apply_request` for approved requests, and a read-back left undone by a read error (`applied`) run again
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
-  - [ ] A crash in `applying` becomes unknown; recovery of an unknown undo; the worker runs recovery
+  - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`; not called yet)
+  - [ ] Recovery of an unknown undo; the worker runs the crash sweep at start and recovery
 - [ ] Plans with several requests, and the `partially_applied` state
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
 - [ ] Undo by button, authorized and idempotent, built from the observed history
