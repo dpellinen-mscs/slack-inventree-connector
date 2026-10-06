@@ -132,6 +132,8 @@ payloads whose channel or message does not fit the stored id.
   - [x] Apply orchestrator: writer lock, judge again, marker check, precondition, intent, send, read-back, state (`apply.apply_request`; not called by the worker yet)
   - [ ] Worker: run `apply_request` for approved requests, and a read-back left undone by a read error (`applied`) run again
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
+  - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
+  - [ ] A crash in `applying` becomes unknown; recovery of an unknown undo; the worker runs recovery
 - [ ] Plans with several requests, and the `partially_applied` state
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
 - [ ] Undo by button, authorized and idempotent, built from the observed history

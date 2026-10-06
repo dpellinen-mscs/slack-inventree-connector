@@ -1480,6 +1480,20 @@ server, so recovery waits before it concludes anything:
 | Not found | Unchanged | `failed`: never tried again by the connector (below) |
 | Not found | Changed | `verify_failed` |
 
+Built (apply only, not undo): `apply.recover_request`. It waits until
+`apply.settle_seconds` have passed since the outcome became unknown, not
+since the intent was stored, because the send has no overall deadline
+(the store's clock, `Store.unknown_attempt`), rebuilds the stored request and
+snapshot (`Snapshot.from_json`), and searches the marker. Found: `applied`,
+then the read-back of step 5. Not found: it compares each named stock item
+(gone, no longer at a location the movement acts on, another quantity), each
+total of the snapshot, and each named item's history with the snapshot;
+any difference, or an entry of another attempt of the request, is
+`verify_failed`, and none is `failed`. Tested on a real server through the
+fault proxy: a write whose answer was lost or replaced after it ran is
+`verified`, one that never reached the server is `failed`. A crash that
+leaves a request in `applying` is not handled yet.
+
 Recovery records its conclusion about the marker on the attempt. A marker
 found later for an attempt that recovery did not find is a late write:
 the state recovery chose does not account for it, and an undo built on

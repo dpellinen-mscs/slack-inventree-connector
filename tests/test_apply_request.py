@@ -4,7 +4,7 @@ whole stock item the way InvenTree does (`test_char_history_deltas`). The real s
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -13,7 +13,7 @@ import anyio
 import pytest
 from views import DESTINATION, SOURCE, picked, view
 
-from stockthread.apply import Applied, apply_request
+from stockthread.apply import Applied, apply_request, recover_request
 from stockthread.core.marker import AttemptKind, Marker, marked
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
@@ -21,8 +21,9 @@ from stockthread.core.write_request import WriteRequest
 from stockthread.gate import Judgement, Verdict
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, MarkedEntry, ServerInfo
 from stockthread.plan import plan_requests
+from stockthread.precondition import Snapshot
 from stockthread.slack.replies import MovementView
-from stockthread.store import Store
+from stockthread.store import Store, WriteBlocked
 from stockthread.writer import Outcome, Sent, WriteRefused
 
 S = RequestState
@@ -60,6 +61,10 @@ class FakeInvenTree:
         self.answer = Outcome.ACCEPTED
         self.raises: BaseException | None = None
         self.moves = True
+        self.lands = False
+        """With an answer other than accepted: the write ran all the same."""
+        self.with_entry = True
+        """False: the write leaves no history entry (1.5.6 with PostgreSQL, `test_char_overlong_notes_...`)."""
         self.before_write: Callable[[], None] | None = None
         self.fail_reads = False
         self.fail_reads_after_write = False
@@ -109,7 +114,7 @@ class FakeInvenTree:
         self.sent.append(request)
         if self.raises is not None:
             raise self.raises
-        if self.answer is not Outcome.ACCEPTED:
+        if self.answer is not Outcome.ACCEPTED and not self.lands:
             return Sent(self.answer, f"POST {request.path}: {self.answer}")
         if self.before_write is not None:
             self.before_write()
@@ -117,12 +122,15 @@ class FakeInvenTree:
             for line in request.body["items"]:
                 stock = self.items[int(line["pk"])]
                 stock[1] = request.body["location"]
-                self.write_entry(
-                    int(line["pk"]),
-                    str(request.body["notes"]),
-                    {"location": request.body["location"], "quantity": float(stock[2])},
-                    20,
-                )
+                if self.with_entry:
+                    self.write_entry(
+                        int(line["pk"]),
+                        str(request.body["notes"]),
+                        {"location": request.body["location"], "quantity": float(stock[2])},
+                        20,
+                    )
+        if self.answer is not Outcome.ACCEPTED:  # it ran, but the answer did not say so (a timeout, a 5xx)
+            return Sent(self.answer, f"POST {request.path}: {self.answer}")
         return Sent(Outcome.ACCEPTED, f"POST {request.path}: 201", 201)
 
 
@@ -316,3 +324,169 @@ async def test_a_second_run_after_a_verified_write_sends_nothing(store: Store) -
     with pytest.raises(ValueError, match="not approved"):
         await run(store, fake)
     assert len(fake.sent) == 1
+
+
+async def unknown(store: Store, fake: FakeInvenTree) -> None:
+    fake.answer = Outcome.UNKNOWN
+    assert (await run(store, fake)).state is S.UNKNOWN
+
+
+async def recover(store: Store, fake: FakeInvenTree, settle: timedelta = timedelta(0)) -> Applied:
+    lock = fake.lock = anyio.Lock()
+    return await recover_request(KEY, MOVE, store=store, reader=fake, lock=lock, settle=settle)
+
+
+@pytest.mark.anyio
+async def test_recovery_waits_for_the_settle_time_and_reads_nothing(store: Store) -> None:
+    fake = FakeInvenTree()
+    await unknown(store, fake)
+    fake.fail_reads = True
+    applied = await recover(store, fake, settle=timedelta(hours=1))
+    assert applied.state is S.UNKNOWN
+    assert store.request(KEY).state is S.UNKNOWN
+
+
+@pytest.mark.anyio
+async def test_a_write_that_landed_with_its_marker_is_read_back_and_verified(store: Store) -> None:
+    fake = FakeInvenTree()
+    fake.lands = True
+    await unknown(store, fake)
+    applied = await recover(store, fake)
+    assert applied == Applied(S.VERIFIED, "marker found; read back: as planned")
+    assert store.request(KEY).state is S.VERIFIED
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.anyio
+async def test_no_marker_and_no_change_is_failed_and_never_sent_again(store: Store) -> None:
+    fake = FakeInvenTree()
+    await unknown(store, fake)
+    applied = await recover(store, fake)
+    assert applied == Applied(S.FAILED, "marker not found; nothing changed, so it never ran")
+    assert store.request(KEY).state is S.FAILED
+    with pytest.raises(WriteBlocked):  # ADR 0015: an unknown write may still land
+        store.transition(KEY, expected=S.FAILED, target=S.APPROVED, actor=Actor.HUMAN)
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.anyio
+async def test_no_marker_but_the_stock_moved_is_verify_failed(store: Store) -> None:
+    """A write that ran without its history entry (a 500 after the commit, on 1.5.6 with PostgreSQL)."""
+    fake = FakeInvenTree()
+    fake.lands, fake.with_entry = True, False
+    await unknown(store, fake)
+    applied = await recover(store, fake)
+    assert applied.state is S.VERIFY_FAILED
+    assert applied.problems == (
+        "part 1 at location 10 holds 0, the snapshot says 2",
+        "part 1 at location 11 holds 2, the snapshot says 0",
+    )
+    assert store.request(KEY).state is S.VERIFY_FAILED
+
+
+@pytest.mark.anyio
+async def test_no_marker_but_another_entry_on_the_item_is_verify_failed(store: Store) -> None:
+    fake = FakeInvenTree()
+    await unknown(store, fake)
+    fake.write_entry(ITEM, "recount by hand", {"quantity": 2.0}, 10)
+    applied = await recover(store, fake)
+    assert applied.state is S.VERIFY_FAILED
+    assert applied.problems == ("stock item 57 has history entries 1001 the snapshot lacks",)
+
+
+@pytest.mark.anyio
+async def test_no_marker_and_an_item_that_holds_another_quantity_is_verify_failed(store: Store) -> None:
+    """The totals still add up: 1 of item 57 went to a new item 58 at the same place, with no entry on 57."""
+    fake = FakeInvenTree()
+    await unknown(store, fake)
+    fake.items[ITEM][2] = Decimal(1)
+    fake.items[58] = [1, SOURCE, Decimal(1)]
+    applied = await recover(store, fake)
+    assert applied.state is S.VERIFY_FAILED
+    assert applied.problems == ("stock item 57 holds 1, the snapshot says 2",)
+
+
+@pytest.mark.anyio
+async def test_no_marker_of_the_attempt_but_one_of_another_is_verify_failed(store: Store) -> None:
+    fake = FakeInvenTree()
+    await unknown(store, fake)
+    other = Marker(store.request(KEY).marker_id, AttemptKind.APPLY, 2)
+    fake.write_entry(ITEM, f"{other} U0SAM0001", {}, 20)
+    applied = await recover(store, fake)
+    assert applied.state is S.VERIFY_FAILED
+    assert applied.problems[0] == "history entries 1001 carry another attempt"
+
+
+@pytest.mark.anyio
+async def test_no_marker_and_the_item_gone_is_verify_failed(store: Store) -> None:
+    fake = FakeInvenTree()
+    await unknown(store, fake)
+    del fake.items[ITEM]
+    applied = await recover(store, fake)
+    assert applied.state is S.VERIFY_FAILED
+    assert "stock item 57 is gone" in applied.problems
+
+
+@pytest.mark.anyio
+async def test_a_read_error_in_recovery_changes_nothing(store: Store) -> None:
+    fake = FakeInvenTree()
+    await unknown(store, fake)
+    fake.fail_reads = True
+    with pytest.raises(InvenTreeError):
+        await recover(store, fake)
+    assert store.request(KEY).state is S.UNKNOWN
+    assert store.unknown_attempt(KEY).marker == store.markers(KEY)[0]
+
+
+@pytest.mark.anyio
+async def test_only_an_unknown_request_is_recovered(store: Store) -> None:
+    fake = FakeInvenTree()
+    await run(store, fake)
+    with pytest.raises(ValueError, match="not unknown"):
+        await recover(store, fake)
+
+
+def test_the_settle_time_is_measured_with_the_store_clock(tmp_path: Path) -> None:
+    now = [datetime(2026, 10, 6, 9, 0, tzinfo=UTC)]
+    opened = Store.open(tmp_path / "clock.db", clock=lambda: now[0])
+    opened.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
+    opened.create_post(POST)
+    opened.create_plan(POST, "0" * 64, (Operation.TRANSFER,))
+    opened.transition(KEY, expected=S.PLANNED, target=S.APPROVED, actor=Actor.HUMAN)
+    fake = FakeInvenTree()
+    fake.answer = Outcome.UNKNOWN
+
+    async def slow_send(request: WriteRequest) -> Sent:  # a long connect: the clock moves while the write is sent
+        now[0] += timedelta(seconds=300)
+        return await FakeInvenTree.send(fake, request)
+
+    fake.send = slow_send  # type: ignore[method-assign]
+    anyio.run(unknown, opened, fake)
+    now[0] += timedelta(seconds=119)
+    assert anyio.run(recover, opened, fake, timedelta(seconds=120)).state is S.UNKNOWN
+    now[0] += timedelta(seconds=1)
+    assert anyio.run(recover, opened, fake, timedelta(seconds=120)).state is S.FAILED
+    opened.close()
+
+
+def test_a_snapshot_survives_its_stored_form() -> None:
+    snapshot = Snapshot({57: Decimal("2.5")}, {(1, 10): Decimal(3), (1, 11): Decimal(0)}, {57: frozenset({570, 571})})
+    assert Snapshot.from_json(snapshot.as_json()) == snapshot
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        None,
+        {"stock_items": {}, "totals": {}},
+        {"stock_items": {"57": 2}, "totals": {}, "history": {}},
+        {"stock_items": {"57": "-1"}, "totals": {}, "history": {}},
+        {"stock_items": {"57": "NaN"}, "totals": {}, "history": {}},
+        {"stock_items": {"0": "1"}, "totals": {}, "history": {}},
+        {"stock_items": {}, "totals": {"1-10": "1"}, "history": {}},
+        {"stock_items": {}, "totals": {}, "history": {"57": ["570"]}},
+    ],
+)
+def test_a_stored_snapshot_that_is_not_one_is_refused(stored: Any) -> None:
+    with pytest.raises(ValueError, match=r"stored|not a"):
+        Snapshot.from_json(stored)
