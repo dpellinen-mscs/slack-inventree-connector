@@ -195,14 +195,15 @@ class InvenTreeReader:
             marker = marked(row.get("notes"), marker_id)
             if marker is None:
                 continue
-            pk, item, deltas = row.get("pk"), row.get("item"), row.get("deltas")
+            pk, item, deltas, kind = row.get("pk"), row.get("item"), row.get("deltas"), row.get("tracking_type")
             if (
                 type(pk) is not int
                 or (item is not None and type(item) is not int)
                 or (deltas is not None and not isinstance(deltas, dict))
+                or (kind is not None and type(kind) is not int)
             ):
-                raise InvenTreeError("a stock history entry has no valid pk, item or deltas")
-            found.append(MarkedEntry(pk, item, marker, deltas or {}))
+                raise InvenTreeError("a stock history entry has no valid pk, item, deltas or type")
+            found.append(MarkedEntry(pk, item, marker, deltas or {}, kind))
         return found
 
     async def stock_item_gone(self, pk: int) -> bool:
@@ -254,6 +255,8 @@ class MarkedEntry:
     """The stock item the entry belongs to (None if the server did not say)."""
     marker: Marker
     deltas: Mapping[str, Any]
+    tracking_type: int | None = None
+    """InvenTree's entry type code (`readback`), None if the server did not say."""
 
 
 def _retry_after(response: httpx.Response, attempt: int) -> float:
