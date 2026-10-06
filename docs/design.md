@@ -1385,8 +1385,10 @@ connector never has two InvenTree writes in flight and cannot race itself.
    (`test_char_history_deltas`): a split (42, `removed`, `quantity` left,
    `stockitem` the new item) plus an entry on the new item (40); a whole
    move (20, `location`); an add (11), a remove (12), a count (10). Only a
-   remove of all an item held may leave it gone; its entry then has no
-   item, and below API 530 the search does not find it. An entry of
+   remove of all an item held, or a count to 0, may leave it gone
+   (delete_on_deplete); its entry then has no item, and below API 530 the
+   search does not find it. Step 2's excuse (`apply.depletes`) does not
+   cover a count to 0 yet. An entry of
    another attempt of the request is a problem. Not built yet: check 3,
    which needs the history entry ids in the snapshot.
 6. **Record.** Move to `verified` and post the receipt.
