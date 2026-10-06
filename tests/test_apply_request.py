@@ -13,7 +13,7 @@ import anyio
 import pytest
 from views import DESTINATION, SOURCE, picked, view
 
-from stockthread.apply import Applied, apply_request, recover_request
+from stockthread.apply import Applied, apply_request, readback_request, recover_request
 from stockthread.core.marker import AttemptKind, Marker, marked
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
@@ -69,6 +69,7 @@ class FakeInvenTree:
         self.fail_reads = False
         self.fail_reads_after_write = False
         self.history_fails: set[int] = set()
+        self.fail_stock_reads = False
         self.lock: anyio.Lock | None = None
 
     def write_entry(self, item: int, notes: str, deltas: dict[str, Any], kind: int) -> None:
@@ -102,6 +103,8 @@ class FakeInvenTree:
 
     async def stock_items(self, part: int, location: int) -> list[dict[str, Any]]:
         self._read()
+        if self.fail_stock_reads:
+            raise InvenTreeError("GET /api/stock/ failed: ConnectError")
         return [
             {"pk": pk, "part": part, "location": location, "quantity": str(quantity), "status": 10, "allocated": 0}
             for pk, (on, at, quantity) in sorted(self.items.items())
@@ -444,6 +447,87 @@ async def test_only_an_unknown_request_is_recovered(store: Store) -> None:
     await run(store, fake)
     with pytest.raises(ValueError, match="not unknown"):
         await recover(store, fake)
+
+
+async def read_back(store: Store, fake: FakeInvenTree, movement: MovementView = MOVE) -> Applied:
+    lock = fake.lock = anyio.Lock()
+    return await readback_request(KEY, movement, store=store, reader=fake, lock=lock)
+
+
+async def left_applied(store: Store, fake: FakeInvenTree) -> None:
+    """The write is accepted, and the read-back fails on a read error."""
+    fake.fail_reads_after_write = True
+    with pytest.raises(InvenTreeError):
+        await run(store, fake)
+    assert store.request(KEY).state is S.APPLIED
+    fake.fail_reads_after_write = False
+
+
+@pytest.mark.anyio
+async def test_a_request_left_applied_is_read_back_later_and_verified(store: Store) -> None:
+    fake = FakeInvenTree()
+    await left_applied(store, fake)
+    applied = await read_back(store, fake)
+    assert applied == Applied(S.VERIFIED, "read back: as planned")
+    assert store.request(KEY).state is S.VERIFIED
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.anyio
+async def test_a_request_left_applied_that_does_not_agree_is_verify_failed(store: Store) -> None:
+    fake = FakeInvenTree()
+    fake.moves = False
+    await left_applied(store, fake)
+    applied = await read_back(store, fake)
+    assert applied.state is S.VERIFY_FAILED
+    assert applied.problems
+    assert store.request(KEY).state is S.VERIFY_FAILED
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.anyio
+async def test_a_recovered_request_left_applied_is_read_back_later(store: Store) -> None:
+    fake = FakeInvenTree()
+    fake.lands = True
+    await unknown(store, fake)
+    fake.fail_stock_reads = True
+    with pytest.raises(InvenTreeError):
+        await recover(store, fake)
+    assert store.request(KEY).state is S.APPLIED
+    fake.fail_stock_reads = False
+    applied = await read_back(store, fake)
+    assert applied == Applied(S.VERIFIED, "read back: as planned")
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.anyio
+async def test_a_read_error_in_a_later_read_back_leaves_the_request_applied(store: Store) -> None:
+    fake = FakeInvenTree()
+    await left_applied(store, fake)
+    fake.fail_reads = True
+    with pytest.raises(InvenTreeError):
+        await read_back(store, fake)
+    assert store.request(KEY).state is S.APPLIED
+
+
+@pytest.mark.anyio
+async def test_only_an_applied_request_is_read_back(store: Store) -> None:
+    fake = FakeInvenTree()
+    fake.fail_reads = True  # none may happen
+    with pytest.raises(ValueError, match="not applied"):
+        await read_back(store, fake)
+    with pytest.raises(KeyError):
+        store.applied_attempt(KEY)
+
+
+@pytest.mark.anyio
+async def test_a_later_read_back_refuses_another_movement(store: Store) -> None:
+    fake = FakeInvenTree()
+    await left_applied(store, fake)
+    fake.fail_reads = True  # none may happen
+    with pytest.raises(ValueError, match="not built from this movement"):
+        await read_back(store, fake, view(stock=(picked((ITEM, "1")),)))
+    assert store.request(KEY).state is S.APPLIED
 
 
 def test_the_settle_time_is_measured_with_the_store_clock(tmp_path: Path) -> None:

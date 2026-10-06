@@ -1433,8 +1433,14 @@ error or a cancellation while sending is `unknown`. After `applied` it reads bac
 the API version, the marker's entries, the stock, then the history of the
 named and created items, so a change the stock read shows has its entry) and records `verified` or `verify_failed`. A read
 error before the intent leaves `approved`; one in the read-back leaves
-`applied`, which blocks every other write of the post. Nothing calls it
-yet.
+`applied`, which blocks every other write of the post, until
+`apply.readback_request` reads it back from the stored request and
+snapshot of its last attempt (`Store.applied_attempt`) and records
+`verified` or `verify_failed`; it writes nothing, and a read error leaves
+`applied` again. `applied` blocks writes of this post only, so a later
+write of another post to the same stock item before this read-back shows
+as another writer's entry: `verify_failed`, a false alarm that fails
+safe. The caller should read back promptly. Nothing calls them yet.
 
 Another InvenTree user can still change the stock between steps 3 and 4.
 The connector cannot lock InvenTree, so that window cannot be closed, only
@@ -1491,8 +1497,10 @@ total of the snapshot, and each named item's history with the snapshot;
 any difference, or an entry of another attempt of the request, is
 `verify_failed`, and none is `failed`. Tested on a real server through the
 fault proxy: a write whose answer was lost or replaced after it ran is
-`verified`, one that never reached the server is `failed`. A crash that
-leaves a request in `applying` is not handled yet.
+`verified`, one that never reached the server is `failed`. A read error
+in the read-back after the marker is found leaves `applied`, which
+`apply.readback_request` concludes. A crash that leaves a request in
+`applying` is not handled yet.
 
 Recovery records its conclusion about the marker on the attempt. A marker
 found later for an attempt that recovery did not find is a late write:
