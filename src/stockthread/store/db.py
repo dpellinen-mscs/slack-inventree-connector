@@ -695,8 +695,8 @@ class Store:
         """Remember that a message was edited or deleted, whether or not the message itself has arrived.
 
         Every event is noted, so each later edit of a message makes its post due again. Idempotent: once per
-        event, and once per message for a note without an event. The post of a message that has arrived loses its
-        current plan at once, as in `place_message`.
+        event, and once per message for a note without an event. The post of the message, or the post it keys,
+        loses its current plan at once, as in `place_message`.
         """
         with self._transaction():
             self._check_lock(owner)
@@ -719,11 +719,13 @@ class Store:
                 (*key, slack_event_id, self._now()),
             )
             self._audit("ingest", "revision_noted", slack_event_id=slack_event_id)
-            held = self._db.execute(
-                "SELECT post_id FROM post_messages WHERE workspace_id = ? AND channel_id = ? AND ts = ?", key
-            ).fetchone()
-            if held is not None:
-                self._replace_plan(int(held[0]), None)
+            # The message's post, or the post it keys: a root that has not arrived still makes its post due.
+            for (post_id,) in self._db.execute(
+                "SELECT post_id FROM post_messages WHERE workspace_id = ?1 AND channel_id = ?2 AND ts = ?3"
+                " UNION SELECT id FROM posts WHERE workspace_id = ?1 AND channel_id = ?2 AND ts = ?3",
+                key,
+            ).fetchall():
+                self._replace_plan(int(post_id), None)
 
     def post_change_bodies(self, key: PostKey, through: int) -> dict[str, list[str | None]]:
         """Each noted edit or deletion of a message of the post, or of the message it is keyed on, up to the
@@ -857,14 +859,17 @@ class Store:
 
         The post's current plan follows the reply that stands in the thread, in the same transaction, so no reply
         is ever stored with another reply's plan. `plan` is the plan of that reply when it could apply in full: for
-        `replied`, the plan of the new reply, which becomes the current revision; for `unchanged`, the plan of the
-        reply that still stands, kept when it is current already and made again otherwise (after `stale_plan`, or a
-        reply given up on). Every other outcome leaves the post with no current plan. A plan replaced becomes stale,
+        `replied`, the plan of the new reply; for `unchanged`, the plan of the reply that still stands, made again
+        (the message or change that made the revision due staled it, as `stale_plan` or a reply given up on may
+        have). Either becomes the current revision only when this dry run knew of every message, change and answer
+        the post holds now. Every other outcome leaves the post with no current plan. A plan replaced becomes stale,
         and its requests that have not started a write are cancelled.
         """
         posted = (DryRunOutcome.REPLIED, DryRunOutcome.RETRACTED)
         if plan is not None and (outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or result is None):
             raise ValueError("only a reply with its record makes a plan")
+        if plan is not None and question is not None:
+            raise ValueError("a reply that asks a question needs a human: it makes no plan")
         if plan is not None and not plan.operations:
             raise ValueError("a plan revision holds at least one request")
         if reply_ts is not None and (outcome not in posted or not _SLACK_TS.fullmatch(reply_ts)):
@@ -935,12 +940,7 @@ class Store:
                     self._questions_go_stale(post_id, now)
                 if question is not None:
                     self._ask(post_id, key, revision, reply_ts, question, now)
-                current = self._db.execute(
-                    "SELECT input_hash FROM plans WHERE post_id = ? AND state = 'current'", (post_id,)
-                ).fetchone()
-                kept = outcome is DryRunOutcome.UNCHANGED and plan is not None and current == (plan.input_hash,)
-                if not kept:
-                    self._replace_plan(post_id, plan)
+                self._replace_plan(post_id, self._if_newest(post_id, plan, through, changes, answers))
                 return
             cursor = self._db.execute(
                 "UPDATE posts SET dry_run_at = ?, reply_ts = ?, plan_from = ? WHERE id = ? AND dry_run_at IS NULL",
@@ -956,7 +956,17 @@ class Store:
             self._audit(Actor.PLANNER, f"dry_run_{outcome.value}", post_id=post_id)
             if question is not None:
                 self._ask(post_id, key, revision, reply_ts, question, now)
-            self._replace_plan(post_id, plan)
+            self._replace_plan(post_id, self._if_newest(post_id, plan, through, changes, 0))
+
+    def _if_newest(
+        self, post_id: int, plan: NewPlan | None, through: int, changes: int, answers: int
+    ) -> NewPlan | None:
+        """`plan`, when its dry run knew of every message, change and answer the post holds now; else None. A reply
+        recorded late (its call was still running) may be due for the next revision already: no plan of it stands."""
+        (newest,) = self._db.execute("SELECT max(id) FROM post_messages WHERE post_id = ?", (post_id,)).fetchone()
+        if (newest, changes, answers) != (through, self._changes_through(post_id), self._answers_through(post_id)):
+            return None
+        return plan
 
     def _questions_go_stale(self, post_id: int, now: str) -> None:
         cursor = self._db.execute(

@@ -1451,8 +1451,11 @@ that records it (`Store.finish_dry_run`): a reply whose record could apply
 in full (`plan_record.plan_of`: it rebuilds, it is not rejected, and
 `plan_requests` builds every request from it) makes the post's next plan
 revision, with one `planned` request per movement. An `unchanged`
-revision keeps the plan of the reply that still stands, or makes it again
-when it is no longer current. Every other outcome (a reply that needs a
+revision makes the plan of the reply that still stands again. Either is
+made only when its dry run knew of every message, change and answer the
+post holds by the time it is recorded (a reply whose call was still
+running may be due for the next revision already), and never with a
+question (a reply that asks one needs a human). Every other outcome (a reply that needs a
 human, a notice taking the reply back, withheld, failed, given up) leaves
 the post with no current plan. A message that joins the post, or an edit
 or deletion noted of one of its messages, makes the current plan stale at

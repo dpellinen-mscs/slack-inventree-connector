@@ -931,23 +931,53 @@ def test_the_current_plan_is_always_the_one_of_the_reply_that_stands(store: Stor
     assert "current" not in [state for _, _, state, _ in plans(path)]
 
 
-def test_a_revision_made_by_an_answer_alone_that_reads_the_same_keeps_the_plan_approval_and_all(
-    store: Store, path: Path
-) -> None:
+def test_a_reply_that_asks_a_question_makes_no_plan(store: Store, path: Path) -> None:
     store.place_message(OWNER, KEY, user_id=SAM, thread_ts=None, window_seconds=5)
-    plan = NewPlan("1" * 64, (Operation.TRANSFER,))
     question = NewQuestion({"ask": "confirm"}, False, [("y" * 22, {"kind": "yes"})], poster=SAM, expires_from=ROOT)
+    with pytest.raises(ValueError, match="makes no plan"):
+        store.finish_dry_run(
+            OWNER,
+            KEY,
+            DryRunOutcome.REPLIED,
+            "1790009999.000001",
+            result={},
+            question=question,
+            plan=NewPlan("1" * 64, (Operation.TRANSFER,)),
+        )
+    assert plans(path) == []
+
+
+def test_a_reply_recorded_after_the_post_was_due_again_makes_no_plan(store: Store, path: Path) -> None:
+    plan = NewPlan("1" * 64, (Operation.TRANSFER,))
+    store.place_message(OWNER, KEY, user_id=SAM, thread_ts=None, window_seconds=5)
+    # The reply's call was still running when a thread reply joined: the dry run did not read it.
+    store.place_message(
+        OWNER, PostKey(WORKSPACE, CHANNEL, "1790000020.000100"), user_id=LUIS, thread_ts=ROOT, window_seconds=5
+    )
+    store.finish_dry_run(OWNER, KEY, DryRunOutcome.REPLIED, "1790009999.000001", result={}, read=[ROOT], plan=plan)
+    assert plans(path) == []
+    store.finish_dry_run(OWNER, KEY, DryRunOutcome.UNCHANGED, revision=2, result={}, plan=plan)
+    assert [state for _, _, state, _ in plans(path)] == ["current"]
+    # An edit noted before the next revision's late record:
+    store.place_message(
+        OWNER, PostKey(WORKSPACE, CHANNEL, "1790000040.000100"), user_id=LUIS, thread_ts=ROOT, window_seconds=5
+    )
+    changes = store.post_changes_through(KEY)
+    store.note_revision(OWNER, KEY)
     store.finish_dry_run(
-        OWNER, KEY, DryRunOutcome.REPLIED, "1790009999.000001", result={}, question=question, plan=plan
+        OWNER, KEY, DryRunOutcome.REPLIED, "1790009999.000002", revision=3, result={}, changes=changes, plan=plan
     )
-    store.transition(
-        RequestKey(KEY, 1, 1), expected=RequestState.PLANNED, target=RequestState.APPROVED, actor=Actor.HUMAN
-    )
-    button = store.button("y" * 22)
-    assert button is not None
-    store.answer_question(OWNER, button, SAM)
-    store.finish_dry_run(OWNER, KEY, DryRunOutcome.UNCHANGED, revision=2, result={}, answers=1, plan=plan)
-    assert plans(path) == [(1, "1", "current", [("transfer", "approved")])]
+    assert [state for _, _, state, _ in plans(path)] == ["stale"]
+
+
+def test_an_edit_of_a_root_that_never_arrived_stales_its_posts_plan(store: Store, path: Path) -> None:
+    reply = PostKey(WORKSPACE, CHANNEL, "1790000020.000100")
+    store.place_message(OWNER, reply, user_id=LUIS, thread_ts=ROOT, window_seconds=5)
+    plan = NewPlan("1" * 64, (Operation.TRANSFER,))
+    store.finish_dry_run(OWNER, KEY, DryRunOutcome.REPLIED, "1790009999.000001", result={}, plan=plan)
+    assert [state for _, _, state, _ in plans(path)] == ["current"]
+    store.note_revision(OWNER, KEY)
+    assert [state for _, _, state, _ in plans(path)] == ["stale"]
 
 
 def test_a_change_noted_after_a_dry_run_makes_a_revision_that_reads_no_further(store: Store, path: Path) -> None:
