@@ -1304,10 +1304,12 @@ connector never has two InvenTree writes in flight and cannot race itself.
    conclusion).
    Built (the caller): `apply.check_post_markers` searches every
    request's marker id (`InvenTreeReader.marker_entries`) and, for a
-   `missing` marker of a removal (the apply of a remove, the undo of an
-   add) on a server below API 530 (`DEPLETING_MARKER_FOUND_FROM`; 1.5.6
-   finds that marker), whose stored snapshot shows every line taking its
-   item's whole quantity (`apply.depletes`), asks for every stock item of
+   `missing` marker on a server below API 530
+   (`DEPLETING_MARKER_FOUND_FROM`; 1.5.6 finds that marker) of a write
+   that left every item it named at 0 (a removal, the apply of a remove
+   or the undo of an add, whose stored snapshot shows every line taking
+   its item's whole quantity, `apply.depletes`; or a count of every item
+   to 0), asks for every stock item of
    the attempt's stored body; only when all of them answer InvenTree's
    own 404 (a `detail` alone, `InvenTreeReader.stock_item_gone`) is the
    marker excused. Any other write has no excuse: a partial removal keeps
@@ -1387,8 +1389,7 @@ connector never has two InvenTree writes in flight and cannot race itself.
    move (20, `location`); an add (11), a remove (12), a count (10). Only a
    remove of all an item held, or a count to 0, may leave it gone
    (delete_on_deplete); its entry then has no item, and below API 530 the
-   search does not find it. Step 2's excuse (`apply.depletes`) does not
-   cover a count to 0 yet. An entry of
+   search does not find it (step 2 excuses both). An entry of
    another attempt of the request is a problem. Not built yet: check 3,
    which needs the history entry ids in the snapshot.
 6. **Record.** Move to `verified` and post the receipt.

@@ -73,11 +73,15 @@ class FakeReader:
         return pk in self.gone
 
 
-def verified(store: Store, key: RequestKey, pks: list[int], held: str = "1") -> Marker:
-    """A verified write taking 1 of each item, whose snapshot shows each item holding `held` before it."""
+def verified(store: Store, key: RequestKey, pks: list[int], held: str = "1", quantity: str = "1") -> Marker:
+    """A verified write of `quantity` on each item (taking it, for a remove), whose snapshot shows each item holding
+    `held` before it."""
     store.transition(key, expected=S.PLANNED, target=S.APPROVED, actor=A.HUMAN)
     marker = store.next_marker(key, AttemptKind.APPLY)
-    body: dict[str, Any] = {"items": [{"pk": pk, "quantity": "1"} for pk in pks], "notes": write_notes(marker, "U0SAM")}
+    body: dict[str, Any] = {
+        "items": [{"pk": pk, "quantity": quantity} for pk in pks],
+        "notes": write_notes(marker, "U0SAM"),
+    }
     snapshot = {"stock_items": {str(pk): held for pk in pks}}
     store.begin_attempt(
         key,
@@ -125,6 +129,25 @@ async def test_a_missing_marker_of_a_partial_removal_is_missing_even_if_its_item
     marker = verified(store, KEY_1, [7, 9], held=held)
     findings = await check_post_markers(FakeReader(gone={7, 9}), store, POST)
     assert [(f.kind, f.marker) for f in findings] == [(FindingKind.MISSING, marker)]
+
+
+@pytest.mark.parametrize(
+    ("quantity", "gone", "excused"), [("0", {7, 9}, True), ("1", {7, 9}, False), ("0", {7}, False)]
+)
+async def test_a_missing_marker_of_a_count_is_excused_only_when_it_counted_every_item_to_0_and_they_are_gone(
+    tmp_path: Path, quantity: str, gone: set[int], excused: bool
+) -> None:
+    """A count to 0 deletes a delete_on_deplete item, whatever it held (`test_char_a_write_that_empties_an_item`)."""
+    counts = Store.open(tmp_path / "counts.db")
+    counts.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
+    counts.create_post(POST)
+    counts.create_plan(POST, "0" * 64, (Operation.COUNT,))
+    marker = verified(counts, KEY_1, [7, 9], held="4", quantity=quantity)
+    findings = await check_post_markers(FakeReader(gone=gone), counts, POST)
+    assert [(f.kind, f.marker) for f in findings] == ([] if excused else [(FindingKind.MISSING, marker)])
+    newer = await check_post_markers(FakeReader(gone={7, 9}, api=DEPLETING_MARKER_FOUND_FROM), counts, POST)
+    assert [(f.kind, f.marker) for f in newer] == [(FindingKind.MISSING, marker)]  # its search finds the entry
+    counts.close()
 
 
 @pytest.mark.parametrize("snapshot", [{}, {"stock_items": {"7": "1"}}, {"stock_items": {"7": 1, "9": 1}}, []])
@@ -198,7 +221,10 @@ async def test_only_a_removal_may_be_excused(store: Store) -> None:
 def undone(store: Store, key: RequestKey, pks: list[int]) -> Marker:
     verified(store, key, pks)
     marker = store.next_marker(key, AttemptKind.UNDO)
-    body: dict[str, Any] = {"items": [{"pk": pk, "quantity": "1"} for pk in pks], "notes": write_notes(marker, "U0SAM")}
+    body: dict[str, Any] = {
+        "items": [{"pk": pk, "quantity": "1"} for pk in pks],
+        "notes": write_notes(marker, "U0SAM"),
+    }
     snapshot = {"stock_items": {str(pk): "1" for pk in pks}}
     store.begin_attempt(
         key,
