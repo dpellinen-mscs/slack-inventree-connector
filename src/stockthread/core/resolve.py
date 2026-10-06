@@ -1,8 +1,8 @@
 """Source selection: which concrete stock items a line moves (design section 5, "Stock items, not parts").
 
 A transfer or a remove acts on stock items, not on a part. Given the stock items of the matched part in the
-source location itself (`InvenTree.stock_items`, no sub-locations, in stock), this module picks the items and the
-quantity taken from each, by one documented rule:
+source location itself (`InvenTree.stock_items`, no sub-locations, in stock or emptied to zero), this module picks the
+items and the quantity taken from each, by one documented rule:
 
 - Only items with status OK and nothing allocated to an order are considered.
 - One item that covers the quantity is preferred over a split; among those, the oldest (the lowest id).

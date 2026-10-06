@@ -241,18 +241,36 @@ class InvenTreeReader:
 
     async def stock_items(self, part: int, location: int) -> list[dict[str, Any]]:
         """Stock items of one part in one location, without its sub-locations, by pk: those in stock and those
-        depleted to zero. An add or a count acts on the item that is there, even an empty one, so an empty item must
-        not hide (`core.resolve.target_item`); a pick never takes from it. InvenTree's `in_stock` filter leaves
-        depleted items out, and its `depleted` filter gives exactly them (`test_char_depleted_items_are_read`)."""
+        depleted to zero that would be in stock but for their quantity (`in_stock_but_empty`). An add or a count acts
+        on the item that is there, even an empty one, so an empty item must not hide (`core.resolve.target_item`); a
+        pick never takes from it. InvenTree's `in_stock` filter leaves depleted items out, and its `depleted` filter
+        gives every item at zero, lost or sold ones too (`test_char_depleted_items_are_read`)."""
         place = {"part": part, "location": location, "cascade": False}
-        rows = [
-            *await self.list_all("/api/stock/", {**place, "in_stock": True}),
-            *await self.list_all("/api/stock/", {**place, "depleted": True}),
-        ]
+        in_stock = await self.list_all("/api/stock/", {**place, "in_stock": True})
+        depleted = await self.list_all("/api/stock/", {**place, "depleted": True})
+        rows = [*in_stock, *(row for row in depleted if in_stock_but_empty(row))]
         pks = [row.get("pk") for row in rows]
         if not all(type(pk) is int for pk in pks) or len(set(pks)) != len(pks):
             raise InvenTreeError("GET /api/stock/ gave a stock item without a pk, or one both in stock and depleted")
         return sorted(rows, key=lambda row: int(row["pk"]))
+
+
+AVAILABLE_STATUS = frozenset({10, 50, 55})
+"""InvenTree's available stock status codes (OK, attention needed, damaged): its `in_stock` filter's statuses."""
+NOT_IN_STOCK_LINKS = ("customer", "belongs_to", "sales_order", "consumed_by")
+"""Links InvenTree's `in_stock` filter requires to be empty: an item sent to a customer, installed in another item,
+shipped on an order or consumed by a build is not in stock."""
+
+
+def in_stock_but_empty(row: Mapping[str, Any]) -> bool:
+    """Whether a depleted stock item row passes InvenTree's `in_stock` filter apart from its quantity: an available
+    status, none of `NOT_IN_STOCK_LINKS`, not being built. A row that lacks one of these fields fails, so an item
+    lost, sold or installed and then emptied never becomes an add or count target (review of #112)."""
+    return (
+        row.get("status") in AVAILABLE_STATUS
+        and all(link in row and row[link] is None for link in NOT_IN_STOCK_LINKS)
+        and row.get("is_building") is False
+    )
 
 
 @dataclass(frozen=True)
