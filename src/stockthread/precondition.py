@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from stockthread.core.model import Match, Operation, operation_for
@@ -61,6 +61,27 @@ class Snapshot:
             "totals": {f"{part}@{place}": _decimal(total) for (part, place), total in sorted(self.totals.items())},
             "history": {str(pk): sorted(entries) for pk, entries in sorted(self.history.items())},
         }
+
+    @classmethod
+    def from_json(cls, stored: Any) -> Snapshot:
+        """The snapshot `as_json` stored. ValueError for anything else: recovery must not compare with a guess."""
+        if not isinstance(stored, dict) or set(stored) != {"stock_items", "totals", "history"}:
+            raise ValueError("a stored snapshot has stock_items, totals and history")
+        stock, totals, history = stored["stock_items"], stored["totals"], stored["history"]
+        if not all(isinstance(part, dict) for part in (stock, totals, history)):
+            raise ValueError("a stored snapshot's parts are objects")
+        pairs: dict[Pair, Decimal] = {}
+        for name, total in totals.items():
+            part, at, place = name.partition("@")
+            pairs[(_pk(part), _pk(place))] = _quantity(total)
+            if not at:
+                raise ValueError(f"a stored total is not of a part at a location: {name!r}")
+        entries: dict[int, frozenset[int]] = {}
+        for pk, found in history.items():
+            if not isinstance(found, list) or not all(type(entry) is int for entry in found):
+                raise ValueError("a stored history is a list of entry pks")
+            entries[_pk(pk)] = frozenset(found)
+        return cls({_pk(pk): _quantity(held) for pk, held in stock.items()}, pairs, entries)
 
 
 @dataclass(frozen=True)
@@ -216,3 +237,21 @@ def places(view: MovementView) -> tuple[Operation, int, int | None]:
 def record(match: Match | None) -> int | None:
     """The InvenTree pk a match names, when it may authorize a write."""
     return match.record if match is not None and match.can_authorize_a_write else None
+
+
+def _pk(text: str) -> int:
+    if not (text.isascii() and text.isdigit()) or int(text) < 1:
+        raise ValueError(f"not a pk: {text!r}")
+    return int(text)
+
+
+def _quantity(text: object) -> Decimal:
+    if not isinstance(text, str):
+        raise ValueError("a stored quantity is a decimal string")
+    try:
+        quantity = Decimal(text)
+    except InvalidOperation:
+        raise ValueError(f"not a quantity: {text!r}") from None
+    if not quantity.is_finite() or quantity < 0:
+        raise ValueError(f"not a quantity: {text!r}")
+    return quantity

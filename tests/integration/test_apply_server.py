@@ -11,14 +11,16 @@ from typing import TYPE_CHECKING
 
 import anyio
 import pytest
+from faultproxy import Fault, FaultProxy, Rule
 from pydantic import SecretStr
 from views import picked, view
 
-from stockthread.apply import apply_request
+from stockthread.apply import apply_request, recover_request
 from stockthread.config import InvenTreeSettings
 from stockthread.core.marker import Marker
 from stockthread.core.model import Match, MatchRule, MatchStatus, Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
+from stockthread.core.write_request import PATHS
 from stockthread.gate import Judgement, Verdict
 from stockthread.inventree import InvenTreeReader
 from stockthread.plan import plan_requests
@@ -72,10 +74,17 @@ def allowed(movement: MovementView) -> Callable[[Marker], Judgement]:
     return rejudge
 
 
-async def run(store: Store, movement: MovementView) -> RequestState:
-    settings = InvenTreeSettings(url=os.environ["STOCKTHREAD_IT_URL"], timeout_seconds=10)
-    token = SecretStr(Path(os.environ["STOCKTHREAD_IT_TOKEN_FILE"]).read_text(encoding="utf-8").strip())
-    async with InvenTreeReader(settings, token) as reader, InvenTreeWriter(settings, token) as writer:
+def token() -> SecretStr:
+    return SecretStr(Path(os.environ["STOCKTHREAD_IT_TOKEN_FILE"]).read_text(encoding="utf-8").strip())
+
+
+def server(url: str | None = None) -> InvenTreeSettings:
+    return InvenTreeSettings(url=url or os.environ["STOCKTHREAD_IT_URL"], timeout_seconds=10)
+
+
+async def run(store: Store, movement: MovementView, write_via: str | None = None) -> RequestState:
+    """`write_via`: the URL the writer sends to (a fault proxy); the reader always reads the server itself."""
+    async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(write_via), token()) as writer:
         applied = await apply_request(
             KEY,
             movement,
@@ -85,6 +94,15 @@ async def run(store: Store, movement: MovementView) -> RequestState:
             writer=writer,
             lock=anyio.Lock(),
             lock_owner=OWNER,
+        )
+    assert applied.problems == (), applied.problems
+    return applied.state
+
+
+async def recover(store: Store, movement: MovementView) -> RequestState:
+    async with InvenTreeReader(server(), token()) as reader:
+        applied = await recover_request(
+            KEY, movement, store=store, reader=reader, lock=anyio.Lock(), settle=timedelta(0)
         )
     assert applied.problems == (), applied.problems
     return applied.state
@@ -107,3 +125,29 @@ async def test_stock_taken_since_the_plan_sends_nothing(store: Store, scratch: S
     scratch.api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 4}], "notes": "x"})
     assert await run(store, taken(scratch, item["pk"], "2")) is RequestState.PLANNED
     assert scratch.api.items(scratch.part, scratch.other) == []
+
+
+@pytest.fixture
+def proxy(scratch: Scratch) -> Iterator[FaultProxy]:
+    with FaultProxy(os.environ["STOCKTHREAD_IT_URL"]) as running:
+        yield running
+
+
+@pytest.mark.parametrize(
+    ("fault", "landed"),
+    [(Fault.DROP_AFTER, True), (Fault.DROP_BEFORE, False), (Fault.FAIL_AFTER, True), (Fault.FAIL_BEFORE, False)],
+)
+@pytest.mark.anyio
+async def test_recovery_concludes_an_unknown_outcome_from_the_server(
+    store: Store, scratch: Scratch, proxy: FaultProxy, fault: Fault, landed: bool
+) -> None:
+    """The answer is lost or is a proxy's 502. The write ran (after) or never reached the server (before)."""
+    item = scratch.stock(5)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], "2")
+    proxy.inject(Rule("POST", PATHS[Operation.TRANSFER], fault, status=502))
+    assert await run(store, movement, write_via=proxy.url) is RequestState.UNKNOWN
+    proxy.wait_for(1)
+    assert await recover(store, movement) is (RequestState.VERIFIED if landed else RequestState.FAILED)
+    moved = scratch.api.items(scratch.part, scratch.other)
+    assert sum(Decimal(str(row["quantity"])) for row in moved) == (Decimal(2) if landed else 0)

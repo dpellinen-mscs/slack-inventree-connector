@@ -1,11 +1,13 @@
-"""The apply protocol (design section 7, "Apply protocol"): `apply_request` runs steps 1 to 6 for one request, and
-`check_post_markers` is step 2, the marker check of a whole post against InvenTree.
+"""The apply protocol (design section 7, "Apply protocol"): `apply_request` runs steps 1 to 6 for one request,
+`check_post_markers` is step 2, the marker check of a whole post against InvenTree, and `recover_request` concludes an
+apply whose outcome is unknown ("Unknown outcomes and recovery").
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
@@ -16,10 +18,10 @@ from stockthread.core.marker_check import Finding, FindingKind, check_markers
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import StockItem, stock_items
-from stockthread.core.write_request import WriteRequest
+from stockthread.core.write_request import PATHS, WriteRequest
 from stockthread.gate import Judgement
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, MarkedEntry, ServerInfo
-from stockthread.precondition import Pair, Snapshot, Stale, check, pairs
+from stockthread.precondition import Pair, Snapshot, Stale, built_from, check, pairs
 from stockthread.readback import created, verify
 from stockthread.slack.replies import MovementView
 from stockthread.store import Store
@@ -224,6 +226,89 @@ async def apply_request(
         target = RequestState.VERIFY_FAILED if problems else RequestState.VERIFIED
         store.transition(key, expected=RequestState.APPLIED, target=target, actor=Actor.APPLIER)
         return Applied(target, "read back: " + ("does not agree with the plan" if problems else "as planned"), problems)
+
+
+async def recover_request(
+    key: RequestKey,
+    view: MovementView,
+    *,
+    store: Store,
+    reader: ApplyReader,
+    lock: anyio.Lock,
+    settle: timedelta,
+) -> Applied:
+    """Conclude the `unknown` apply of request `key` (design section 7, "Unknown outcomes and recovery"), whose
+    movement is `view`, the one its request was built from.
+
+    Nothing happens until `settle` (`apply.settle_seconds`) has passed since its outcome became unknown (not since
+    its intent was stored: the send has no overall deadline): a request that timed out on the client may still be
+    running on the server. Then: the attempt's marker found, the request is
+    `applied` and read back like any write (`verified` or `verify_failed`). Not found, and every named stock item, every
+    total and every named item's history is as the stored snapshot has it: `failed`, and never sent again (ADR 0015).
+    Not found, and anything else: `verify_failed`. Read errors raise and change nothing. Nothing is written.
+    """
+    async with lock:
+        row = store.request(key)
+        if row.state is not RequestState.UNKNOWN:
+            raise ValueError(f"request {key} is {row.state}, not unknown")
+        attempt = store.unknown_attempt(key)
+        if attempt.marker.kind is not AttemptKind.APPLY:
+            raise ValueError(f"the unknown attempt of request {key} is not an apply")
+        if attempt.age < settle:
+            return Applied(RequestState.UNKNOWN, "still settling: the write may be running on the server")
+        snapshot = Snapshot.from_json(attempt.snapshot)
+        request = WriteRequest(row.operation, PATHS[row.operation], attempt.body)
+        if not built_from(view, request) or not str(request.body.get("notes", "")).startswith(str(attempt.marker)):
+            raise ValueError("the stored request was not built from this movement and marker")
+        named = sorted({int(line["pk"]) for line in request.body["items"]})
+        found = await reader.marker_entries(attempt.marker.marker_id)
+        if any(entry.marker == attempt.marker for entry in found):
+            store.transition(
+                key,
+                expected=RequestState.UNKNOWN,
+                target=RequestState.APPLIED,
+                actor=Actor.RECOVERY,
+                marker_found=True,
+            )
+            problems = await _read_back(reader, view, request, attempt.marker, snapshot, named)
+            target = RequestState.VERIFY_FAILED if problems else RequestState.VERIFIED
+            store.transition(key, expected=RequestState.APPLIED, target=target, actor=Actor.APPLIER)
+            why = "marker found; read back: " + ("does not agree with the plan" if problems else "as planned")
+            return Applied(target, why, problems)
+        changes = [f"history entries {_listed(e.pk for e in found)} carry another attempt"] if found else []
+        changes += await _changes(reader, view, snapshot, named)
+        target = RequestState.VERIFY_FAILED if changes else RequestState.FAILED
+        store.transition(key, expected=RequestState.UNKNOWN, target=target, actor=Actor.RECOVERY, marker_found=False)
+        why = "marker not found; " + ("the stock changed" if changes else "nothing changed, so it never ran")
+        return Applied(target, why, tuple(changes))
+
+
+async def _changes(reader: ApplyReader, view: MovementView, snapshot: Snapshot, named: Sequence[int]) -> list[str]:
+    """How the stock differs from `snapshot`: a named item gone, moved or holding another quantity, a total that
+    changed, or a history entry on a named item that the snapshot lacks. Stock before history, as `_read_back`."""
+    changes = [f"stock item {pk} is gone" for pk in named if await reader.stock_item_gone(pk)]
+    read = await _stock(reader, pairs(view))
+    held = {item.pk: item.quantity for items in read.values() for item in items}
+    for pk in named:
+        before = snapshot.stock_items.get(pk)
+        if pk not in held:
+            changes.append(f"stock item {pk} is no longer where the movement acts")
+        elif before is None or held[pk] != before:
+            changes.append(f"stock item {pk} holds {held[pk]}, the snapshot says {before}")
+    for pair, total in sorted(snapshot.totals.items()):
+        now = sum((item.quantity for item in read.get(pair, ())), Decimal(0))
+        if pair not in read or now != total:
+            changes.append(f"part {pair[0]} at location {pair[1]} holds {now}, the snapshot says {total}")
+    for pk in named:
+        if pk in held:
+            new = set(await reader.item_entries(pk)) - snapshot.history.get(pk, frozenset())
+            if new:
+                changes.append(f"stock item {pk} has history entries {_listed(new)} the snapshot lacks")
+    return changes
+
+
+def _listed(pks: Any) -> str:
+    return ", ".join(str(pk) for pk in sorted(pks))
 
 
 async def _read_back(

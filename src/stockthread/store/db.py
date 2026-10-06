@@ -125,6 +125,21 @@ class Attempt:
     marker: Marker
 
 
+@dataclass(frozen=True)
+class UnknownAttempt:
+    """The last attempt of a request whose outcome is unknown and not yet concluded by recovery."""
+
+    marker: Marker
+    age: timedelta
+    """How long ago its outcome became unknown (the client gave up, or the send failed), by the store's clock. Not
+    since the intent was stored: the send has no overall deadline (connect, DNS), so the server may get the write
+    long after that."""
+    snapshot: Any
+    """As stored (`Snapshot.as_json`)."""
+    body: Any
+    """The request body as stored and sent."""
+
+
 EventKind = Literal["event", "interactive"]
 
 
@@ -1498,6 +1513,24 @@ class Store:
         if not all(isinstance(quantity, str) for quantity in quantities):
             raise ValueError(f"the stored body of {marker} has an item without a quantity")
         return [(int(pk), Decimal(str(quantity))) for pk, quantity in zip(pks, quantities, strict=True)]
+
+    def unknown_attempt(self, key: RequestKey) -> UnknownAttempt:
+        """The request's last attempt, which recovery has to conclude: its outcome is unknown and recovery has not
+        recorded whether it found the marker. KeyError otherwise."""
+        row = self.request(key)
+        found = self._db.execute(
+            "SELECT marker, finished_at, snapshot, request_body FROM request_attempts"
+            " WHERE id = (SELECT max(id) FROM request_attempts WHERE request_id = ?)"
+            " AND outcome = 'unknown' AND marker_found IS NULL",
+            (row.id,),
+        ).fetchone()
+        if found is None:
+            raise KeyError(f"request {key} has no last attempt with an unknown outcome to recover")
+        marker, finished_at, snapshot, body = found
+        if finished_at is None:
+            raise AssertionError(f"request {key} has an unknown attempt with no time its outcome became unknown")
+        age = self._clock_now() - datetime.fromisoformat(finished_at)
+        return UnknownAttempt(Marker.parse(marker), age, json.loads(snapshot), json.loads(body))
 
     def attempt_snapshot(self, marker: Marker) -> Any:
         """The snapshot stored for the attempt with `marker` (step 3 of the apply protocol). KeyError if no attempt
