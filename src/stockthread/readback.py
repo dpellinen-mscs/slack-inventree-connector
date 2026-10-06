@@ -3,7 +3,7 @@
 Pure: after a write InvenTree accepted, the caller searches the history entries of the request's marker id
 (`InvenTreeReader.marker_entries`), reads the stock items of every pair of `precondition.pairs` again with the call
 the snapshot used (`InvenTreeReader.stock_items`), and finds which stock items the request names answer 404 now
-(`gone`). This module says what does not agree with the plan; nothing means the first two checks of step 5 hold:
+(`gone`). This module says what does not agree with the plan; nothing means the three checks of step 5 hold:
 
 1. The entries that carry the attempt's marker are the ones the request writes, with the plan's deltas, one per
    stock item (measured on 1.4.3 and 1.5.6, `test_char_history_deltas`):
@@ -19,8 +19,8 @@ the snapshot used (`InvenTreeReader.stock_items`), and finds which stock items t
 2. The total at each pair is the snapshot's total plus the plan: a transfer or a remove takes its quantity from the
    source, a transfer puts it at the destination, an add puts it at its place, a count makes the item hold the count.
 
-Not built yet: the third check (entries without the marker on the same stock items), which needs the snapshot to
-hold each item's history entry ids.
+3. No stock item the request names, or that its split created, has a history entry that the snapshot does not hold
+   and that carries no marker of the request's id: such an entry is another writer's, during the apply.
 
 A problem line names pks, entry types and quantities only: never notes or other text from InvenTree.
 """
@@ -54,17 +54,21 @@ def verify(
     read: Mapping[Pair, Sequence[StockItem]],
     *,
     gone: Collection[int],
+    history: Mapping[int, Collection[int]],
     api_version: int,
 ) -> tuple[str, ...]:
     """What does not agree with the plan after `request` (built from `view`, sent with `marker`, accepted), or
     nothing. `snapshot`: step 3's; `entries`: every entry of the marker's id; `read`: the stock items of every pair of
-    `pairs(view)`, read now; `gone`: the request's stock items that answer 404 now. Raises ValueError when the inputs
-    do not belong together."""
+    `pairs(view)`, read now; `gone`: the request's stock items that answer 404 now; `history`: the history entry pks,
+    read now, of each stock item the request names that is not gone and of each item a split entry of `entries`
+    created (`created`). Raises ValueError when the inputs do not belong together."""
     operation, place, destination = places(view)
     lines = {int(line["pk"]): Decimal(line["quantity"]) for line in request.body["items"]}
     if not built_from(view, request) or not str(request.body["notes"]).startswith(str(marker)):
         raise ValueError("the request was not built from this movement and marker")
-    if not lines.keys() <= snapshot.stock_items.keys() or not set(pairs(view)) <= snapshot.totals.keys():
+    if not lines.keys() <= snapshot.stock_items.keys() & snapshot.history.keys() or not set(pairs(view)) <= (
+        snapshot.totals.keys()
+    ):
         raise ValueError("the snapshot is not of this request")
     if not set(gone) <= lines.keys():
         raise ValueError("gone names a stock item the request does not")
@@ -79,7 +83,41 @@ def verify(
     mine = [entry for entry in entries if entry.marker == marker]
     problems += _entries(operation, destination, lines, snapshot, mine, gone, api_version)
     problems += _totals(view, operation, place, destination, lines, snapshot, read)
+    problems += _foreign(lines, snapshot, entries, gone, history)
     return tuple(problems)
+
+
+def created(entries: Sequence[MarkedEntry]) -> set[int]:
+    """The stock items the marker's split entries say the write created: those the caller reads the history of."""
+    found = {entry.item for entry in entries if entry.tracking_type == SPLIT_FROM and entry.item is not None}
+    for entry in entries:
+        child = entry.deltas.get("stockitem")
+        if entry.tracking_type == SPLIT_CHILD and type(child) is int:
+            found.add(child)
+    return found
+
+
+def _foreign(
+    lines: Mapping[int, Decimal],
+    snapshot: Snapshot,
+    entries: Sequence[MarkedEntry],
+    gone: Collection[int],
+    history: Mapping[int, Collection[int]],
+) -> list[str]:
+    """Check 3: an entry on a stock item the request names, or one it created, that was not there at the snapshot
+    and carries no marker of the request's id, means another writer touched the same stock during the apply."""
+    items = (lines.keys() - set(gone)) | (created(entries) - lines.keys())
+    if not items <= history.keys():
+        raise ValueError("the history of a stock item the write touched was not read")
+    marked = {entry.pk for entry in entries}
+    problems = []
+    for pk in sorted(items):
+        others = set(history[pk]) - snapshot.history.get(pk, frozenset()) - marked
+        if others:
+            problems.append(
+                f"stock item {pk}: history entries {_pks(sorted(others))} are another writer's, during the apply"
+            )
+    return problems
 
 
 def _entries(

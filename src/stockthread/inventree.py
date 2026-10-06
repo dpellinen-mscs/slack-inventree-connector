@@ -206,6 +206,25 @@ class InvenTreeReader:
             found.append(MarkedEntry(pk, item, marker, deltas or {}, kind))
         return found
 
+    async def item_entries(self, pk: int) -> list[int]:
+        """The pk of every stock history entry of stock item `pk`, all pages (the read-back's third check, design
+        section 7). Raises on an entry without a number pk, one of another item (a filter the server ignored), or one
+        that came back twice (a skip may hide another)."""
+        if type(pk) is not int or pk < 1:
+            raise ValueError("a stock item pk is a positive number")
+        rows = await self.list_all("/api/stock/track/", {"item": pk})
+        pks: list[int] = []
+        for row in rows:
+            entry = row.get("pk")
+            if type(entry) is not int:
+                raise InvenTreeError("GET /api/stock/track/: an entry has a pk that is not a number")
+            if type(row.get("item")) is not int or row.get("item") != pk:
+                raise InvenTreeError("GET /api/stock/track/: an entry of another stock item came back")
+            pks.append(entry)
+        if len(set(pks)) != len(pks):
+            raise InvenTreeError("GET /api/stock/track/: an entry came back twice, so another may have been skipped")
+        return pks
+
     async def stock_item_gone(self, pk: int) -> bool:
         """True if InvenTree answers that stock item `pk` does not exist: its own 404, a `detail` string alone. False if
         it answers with the item. Anything else (a proxy's 404, another status) raises: "gone" excuses a missing

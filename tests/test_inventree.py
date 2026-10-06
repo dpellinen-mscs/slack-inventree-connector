@@ -437,3 +437,46 @@ async def test_reader_and_writer_take_the_same_route_whatever_the_environment_sa
         for client in (read._http, write._http):
             assert client.trust_env is False
             assert client._mounts == {}
+
+
+def item_history(rows: list[dict[str, object]]) -> Handler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/api/stock/track/")
+        assert request.url.params["item"] == "7"
+        offset, limit = int(request.url.params["offset"]), int(request.url.params["limit"])
+        return httpx.Response(200, json={"count": len(rows), "results": rows[offset : offset + limit]})
+
+    return handler
+
+
+async def test_item_entries_reads_every_page_of_one_items_history() -> None:
+    rows: list[dict[str, object]] = [{"pk": n, "item": 7, "notes": "x"} for n in range(PAGE_SIZE + 2)]
+    client, recorder = reader(item_history(rows))
+    async with client:
+        assert await client.item_entries(7) == list(range(PAGE_SIZE + 2))
+    assert len(recorder.requests) == 2
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{"pk": "1", "item": 7}],
+        [{"pk": 1, "item": 8}],  # the server ignored the filter
+        [{"pk": 1}],
+        [{"pk": 1, "item": 7}, {"pk": 1, "item": 7}],
+    ],
+)
+async def test_item_entries_refuses_a_history_it_cannot_trust(rows: list[dict[str, object]]) -> None:
+    client, _ = reader(item_history(rows))
+    async with client:
+        with pytest.raises(InvenTreeError, match=r"not a number|another stock item|came back twice"):
+            await client.item_entries(7)
+
+
+@pytest.mark.parametrize("pk", [0, -1, True, "7"])
+async def test_item_entries_refuses_a_pk_that_is_not_one_without_asking(pk: object) -> None:
+    client, recorder = reader(respond(body={"count": 0, "results": []}))
+    async with client:
+        with pytest.raises(ValueError, match="positive number"):
+            await client.item_entries(pk)  # type: ignore[arg-type]
+    assert recorder.requests == []

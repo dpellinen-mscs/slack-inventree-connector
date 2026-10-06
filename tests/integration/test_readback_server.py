@@ -18,7 +18,7 @@ from stockthread.core.model import Match, MatchRule, MatchStatus, MovementType
 from stockthread.inventree import InvenTreeReader, MarkedEntry
 from stockthread.plan import plan_requests
 from stockthread.precondition import Snapshot, check, pairs
-from stockthread.readback import verify
+from stockthread.readback import created, verify
 from stockthread.run import inventree_stock
 from stockthread.slack.replies import MovementView
 
@@ -34,6 +34,15 @@ def settings() -> Settings:
     }
     env = {"SLACK_BOT_TOKEN": "xoxb-synthetic", "SLACK_APP_TOKEN": "xapp-synthetic", "INVENTREE_TOKEN": token}
     return parse_settings(data, env)
+
+
+def histories(pks: set[int]) -> dict[int, list[int]]:
+    async def search() -> dict[int, list[int]]:
+        found = settings()
+        async with InvenTreeReader(found.inventree, found.secrets.inventree_token) as reader:
+            return {pk: await reader.item_entries(pk) for pk in sorted(pks)}
+
+    return anyio.run(search)
 
 
 def entries(marker_id: str) -> list[MarkedEntry]:
@@ -64,17 +73,21 @@ def apply(api: RawApi, movement: MovementView, between: Any = None) -> tuple[str
     marker = Marker(new_marker_id(), AttemptKind.APPLY, 1)
     (request,) = plan_requests([movement], [marker], user="U0SAM0001")
     read = inventree_stock(settings())
-    snapshot = check(movement, request, read(pairs(movement)))
+    named = {int(line["pk"]) for line in request.body["items"]}
+    before = histories(named)  # before the stock, as `precondition.check` asks
+    snapshot = check(movement, request, read(pairs(movement)), history=before)
     assert isinstance(snapshot, Snapshot), snapshot
     if between is not None:
         between()
     response = api.post(request.path, dict(request.body))
     assert response.status_code == 201, response.text[:500]
-    named = [int(line["pk"]) for line in request.body["items"]]
-    gone = [pk for pk in named if api.status(f"/api/stock/{pk}/") == 404]
+    gone = [pk for pk in sorted(named) if api.status(f"/api/stock/{pk}/") == 404]
     version = int(api.get("/api/")["apiVersion"])
     found = entries(marker.marker_id)
-    return verify(movement, request, marker, snapshot, found, read(pairs(movement)), gone=gone, api_version=version)
+    now = histories((named - set(gone)) | created(found))
+    return verify(
+        movement, request, marker, snapshot, found, read(pairs(movement)), gone=gone, history=now, api_version=version
+    )
 
 
 @pytest.mark.parametrize(
@@ -119,4 +132,22 @@ def test_another_writer_between_the_snapshot_and_the_write_is_seen(api: RawApi, 
     problems = apply(api, planned(scratch, MovementType.TAKE_TO_VEHICLE, item["pk"], "2"), between=take)
     assert problems[0].startswith(f"stock item {item['pk']}: history entry")
     assert f"part {scratch.part} at location {scratch.parent} holds 0, the plan says 3" in problems
+    assert problems[-1].startswith(f"stock item {item['pk']}: history entries ")
+    assert problems[-1].endswith(" are another writer's, during the apply")
     assert Decimal(str(scratch.item(item["pk"])["quantity"])) == 1
+
+
+def test_another_writers_entry_that_leaves_the_totals_right_is_still_seen(api: RawApi, scratch: Scratch) -> None:
+    """Check 3 alone: someone counts the item to what it holds after the snapshot. Totals and the marker's entries
+    agree with the plan; the count's entry, without the marker, does not (design section 7, step 5)."""
+    item = scratch.stock(5)
+
+    def recount() -> None:
+        assert (
+            api.post("/api/stock/count/", {"items": [{"pk": item["pk"], "quantity": 5}], "notes": "x"}).status_code
+            == 201
+        )
+
+    problems = apply(api, planned(scratch, MovementType.TAKE_TO_VEHICLE, item["pk"], "2"), between=recount)
+    assert len(problems) == 1
+    assert problems[0].startswith(f"stock item {item['pk']}: history entries ")

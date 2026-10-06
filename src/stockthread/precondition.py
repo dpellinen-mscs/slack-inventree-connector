@@ -28,7 +28,7 @@ the removal taking the whole of each item (`apply.depletes`).
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
@@ -48,13 +48,18 @@ class Snapshot:
     totals: Mapping[Pair, Decimal]
     """What each (part, location) pair the movement touches held: the quantities of the rows
     `InvenTreeReader.stock_items` gives for it, added up."""
+    history: Mapping[int, frozenset[int]] = field(default_factory=dict)
+    """The history entry pks of each stock item the request names (`InvenTreeReader.item_entries`): the read-back's
+    third check finds the entries another writer added."""
 
     def as_json(self) -> dict[str, Any]:
-        """The stored form: `{"stock_items": {"<pk>": "<quantity>"}, "totals": {"<part>@<location>": "<quantity>"}}`,
-        quantities as decimal strings (`apply.depletes` reads `stock_items`)."""
+        """The stored form: `{"stock_items": {"<pk>": "<quantity>"}, "totals": {"<part>@<location>": "<quantity>"},
+        "history": {"<pk>": [<entry pk>, ...]}}`, quantities as decimal strings (`apply.depletes` reads
+        `stock_items`)."""
         return {
             "stock_items": {str(pk): _decimal(quantity) for pk, quantity in sorted(self.stock_items.items())},
             "totals": {f"{part}@{place}": _decimal(total) for (part, place), total in sorted(self.totals.items())},
+            "history": {str(pk): sorted(entries) for pk, entries in sorted(self.history.items())},
         }
 
 
@@ -84,12 +89,14 @@ def check(
     request: WriteRequest,
     read: Mapping[Pair, Sequence[StockItem]],
     *,
+    history: Mapping[int, Collection[int]],
     chosen: Collection[int] = (),
 ) -> Snapshot | Stale:
     """The snapshot of `view`'s decided plan against `read` (the stock items of every pair of `pairs(view)`, read
     now), or why the plan no longer holds. `request` is the request built from `view` (`plan.plan_requests`): its
-    lines must be the view's takes, merged by item, or this raises ValueError. `chosen`: the lines (from 0) a person
-    named the stock items for."""
+    lines must be the view's takes, merged by item, or this raises ValueError. `history`: the history entry pks of
+    each stock item the request names, read before `read` (an entry written between the two reads is then one the
+    read-back reports, never one it misses). `chosen`: the lines (from 0) a person named the stock items for."""
     operation, place, _ = places(view)
     if len(view.stock) != len(view.items) or not view.items:
         raise ValueError("a decided movement has the stock of every line")
@@ -134,7 +141,11 @@ def check(
                 return Stale(f"stock item {pk} is serialized now, and is moved whole or not at all")
         elif item.serial:
             return Stale(f"stock item {pk} is serialized now")
-    return Snapshot({pk: item.quantity for pk, item in held.items()}, totals)
+    if not held.keys() <= history.keys():
+        raise ValueError("the history of a stock item the request names was not read")
+    return Snapshot(
+        {pk: item.quantity for pk, item in held.items()}, totals, {pk: frozenset(history[pk]) for pk in held}
+    )
 
 
 def built_from(view: MovementView, request: WriteRequest) -> bool:

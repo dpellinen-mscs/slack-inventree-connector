@@ -1390,8 +1390,16 @@ connector never has two InvenTree writes in flight and cannot race itself.
    remove of all an item held, or a count to 0, may leave it gone
    (delete_on_deplete); its entry then has no item, and below API 530 the
    search does not find it (step 2 excuses both). An entry of
-   another attempt of the request is a problem. Not built yet: check 3,
-   which needs the history entry ids in the snapshot.
+   another attempt of the request is a problem. Check 3: step 3's
+   caller reads the history entry ids of each stock item the request
+   names (`InvenTreeReader.item_entries`) before the stock, and the
+   snapshot holds them; after the write, any entry on a named item that
+   is not gone, or on an item the split created, that the snapshot lacks
+   and that carries no marker of the request's id is another writer's
+   (`readback.created` names the created items). Measured on 1.4.3 and
+   1.5.6: a split's new item and a whole move carry only the marker's
+   entries, and a recount between the snapshot and the write is seen
+   (`test_another_writers_entry_that_leaves_the_totals_right_is_still_seen`).
 6. **Record.** Move to `verified` and post the receipt.
 
 Another InvenTree user can still change the stock between steps 3 and 4.
