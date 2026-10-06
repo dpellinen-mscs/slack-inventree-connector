@@ -63,6 +63,7 @@ class FakeInvenTree:
         self.before_write: Callable[[], None] | None = None
         self.fail_reads = False
         self.fail_reads_after_write = False
+        self.history_fails: set[int] = set()
         self.lock: anyio.Lock | None = None
 
     def write_entry(self, item: int, notes: str, deltas: dict[str, Any], kind: int) -> None:
@@ -90,6 +91,8 @@ class FakeInvenTree:
 
     async def item_entries(self, pk: int) -> list[int]:
         self._read()
+        if pk not in self.items or pk in self.history_fails:  # InvenTree answers 400 for an item it deleted
+            raise InvenTreeError(f"GET /api/stock/track/: 400 for item {pk}")
         return [entry for entry, item, *_ in self.entries if item == pk]
 
     async def stock_items(self, part: int, location: int) -> list[dict[str, Any]]:
@@ -186,6 +189,28 @@ async def test_stock_that_changed_since_the_plan_goes_back_to_review(store: Stor
     assert applied.state is S.PLANNED
     assert applied.why.startswith("back to review: ")
     assert store.request(KEY).state is S.PLANNED
+    assert fake.sent == []
+    assert store.markers(KEY) == []
+
+
+@pytest.mark.anyio
+async def test_a_named_item_deleted_since_the_plan_goes_back_to_review(store: Store) -> None:
+    fake = FakeInvenTree()
+    del fake.items[ITEM]  # another writer took all of it, and InvenTree deleted the item
+    applied = await run(store, fake)
+    assert applied == Applied(S.PLANNED, f"back to review: stock item {ITEM} no longer exists")
+    assert store.request(KEY).state is S.PLANNED
+    assert fake.sent == []
+    assert store.markers(KEY) == []
+
+
+@pytest.mark.anyio
+async def test_a_history_read_error_of_an_item_that_exists_leaves_the_request_approved(store: Store) -> None:
+    fake = FakeInvenTree()
+    fake.history_fails = {ITEM}
+    with pytest.raises(InvenTreeError):
+        await run(store, fake)
+    assert store.request(KEY).state is S.APPROVED
     assert fake.sent == []
     assert store.markers(KEY) == []
 
