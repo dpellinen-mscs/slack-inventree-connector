@@ -277,6 +277,8 @@ class _Sent:
     next_check: Decimal = Decimal(0)
     question: NewQuestion | None = None
     """The question the reply asks, stored with its buttons once the reply is posted."""
+    plan: NewPlan | None = None
+    """The plan the reply makes when it could apply in full, stored with it (ADR 0016)."""
 
 
 StockReader = Callable[[Sequence[tuple[int, int]]], Mapping[tuple[int, int], Sequence[StockItem]]]
@@ -805,7 +807,15 @@ class Worker:
         if standing is not None and _same_reading(standing, decided):
             log.info("post %s: revision %d reads as the reply that stands", key.ts, post.revision)
             self._finish(
-                key, DryRunOutcome.UNCHANGED, extraction.extractor, decided, post.revision, everything, changes, answers
+                key,
+                DryRunOutcome.UNCHANGED,
+                extraction.extractor,
+                decided,
+                post.revision,
+                everything,
+                changes,
+                answers,
+                plan=_plan(key, standing),  # the reply that stands is the one a plan acts on
             )
             return True
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
@@ -814,7 +824,17 @@ class Worker:
         self._post(
             key,
             now,
-            _Sent(extraction.extractor, decided, body, post.revision, everything, changes, answers, question=asked),
+            _Sent(
+                extraction.extractor,
+                decided,
+                body,
+                post.revision,
+                everything,
+                changes,
+                answers,
+                question=asked,
+                plan=_plan(key, decided),
+            ),
         )
         return True
 
@@ -1148,6 +1168,9 @@ class Worker:
         # blocked never posts). The beat makes the heartbeat fresh, so the post has the whole stale window: the
         # poster must return well within it (run.DeadlinePoster).
         self.beat(now=True)
+        # From the moment the thread may show this reply, the plan of the reply above it no longer stands: none is
+        # current until the outcome is recorded, even while the call is still running or if recording it fails.
+        self.store.stale_plan(self.owner, key)
         try:
             response = self.slack.chat_postMessage(
                 channel=key.channel_id,
@@ -1175,11 +1198,6 @@ class Worker:
         self._llm_waiting.pop(key, None)
         reply_ts = response.get("ts")
         valid = isinstance(reply_ts, str) and _SLACK_TS.fullmatch(reply_ts)
-        # A reply that could apply in full makes the post's plan revision, stored with it (ADR 0016); any other
-        # outcome leaves the post without one, so the plan is always the one of the reply that stands.
-        made = None
-        if sent.outcome is DryRunOutcome.REPLIED and sent.decided is not None:
-            made = plan_of(json.loads(json.dumps(sent.decided)))  # as the store gives the record back
         self.store.finish_dry_run(
             self.owner,
             key,
@@ -1192,7 +1210,7 @@ class Worker:
             changes=sent.changes,
             answers=sent.answers,
             question=sent.question,
-            plan=None if made is None else NewPlan(*made),
+            plan=sent.plan,
         )
         if sent.outcome is DryRunOutcome.RETRACTED:
             log.info("post %s: revision %d notice posted", key.ts, sent.revision)
@@ -1293,6 +1311,8 @@ class Worker:
         read: tuple[str, ...] | None = None,
         changes: int | None = None,
         answers: int | None = None,
+        *,
+        plan: NewPlan | None = None,
     ) -> None:
         self._llm_read.pop(key, None)
         self._llm_waiting.pop(key, None)
@@ -1308,6 +1328,7 @@ class Worker:
             read=read,
             changes=changes,
             answers=answers,
+            plan=plan,
         )
 
     def _messages(
@@ -1579,6 +1600,17 @@ def _record(
             for view in views
         ],
     }
+
+
+def _plan(key: PostKey, result: Mapping[str, Any]) -> NewPlan | None:
+    """The plan a reply showing the record `result` makes (ADR 0016), or None. Worked out before anything is posted:
+    whatever goes wrong here makes no plan, and never keeps a reply that was sent from being recorded."""
+    try:
+        made = plan_of(json.loads(json.dumps(result)))  # as the store gives the record back
+    except Exception as error:
+        _log_failure("plan", key.ts, error)
+        return None
+    return None if made is None else NewPlan(*made)
 
 
 def _reading(result: Mapping[str, Any]) -> Any:

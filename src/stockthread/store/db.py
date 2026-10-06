@@ -843,13 +843,15 @@ class Store:
         `expires_from`, or else the time of the newest message it read. The post's revisions, and every question
         asked about it, count from that one time.
 
-        The post's current plan follows what stands in the thread, in the same transaction, so no reply is ever
-        stored with another reply's plan: `plan` is the plan of a reply that could apply in full, and becomes the
-        current revision. Every other outcome, except `unchanged`, leaves the post with no current plan. A plan
-        replaced either way becomes stale, and its requests that have not started a write are cancelled.
+        The post's current plan follows the reply that stands in the thread, in the same transaction, so no reply
+        is ever stored with another reply's plan. `plan` is the plan of that reply when it could apply in full: for
+        `replied`, the plan of the new reply, which becomes the current revision; for `unchanged`, the plan of the
+        reply that still stands, kept when it is current already and made again otherwise (after `stale_plan`, or a
+        reply given up on). Every other outcome leaves the post with no current plan. A plan replaced becomes stale,
+        and its requests that have not started a write are cancelled.
         """
         posted = (DryRunOutcome.REPLIED, DryRunOutcome.RETRACTED)
-        if plan is not None and (outcome is not DryRunOutcome.REPLIED or result is None):
+        if plan is not None and (outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or result is None):
             raise ValueError("only a reply with its record makes a plan")
         if plan is not None and not plan.operations:
             raise ValueError("a plan revision holds at least one request")
@@ -921,7 +923,11 @@ class Store:
                     self._questions_go_stale(post_id, now)
                 if question is not None:
                     self._ask(post_id, key, revision, reply_ts, question, now)
-                if outcome is not DryRunOutcome.UNCHANGED:
+                current = self._db.execute(
+                    "SELECT input_hash FROM plans WHERE post_id = ? AND state = 'current'", (post_id,)
+                ).fetchone()
+                kept = outcome is DryRunOutcome.UNCHANGED and plan is not None and current == (plan.input_hash,)
+                if not kept:
                     self._replace_plan(post_id, plan)
                 return
             cursor = self._db.execute(
@@ -1254,6 +1260,16 @@ class Store:
                 raise KeyError(f"no post {post}")
             self._replace_plan(post_id, None)
             return self._insert_plan(post_id, NewPlan(input_hash, operations))
+
+    def stale_plan(self, owner: str, key: PostKey) -> None:
+        """Leave the post with no current plan: a reply that is about to be posted may replace the one that stands.
+        `finish_dry_run` makes its plan, if any, once its outcome is recorded."""
+        with self._transaction():
+            self._check_lock(owner)
+            post_id = self._post_id(key)
+            if post_id is None:
+                raise KeyError("no such post")
+            self._replace_plan(post_id, None)
 
     def _replace_plan(self, post_id: int, plan: NewPlan | None) -> None:
         """Make the post's current plan revision stale, cancelling its requests that have not started a write, and
