@@ -95,14 +95,22 @@ def test_the_policy_can_only_approve_a_planned_request() -> None:
 
 
 def test_recovery_acts_only_on_unknown_outcomes() -> None:
-    sources = {source for (source, _), actors in TRANSITIONS.items() if A.RECOVERY in actors}
-    assert sources == {S.UNKNOWN, S.UNDO_UNKNOWN}
+    """And on a write a crash left in flight, which it may only declare unknown (`conclude_crashed_writes`)."""
+    edges = {edge for edge, actors in TRANSITIONS.items() if A.RECOVERY in actors}
+    assert {source for source, _ in edges} == {S.UNKNOWN, S.UNDO_UNKNOWN, S.APPLYING, S.UNDOING}
+    assert {edge for edge in edges if edge[0] in (S.APPLYING, S.UNDOING)} == {
+        (S.APPLYING, S.UNKNOWN),
+        (S.UNDOING, S.UNDO_UNKNOWN),
+    }
 
 
 def test_only_the_applier_sends_or_concludes_a_write() -> None:
     for (source, target), actors in TRANSITIONS.items():
         if (source, target) == (S.APPROVED, S.CANCELLED):
             continue  # nothing was sent: a stale plan withdraws its approval
+        if (source, target) in ((S.APPLYING, S.UNKNOWN), (S.UNDOING, S.UNDO_UNKNOWN)):
+            assert actors == {A.APPLIER, A.RECOVERY}, (source, target)  # recovery's: a crash left it in flight
+            continue
         if source in (S.APPROVED, S.APPLYING, S.APPLIED, S.UNDOING) and target != S.UNDOING:
             assert actors == {A.APPLIER}, (source, target)
     assert TRANSITIONS[(S.APPROVED, S.CANCELLED)] == {A.PLANNER}

@@ -1242,14 +1242,14 @@ A plan has its own state: `current`, `stale`, `expired`, `applied`,
 | --- | --- | --- |
 | `planned` | Part of a current plan | `approved`, `rejected`, `cancelled` (plan became stale), `expired` |
 | `approved` | A human or the policy approved it | `applying`, `planned` (precondition failed, back to review), `verify_failed` (marker already present), `cancelled` (plan became stale) |
-| `applying` | Intent stored, write about to be sent or sent | `applied`, `failed`, `unknown` |
+| `applying` | Intent stored, write about to be sent or sent | `applied`, `failed`, `unknown` (also by recovery at start, after a crash) |
 | `failed` | InvenTree refused the request, or recovery found no marker and no change | `approved`, by a human, as a new attempt, only if every earlier attempt was refused (ADR 0015) |
 | `unknown` | The outcome is not known | `applied`, `failed` (no marker and nothing changed) or `verify_failed`, by recovery |
 | `applied` | InvenTree accepted the request | `verified`, `verify_failed` |
 | `verified` | Read-back agrees with the plan | `undoing` |
 | `verify_failed` | Read-back or recovery found something unexpected | `accepted` or `undoing`, by the operator |
 | `accepted` | The operator accepted the observed state. Final | |
-| `undoing` | Undo intent stored | `undone`, `undo_failed`, `undo_unknown` |
+| `undoing` | Undo intent stored | `undone`, `undo_failed`, `undo_unknown` (also by recovery at start, after a crash) |
 | `undo_failed` | InvenTree refused the undo. Nothing was written | `undoing`, by a human, as a new attempt (only after refused undos) |
 | `undo_unknown` | The outcome of the undo is not known | `undone`, `verified` or `verify_failed`, by recovery |
 | `undone` | The undo is verified. Final | |
@@ -1500,7 +1500,10 @@ fault proxy: a write whose answer was lost or replaced after it ran is
 `verified`, one that never reached the server is `failed`. A read error
 in the read-back after the marker is found leaves `applied`, which
 `apply.readback_request` concludes. A crash that leaves a request in
-`applying` is not handled yet.
+`applying` (or `undoing`) is concluded at start: `Store.conclude_crashed_writes`,
+called once after the instance lock is taken and before this process sends
+anything, moves it to `unknown` (or `undo_unknown`) as recovery, and the
+settle time starts then.
 
 Recovery records its conclusion about the marker on the attempt. A marker
 found later for an attempt that recovery did not find is a late write:

@@ -42,7 +42,7 @@ class Actor(StrEnum):
     APPLIER = "applier"
     """The apply and undo protocol, including the read-back."""
     RECOVERY = "recovery"
-    """Recovery of an unknown outcome, after the settle time."""
+    """Recovery of an unknown outcome, after the settle time; and, at start, of a write a crash left in flight."""
 
 
 S = RequestState
@@ -59,7 +59,7 @@ TRANSITIONS: dict[tuple[RequestState, RequestState], frozenset[Actor]] = {
     (S.APPROVED, S.CANCELLED): frozenset({A.PLANNER}),  # the plan became stale before the write started
     (S.APPLYING, S.APPLIED): frozenset({A.APPLIER}),
     (S.APPLYING, S.FAILED): frozenset({A.APPLIER}),
-    (S.APPLYING, S.UNKNOWN): frozenset({A.APPLIER}),
+    (S.APPLYING, S.UNKNOWN): frozenset({A.APPLIER, A.RECOVERY}),  # recovery's: a crash left it applying
     (S.FAILED, S.APPROVED): frozenset({A.HUMAN}),  # a new attempt, never automatic
     (S.UNKNOWN, S.APPLIED): frozenset({A.RECOVERY}),
     (S.UNKNOWN, S.FAILED): frozenset({A.RECOVERY}),  # no marker, nothing changed; never sent again (ADR 0015)
@@ -71,7 +71,7 @@ TRANSITIONS: dict[tuple[RequestState, RequestState], frozenset[Actor]] = {
     (S.VERIFY_FAILED, S.UNDOING): frozenset({A.HUMAN}),
     (S.UNDOING, S.UNDONE): frozenset({A.APPLIER}),
     (S.UNDOING, S.UNDO_FAILED): frozenset({A.APPLIER}),
-    (S.UNDOING, S.UNDO_UNKNOWN): frozenset({A.APPLIER}),
+    (S.UNDOING, S.UNDO_UNKNOWN): frozenset({A.APPLIER, A.RECOVERY}),  # recovery's: a crash left it undoing
     (S.UNDO_FAILED, S.UNDOING): frozenset({A.HUMAN}),  # a new attempt, never automatic
     (S.UNDO_UNKNOWN, S.UNDONE): frozenset({A.RECOVERY}),
     (S.UNDO_UNKNOWN, S.VERIFIED): frozenset({A.RECOVERY}),

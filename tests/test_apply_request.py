@@ -23,7 +23,7 @@ from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, M
 from stockthread.plan import plan_requests
 from stockthread.precondition import Snapshot
 from stockthread.slack.replies import MovementView
-from stockthread.store import Store, WriteBlocked
+from stockthread.store import LockLost, Store, WriteBlocked
 from stockthread.writer import Outcome, Sent, WriteRefused
 
 S = RequestState
@@ -574,3 +574,59 @@ def test_a_snapshot_survives_its_stored_form() -> None:
 def test_a_stored_snapshot_that_is_not_one_is_refused(stored: Any) -> None:
     with pytest.raises(ValueError, match=r"stored|not a"):
         Snapshot.from_json(stored)
+
+
+def crash_while_sending(store: Store, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The process dies after the write left and before its outcome is recorded."""
+    recorded = store.transition
+
+    def transition(key: RequestKey, *, expected: RequestState, **kwargs: Any) -> None:
+        if expected in (S.APPLYING, S.UNDOING):
+            raise SystemExit("killed")
+        recorded(key, expected=expected, **kwargs)
+
+    monkeypatch.setattr(store, "transition", transition)
+
+
+@pytest.mark.anyio
+async def test_a_write_a_crash_left_applying_is_unknown_at_start_and_recovered(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeInvenTree()
+    with monkeypatch.context() as patched:
+        crash_while_sending(store, patched)
+        with pytest.raises(SystemExit):
+            await run(store, fake)
+    assert store.request(KEY).state is S.APPLYING
+    store.acquire_lock("worker-2", stale_after=timedelta(0))  # the next run takes the lock over
+    assert store.conclude_crashed_writes("worker-2") == [KEY]
+    assert store.request(KEY).state is S.UNKNOWN
+    assert (await recover(store, fake, settle=timedelta(hours=1))).state is S.UNKNOWN  # settles from now
+    assert await recover(store, fake) == Applied(S.VERIFIED, "marker found; read back: as planned")
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.anyio
+async def test_an_undo_a_crash_left_undoing_is_undo_unknown_at_start(store: Store) -> None:
+    await run(store, FakeInvenTree())
+    marker = store.next_marker(KEY, AttemptKind.UNDO)
+    store.begin_attempt(
+        KEY,
+        AttemptKind.UNDO,
+        expected=S.VERIFIED,
+        actor=Actor.HUMAN,
+        snapshot={},
+        request_body={"notes": f"{marker} U0SAM0001"},
+        lock_owner=OWNER,
+    )
+    assert store.conclude_crashed_writes(OWNER) == [KEY]
+    assert store.request(KEY).state is S.UNDO_UNKNOWN
+
+
+@pytest.mark.anyio
+async def test_only_the_lock_holder_concludes_crashed_writes(store: Store) -> None:
+    await run(store, FakeInvenTree())
+    with pytest.raises(LockLost):
+        store.conclude_crashed_writes("worker-2")
+    assert store.conclude_crashed_writes(OWNER) == []
+    assert store.request(KEY).state is S.VERIFIED
