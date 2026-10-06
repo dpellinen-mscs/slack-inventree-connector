@@ -6,6 +6,8 @@ on:
     paths:
       - "src/stockthread/inventree.py"
       - "src/stockthread/apply.py"
+      - "src/stockthread/precondition.py"
+      - "src/stockthread/readback.py"
       - "src/stockthread/core/marker_check.py"
       - "src/stockthread/writer.py"
       - "src/stockthread/catalog.py"
@@ -25,6 +27,8 @@ on:
     paths:
       - "src/stockthread/inventree.py"
       - "src/stockthread/apply.py"
+      - "src/stockthread/precondition.py"
+      - "src/stockthread/readback.py"
       - "src/stockthread/core/marker_check.py"
       - "src/stockthread/writer.py"
       - "src/stockthread/catalog.py"

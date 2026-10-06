@@ -67,10 +67,10 @@ class Stale:
 def pairs(view: MovementView) -> list[Pair]:
     """The (part, location) pairs to read for `view`: each line's part where the movement acts (its source for a
     transfer or a remove, its destination for an add or a count), and at a transfer's destination too."""
-    _, place, destination = _places(view)
+    _, place, destination = places(view)
     found: list[Pair] = []
     for match in view.items:
-        part = _record(match)
+        part = record(match)
         if part is None:
             raise ValueError("every line of a decided movement has its part")
         for at in (place, destination):
@@ -90,7 +90,7 @@ def check(
     now), or why the plan no longer holds. `request` is the request built from `view` (`plan.plan_requests`): its
     lines must be the view's takes, merged by item, or this raises ValueError. `chosen`: the lines (from 0) a person
     named the stock items for."""
-    operation, place, destination = _places(view)
+    operation, place, _ = places(view)
     if len(view.stock) != len(view.items) or not view.items:
         raise ValueError("a decided movement has the stock of every line")
     totals: dict[Pair, Decimal] = {}
@@ -101,7 +101,7 @@ def check(
     taken: dict[int, Decimal] = {}
     held: dict[int, StockItem] = {}
     for line, (match, pick) in enumerate(zip(view.items, view.stock, strict=True)):
-        part = _record(match)
+        part = record(match)
         if part is None or pick is None or not pick.decided:
             raise ValueError("a decided movement has the part and the stock of every line")
         stock = read[(part, place)]
@@ -121,11 +121,7 @@ def check(
             operation, view, line, stock, left, [now[take.item] for take in pick.takes], line in chosen
         ):
             return Stale(f"line {line + 1}: {why}")
-    if (
-        {line["pk"]: Decimal(line["quantity"]) for line in request.body["items"]} != taken
-        or request.operation is not operation
-        or request.body.get("location") != destination
-    ):
+    if not built_from(view, request):
         raise ValueError("the request was not built from this movement")
     for pk, quantity in taken.items():
         item = held[pk]
@@ -139,6 +135,23 @@ def check(
         elif item.serial:
             return Stale(f"stock item {pk} is serialized now")
     return Snapshot({pk: item.quantity for pk, item in held.items()}, totals)
+
+
+def built_from(view: MovementView, request: WriteRequest) -> bool:
+    """Whether `request` is what `plan.plan_requests` builds from `view`: its operation, one line per stock item the
+    view's lines take, with what they take together, and a transfer's destination (no location for the others)."""
+    operation, _, destination = places(view)
+    taken: dict[int, Decimal] = {}
+    for pick in view.stock:
+        for take in () if pick is None else pick.takes:
+            taken[take.item] = taken.get(take.item, Decimal(0)) + take.quantity
+    lines = request.body["items"]
+    return (
+        request.operation is operation
+        and len(lines) == len(taken)
+        and {int(line["pk"]): Decimal(line["quantity"]) for line in lines} == taken
+        and request.body.get("location") == destination
+    )
 
 
 def _line_stale(
@@ -165,19 +178,19 @@ def _line_stale(
     if operation in (Operation.ADD, Operation.COUNT):
         pk, reasons = target_item(stock)
         if reasons or [pk] != [item.pk for item in items]:
-            return f"the stock at location {_places(view)[1]} is no longer one target stock item"
+            return f"the stock at location {places(view)[1]} is no longer one target stock item"
         return None
     if any(item.serial for item in items) and {item.pk for item in pool} != {item.pk for item in items}:
         return "the serialized stock there changed, and the line names no serial numbers"
     return None
 
 
-def _places(view: MovementView) -> tuple[Operation, int, int | None]:
+def places(view: MovementView) -> tuple[Operation, int, int | None]:
     """The operation, where it acts, and a transfer's destination (None for the other operations)."""
     operation = operation_for(view.movement.movement_type)
     if operation is None:
         raise ValueError("the movement type becomes no operation")
-    source, destination = _record(view.source), _record(view.destination)
+    source, destination = record(view.source), record(view.destination)
     if operation in (Operation.TRANSFER, Operation.REMOVE):
         if source is None or (operation is Operation.TRANSFER and destination is None):
             raise ValueError(f"a {operation.value} needs its places")
@@ -189,5 +202,6 @@ def _places(view: MovementView) -> tuple[Operation, int, int | None]:
     return operation, destination, None
 
 
-def _record(match: Match | None) -> int | None:
+def record(match: Match | None) -> int | None:
+    """The InvenTree pk a match names, when it may authorize a write."""
     return match.record if match is not None and match.can_authorize_a_write else None

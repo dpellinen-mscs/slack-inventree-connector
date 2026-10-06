@@ -365,7 +365,13 @@ def history_pages(rows: list[dict[str, object]]) -> Handler:
 async def test_marker_entries_reads_every_page_and_keeps_only_whole_markers_of_the_id() -> None:
     filler = [{"pk": n, "item": 7, "notes": f"see [sic:{MARKER_ID}:a01]", "deltas": {}} for n in range(PAGE_SIZE)]
     ours: list[dict[str, object]] = [
-        {"pk": 500, "item": 7, "notes": f"[sic:{MARKER_ID}:a01] U0SAM0001", "deltas": {"removed": 2}},
+        {
+            "pk": 500,
+            "item": 7,
+            "notes": f"[sic:{MARKER_ID}:a01] U0SAM0001",
+            "deltas": {"removed": 2},
+            "tracking_type": 12,
+        },
         {"pk": 501, "item": 8, "notes": f"[sic:{MARKER_ID}:u01] U0LUIS001", "deltas": None},
         {"pk": 503, "item": None, "notes": f"[sic:{MARKER_ID}:a02]", "deltas": {"removed": 1}},  # item deleted
         {"pk": 502, "item": 9, "notes": f"[sic:{MARKER_ID}x:a01] U0SAM0001", "deltas": {}},
@@ -374,7 +380,7 @@ async def test_marker_entries_reads_every_page_and_keeps_only_whole_markers_of_t
     async with client:
         found = await client.marker_entries(MARKER_ID)
     assert found == [
-        MarkedEntry(500, 7, Marker(MARKER_ID, AttemptKind.APPLY, 1), {"removed": 2}),
+        MarkedEntry(500, 7, Marker(MARKER_ID, AttemptKind.APPLY, 1), {"removed": 2}, 12),
         MarkedEntry(501, 8, Marker(MARKER_ID, AttemptKind.UNDO, 1), {}),
         MarkedEntry(503, None, Marker(MARKER_ID, AttemptKind.APPLY, 2), {"removed": 1}),
     ]
@@ -396,12 +402,13 @@ async def test_marker_entries_refuses_an_id_that_is_not_one_without_asking() -> 
         {"pk": True, "item": 7, "deltas": {}},
         {"pk": 1, "item": "7", "deltas": {}},
         {"pk": 1, "item": 7, "deltas": [1]},
+        {"pk": 1, "item": 7, "deltas": {}, "tracking_type": "12"},
     ],
 )
 async def test_marker_entries_refuses_an_entry_of_ours_it_cannot_read(row: dict[str, object]) -> None:
     client, _ = reader(history_pages([{**row, "notes": f"[sic:{MARKER_ID}:a01]"}]))
     async with client:
-        with pytest.raises(InvenTreeError, match=r"no valid pk, item or deltas|pk that is not a number"):
+        with pytest.raises(InvenTreeError, match=r"no valid pk, item, deltas or type|pk that is not a number"):
             await client.marker_entries(MARKER_ID)
 
 
