@@ -128,7 +128,8 @@ payloads whose channel or message does not fit the stored id.
   - [x] Intent: the stored body's notes lead with the attempt's marker (`Store.next_marker`, `Store.begin_attempt`)
   - [x] Single write: one request sent once, its outcome accepted, refused or unknown (`InvenTreeWriter.send`)
   - [x] Read-back, checks 1 and 2: the marker's entries carry the plan's deltas, and the totals are the snapshot plus the plan (`readback.verify`)
-  - [ ] Read-back, check 3: no entry without the marker on the same stock items (needs history entry ids in the snapshot)
+  - [x] Read-back, check 3: no entry without the marker on the named or created stock items since the snapshot (`InvenTreeReader.item_entries`, `Snapshot.history`)
+  - [ ] Apply orchestrator: writer lock, judge again, marker check, precondition, intent, send, read-back, state
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
 - [ ] Plans with several requests, and the `partially_applied` state
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
