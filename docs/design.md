@@ -1437,7 +1437,10 @@ error before the intent leaves `approved`; one in the read-back leaves
 `apply.readback_request` reads it back from the stored request and
 snapshot of its last attempt (`Store.applied_attempt`) and records
 `verified` or `verify_failed`; it writes nothing, and a read error leaves
-`applied` again. Nothing calls them yet.
+`applied` again. `applied` blocks writes of this post only, so a later
+write of another post to the same stock item before this read-back shows
+as another writer's entry: `verify_failed`, a false alarm that fails
+safe. The caller should read back promptly. Nothing calls them yet.
 
 Another InvenTree user can still change the stock between steps 3 and 4.
 The connector cannot lock InvenTree, so that window cannot be closed, only

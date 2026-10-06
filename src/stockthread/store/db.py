@@ -1552,11 +1552,11 @@ class Store:
         found = self._db.execute(
             "SELECT marker, snapshot, request_body FROM request_attempts"
             " WHERE id = (SELECT max(id) FROM request_attempts WHERE request_id = ?)"
-            " AND (outcome = 'accepted' OR (outcome = 'unknown' AND marker_found = 1))",
-            (row.id,),
+            " AND kind = ? AND (outcome = 'accepted' OR (outcome = 'unknown' AND marker_found = 1))",
+            (row.id, AttemptKind.APPLY.value),
         ).fetchone()
         if found is None:
-            raise AssertionError(f"request {key} is applied, but its last attempt was neither accepted nor found")
+            raise AssertionError(f"request {key} is applied, but its last attempt is not an apply accepted or found")
         marker, snapshot, body = found
         return AppliedAttempt(Marker.parse(marker), json.loads(snapshot), json.loads(body))
 
