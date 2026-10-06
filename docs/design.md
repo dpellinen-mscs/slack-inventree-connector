@@ -1421,6 +1421,21 @@ connector never has two InvenTree writes in flight and cannot race itself.
    (`test_another_writers_entry_that_leaves_the_totals_right_is_still_seen`).
 6. **Record.** Move to `verified` and post the receipt.
 
+Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
+It takes the process's writer lock, judges the whole plan again with the
+marker the attempt will carry (a block leaves the request `approved`,
+nothing read), runs the marker check (any finding: `verify_failed`, nothing
+sent), reads each named item's history and then the stock (stale:
+`planned`; a named item InvenTree deleted since the plan, whose history
+read fails, is stale too), stores the intent, sends once, and records `failed`, `unknown`
+or `applied`. A request the writer refuses to send is `failed`; any other
+error or a cancellation while sending is `unknown`. After `applied` it reads back (the 404s,
+the API version, the marker's entries, the stock, then the history of the
+named and created items, so a change the stock read shows has its entry) and records `verified` or `verify_failed`. A read
+error before the intent leaves `approved`; one in the read-back leaves
+`applied`, which blocks every other write of the post. Nothing calls it
+yet.
+
 Another InvenTree user can still change the stock between steps 3 and 4.
 The connector cannot lock InvenTree, so that window cannot be closed, only
 detected by step 5.
