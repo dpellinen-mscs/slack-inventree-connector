@@ -1500,10 +1500,14 @@ fault proxy: a write whose answer was lost or replaced after it ran is
 `verified`, one that never reached the server is `failed`. A read error
 in the read-back after the marker is found leaves `applied`, which
 `apply.readback_request` concludes. A crash that leaves a request in
-`applying` (or `undoing`) is concluded at start: `Store.conclude_crashed_writes`,
-called once after the instance lock is taken and before this process sends
-anything, moves it to `unknown` (or `undo_unknown`) as recovery, and the
-settle time starts then.
+`applying` (or `undoing`) is concluded by `Store.conclude_crashed_writes`,
+to be called once at start (not wired yet), after the instance lock is taken
+and before this process sends anything. It moves the request to `unknown`
+(or `undo_unknown`) as recovery, and the settle time starts then. A crash
+before the write left looks the same: recovery finds no marker and no
+change, so the request becomes `failed` with an unknown attempt, which is
+never retried and blocks applies of the post (ADR 0015). `undo_unknown`
+has no recovery yet.
 
 Recovery records its conclusion about the marker on the attempt. A marker
 found later for an attempt that recovery did not find is a late write:

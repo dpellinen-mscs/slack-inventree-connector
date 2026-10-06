@@ -1550,8 +1550,10 @@ class Store:
 
         Its attempt's outcome becomes unknown now, so recovery's settle time starts now: the crashed run's write may
         have reached the server and still be running there. A run that lost the lock while it was sending (a takeover
-        of a stale heartbeat) can no longer record its outcome (StateConflict); recovery concludes it. Raises LockLost
-        unless `lock_owner` holds the instance lock."""
+        of a stale heartbeat) can no longer record its outcome (StateConflict); recovery concludes it. Such a run, if
+        stalled rather than dead, may send after the settle time: recovery then finds no marker (`failed`), and the
+        late write is the ADR 0015 case (the post stays blocked; the marker check reports it). Raises LockLost unless
+        `lock_owner` holds the instance lock."""
         targets = {S.APPLYING: S.UNKNOWN, S.UNDOING: S.UNDO_UNKNOWN}
         with self._transaction():
             self._check_lock(lock_owner)
