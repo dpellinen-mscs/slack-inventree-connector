@@ -161,6 +161,8 @@ class InvenTreeReader:
                 or not isinstance(page.get("results"), list)
             ):
                 raise InvenTreeError(f"GET {path} did not return a paginated list")
+            if page["count"] < 0:
+                raise InvenTreeError(f"GET {path} gave a negative count")
             batch = page["results"]
             if not all(isinstance(entry, dict) for entry in batch):
                 raise InvenTreeError(f"GET {path} returned a list entry that is not an object")
@@ -171,6 +173,9 @@ class InvenTreeReader:
             count = page["count"]
             results.extend(batch)
             if len(results) >= count:
+                # More rows than the count is as wrong as fewer: the list is not the one the count describes.
+                if len(results) != count:
+                    raise InvenTreeError(f"GET {path} gave {len(results)} rows for a count of {count}")
                 return results
         raise InvenTreeError(f"GET {path} returned more than {MAX_PAGES} pages")
 
@@ -205,6 +210,25 @@ class InvenTreeReader:
                 raise InvenTreeError("a stock history entry has no valid pk, item, deltas or type")
             found.append(MarkedEntry(pk, item, marker, deltas or {}, kind))
         return found
+
+    async def item_entries(self, pk: int) -> list[int]:
+        """The pk of every stock history entry of stock item `pk`, all pages (the read-back's third check, design
+        section 7). Raises on an entry without a number pk, one of another item (a filter the server ignored), or one
+        that came back twice (a skip may hide another)."""
+        if type(pk) is not int or pk < 1:
+            raise ValueError("a stock item pk is a positive number")
+        rows = await self.list_all("/api/stock/track/", {"item": pk})
+        pks: list[int] = []
+        for row in rows:
+            entry = row.get("pk")
+            if type(entry) is not int:
+                raise InvenTreeError("GET /api/stock/track/: an entry has a pk that is not a number")
+            if type(row.get("item")) is not int or row.get("item") != pk:
+                raise InvenTreeError("GET /api/stock/track/: an entry of another stock item came back")
+            pks.append(entry)
+        if len(set(pks)) != len(pks):
+            raise InvenTreeError("GET /api/stock/track/: an entry came back twice, so another may have been skipped")
+        return pks
 
     async def stock_item_gone(self, pk: int) -> bool:
         """True if InvenTree answers that stock item `pk` does not exist: its own 404, a `detail` string alone. False if
@@ -253,6 +277,11 @@ class InvenTreeReader:
         pks = [row.get("pk") for row in rows]
         if not all(type(pk) is int for pk in pks) or len(set(pks)) != len(pks):
             raise InvenTreeError("GET /api/stock/ gave a stock item without a pk, or one both in stock and depleted")
+        # A filter the server ignored would make another part's or place's item a pick, a precondition or a target.
+        if any(type(row.get("part")) is not int or row["part"] != part for row in rows) or any(
+            type(row.get("location")) is not int or row["location"] != location for row in rows
+        ):
+            raise InvenTreeError("GET /api/stock/ gave a stock item of another part or location")
         return sorted(rows, key=lambda row: int(row["pk"]))
 
 

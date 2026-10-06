@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -14,7 +15,7 @@ from stockthread.core.write_request import WriteRequest
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, MarkedEntry
 from stockthread.plan import plan_requests
 from stockthread.precondition import Snapshot, check
-from stockthread.readback import verify
+from stockthread.readback import created, verify
 from stockthread.slack.replies import MovementView
 
 MARKER = Marker(new_marker_id(), AttemptKind.APPLY, 1)
@@ -29,12 +30,13 @@ class Applied:
     def __init__(self, planned: MovementView, before: Read) -> None:
         self.view = planned
         (self.request,) = plan_requests([planned], [MARKER], user="U0SAM0001")
-        snapshot = check(planned, self.request, before)
+        snapshot = check(planned, self.request, before, history=old_history(before))
         assert isinstance(snapshot, Snapshot)
         self.snapshot = snapshot
 
     def verify(self, entries: list[MarkedEntry], now: Read, gone: tuple[int, ...] = (), **given: Any) -> list[str]:
         version = given.pop("api_version", DEPLETING_MARKER_FOUND_FROM)
+        given.setdefault("history", history_now(self.request, entries, gone))
         return list(
             verify(
                 self.view,
@@ -48,6 +50,19 @@ class Applied:
                 **given,
             )
         )
+
+
+def old_history(read: Read) -> dict[int, list[int]]:
+    """Each stock item's history before the write: one entry, pk ten times the item's."""
+    return {stock.pk: [stock.pk * 10] for items in read.values() for stock in items}
+
+
+def history_now(request: WriteRequest, entries: list[MarkedEntry], gone: tuple[int, ...]) -> dict[int, list[int]]:
+    """What InvenTree holds after the write when nobody else wrote: each named item's old entry and the write's
+    entries, and the write's entries on the items it created."""
+    named = {int(line["pk"]) for line in request.body["items"]} - set(gone)
+    owners = named | created(entries)
+    return {pk: ([pk * 10] if pk in named else []) + [e.pk for e in entries if e.item == pk] for pk in owners}
 
 
 def entry(pk: int, on: int | None, kind: int, *, marker: Marker = MARKER, **deltas: Any) -> MarkedEntry:
@@ -192,9 +207,19 @@ def test_inputs_that_do_not_belong_together_are_a_caller_error() -> None:
     applied = transfer()
     other = WriteRequest(applied.request.operation, applied.request.path, {**applied.request.body, "notes": "x"})
     with pytest.raises(ValueError, match="this movement and marker"):
-        verify(applied.view, other, MARKER, applied.snapshot, [], AFTER_SPLIT, gone=(), api_version=530)
+        verify(applied.view, other, MARKER, applied.snapshot, [], AFTER_SPLIT, gone=(), history={}, api_version=530)
     with pytest.raises(ValueError, match="snapshot is not of this request"):
-        verify(applied.view, applied.request, MARKER, Snapshot({}, {}), [], AFTER_SPLIT, gone=(), api_version=530)
+        verify(
+            applied.view,
+            applied.request,
+            MARKER,
+            Snapshot({}, {}),
+            [],
+            AFTER_SPLIT,
+            gone=(),
+            history={},
+            api_version=530,
+        )
     with pytest.raises(ValueError, match="was not read"):
         applied.verify(split_entries(), {(1, SOURCE): []})
     with pytest.raises(ValueError, match="gone names"):
@@ -226,6 +251,7 @@ def test_a_request_that_is_not_the_plans_is_a_caller_error_even_when_inventree_a
                 split_entries(1.0, 4.0),
                 after_one,
                 gone=(),
+                history={},
                 api_version=530,
             )
     two = Applied(
@@ -234,7 +260,58 @@ def test_a_request_that_is_not_the_plans_is_a_caller_error_even_when_inventree_a
     )
     first_only = WriteRequest(two.request.operation, two.request.path, {**two.request.body, "items": body["items"]})
     with pytest.raises(ValueError, match="this movement and marker"):
-        verify(two.view, first_only, MARKER, two.snapshot, split_entries(), AFTER_SPLIT, gone=(), api_version=530)
+        verify(
+            two.view,
+            first_only,
+            MARKER,
+            two.snapshot,
+            split_entries(),
+            AFTER_SPLIT,
+            gone=(),
+            history={},
+            api_version=530,
+        )
+
+
+def test_an_entry_another_writer_added_during_the_apply_is_a_problem() -> None:
+    """Check 3: on an item the request names, or on the item its split created; old entries, and entries of the
+    request's marker id, are no problem."""
+    applied = transfer()
+    found = split_entries()
+    assert applied.verify(found, AFTER_SPLIT, history={57: [570, 700, 702], NEW: [701]}) == [
+        "stock item 57: history entries 702 are another writer's, during the apply"
+    ]
+    assert applied.verify(found, AFTER_SPLIT, history={57: [570, 700], NEW: [701, 703, 704]}) == [
+        f"stock item {NEW}: history entries 703, 704 are another writer's, during the apply"
+    ]
+    retried = [*found, entry(705, 57, 12, marker=Marker(MARKER.marker_id, AttemptKind.UNDO, 1))]
+    assert applied.verify(retried, AFTER_SPLIT, history={57: [570, 700, 705], NEW: [701]}) == [
+        "history entries 705 carry another attempt of this request"
+    ]  # reported once, as another attempt's
+    with pytest.raises(ValueError, match="history of a stock item the write touched"):
+        applied.verify(found, AFTER_SPLIT, history={57: [570, 700]})
+    with pytest.raises(ValueError, match="snapshot is not of this request"):
+        verify(
+            applied.view,
+            applied.request,
+            MARKER,
+            replace(applied.snapshot, history={}),
+            found,
+            AFTER_SPLIT,
+            gone=(),
+            history={57: [570, 700], NEW: [701]},
+            api_version=530,
+        )
+
+
+def test_a_gone_item_has_no_history_to_read() -> None:
+    """InvenTree answers 400 to the history of a deleted item; its entry is checked by check 1."""
+    applied = Applied(
+        view(MovementType.CONSUME, lines=(("Disc 40", "5"),), stock=(picked((57, "5")),)),
+        {(1, SOURCE): [item(57, "5")]},
+    )
+    now = Read({(1, SOURCE): []})
+    assert applied.verify([entry(700, None, 12, removed=5.0, quantity=0.0)], now, gone=(57,), history={}) == []
 
 
 def test_a_count_to_zero_that_deleted_its_item_leaves_an_entry_of_no_item() -> None:

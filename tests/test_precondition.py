@@ -22,14 +22,21 @@ from stockthread.slack.replies import MovementView
 def check(view: MovementView, read: Any, **given: Any) -> Snapshot | Stale:
     """`precondition.check` with the request `plan_requests` builds from `view`."""
     (request,) = plan_requests([view], [Marker(new_marker_id(), AttemptKind.APPLY, 1)], user="U0SAM0001")
+    given.setdefault("history", {stock.pk: (stock.pk * 10,) for items in read.values() for stock in items})
     return check_with(view, request, read, **given)
 
 
 def test_a_transfer_that_still_holds_gives_its_snapshot() -> None:
     read = {(1, SOURCE): [item(57, "5"), item(58, "1")], (1, DESTINATION): [item(80, "3")]}
     snapshot = check(view(), read)
-    assert snapshot == Snapshot({57: Decimal(5)}, {(1, SOURCE): Decimal(6), (1, DESTINATION): Decimal(3)})
-    assert snapshot.as_json() == {"stock_items": {"57": "5"}, "totals": {"1@10": "6", "1@11": "3"}}
+    assert snapshot == Snapshot(
+        {57: Decimal(5)}, {(1, SOURCE): Decimal(6), (1, DESTINATION): Decimal(3)}, {57: frozenset({570})}
+    )
+    assert snapshot.as_json() == {
+        "stock_items": {"57": "5"},
+        "totals": {"1@10": "6", "1@11": "3"},
+        "history": {"57": [570]},
+    }
 
 
 def test_the_stored_snapshot_is_what_the_depletion_excuse_reads() -> None:
@@ -72,14 +79,16 @@ def test_lines_sharing_an_item_must_fit_in_it_together() -> None:
     read = {(1, SOURCE): [item(57, "3")], (1, DESTINATION): []}
     assert check(shared, read) == Stale("stock item 57 holds 3 now, less than 4")
     read = {(1, SOURCE): [item(57, "4")], (1, DESTINATION): []}
-    assert check(shared, read) == Snapshot({57: Decimal(4)}, {(1, SOURCE): Decimal(4), (1, DESTINATION): Decimal(0)})
+    assert check(shared, read) == Snapshot(
+        {57: Decimal(4)}, {(1, SOURCE): Decimal(4), (1, DESTINATION): Decimal(0)}, {57: frozenset({570})}
+    )
 
 
 @pytest.mark.parametrize("movement_type", [MovementType.RECEIVE, MovementType.COUNT])
 def test_an_add_or_a_count_needs_its_target_there_even_empty_and_not_serialized(movement_type: MovementType) -> None:
     target = view(movement_type, stock=(picked((70, "2")),))
     assert check(target, {(1, DESTINATION): [item(70, "0", status=50)]}) == Snapshot(
-        {70: Decimal(0)}, {(1, DESTINATION): Decimal(0)}
+        {70: Decimal(0)}, {(1, DESTINATION): Decimal(0)}, {70: frozenset({700})}
     )
     assert check(target, {(1, DESTINATION): [item(71, "4")]}) == Stale(
         "line 1: stock item 70 is no longer at location 11"
@@ -109,15 +118,17 @@ def test_a_plan_that_is_not_decided_or_a_pair_not_read_is_a_caller_error() -> No
     (request,) = plan_requests([view()], [Marker(new_marker_id(), AttemptKind.APPLY, 1)], user="U0SAM0001")
     read = {(1, SOURCE): [item(57, "5")], (1, DESTINATION): []}
     with pytest.raises(ValueError, match="part and the stock of every line"):
-        check_with(view(stock=(SourcePick(()),)), request, read)
+        check_with(view(stock=(SourcePick(()),)), request, read, history={57: ()})
     with pytest.raises(ValueError, match="stock of every line"):
-        check_with(view(stock=()), request, read)
+        check_with(view(stock=()), request, read, history={57: ()})
     with pytest.raises(ValueError, match="not built from this movement"):
-        check_with(view(lines=(("Disc 40", "1"),), stock=(picked((57, "1")),)), request, read)
+        check_with(view(lines=(("Disc 40", "1"),), stock=(picked((57, "1")),)), request, read, history={57: ()})
     with pytest.raises(ValueError, match="not built from this movement"):
-        check_with(view(MovementType.CONSUME), request, read)
+        check_with(view(MovementType.CONSUME), request, read, history={57: ()})
     with pytest.raises(ValueError, match="the place it takes from"):
-        check_with(view(destination=Match(MatchStatus.MATCHED, MatchRule.EXACT, SOURCE)), request, read)
+        check_with(
+            view(destination=Match(MatchStatus.MATCHED, MatchRule.EXACT, SOURCE)), request, read, history={57: ()}
+        )
 
 
 @pytest.mark.parametrize("movement_type", [MovementType.RECEIVE, MovementType.COUNT])
@@ -192,9 +203,19 @@ def test_a_request_to_another_destination_or_with_a_location_it_does_not_take_is
     (request,) = plan_requests([view()], [Marker(new_marker_id(), AttemptKind.APPLY, 1)], user="U0SAM0001")
     elsewhere = replace(request, body={**request.body, "location": DESTINATION + 1})
     with pytest.raises(ValueError, match="not built from this movement"):
-        check_with(view(), elsewhere, read)
+        check_with(view(), elsewhere, read, history={57: ()})
     consume = view(MovementType.CONSUME)
     (removal,) = plan_requests([consume], [Marker(new_marker_id(), AttemptKind.APPLY, 1)], user="U0SAM0001")
-    assert isinstance(check_with(consume, removal, read), Snapshot)
+    assert isinstance(check_with(consume, removal, read, history={57: ()}), Snapshot)
     with pytest.raises(ValueError, match="not built from this movement"):
-        check_with(consume, replace(removal, body={**removal.body, "location": SOURCE}), read)
+        check_with(consume, replace(removal, body={**removal.body, "location": SOURCE}), read, history={57: ()})
+
+
+def test_the_history_of_every_stock_item_the_request_names_is_part_of_the_snapshot() -> None:
+    read = {(1, SOURCE): [item(57, "5"), item(58, "1")], (1, DESTINATION): []}
+    snapshot = check(view(), read, history={57: [3, 1], 58: [9]})
+    assert isinstance(snapshot, Snapshot)
+    assert snapshot.history == {57: frozenset({1, 3})}  # only the items the request names
+    assert snapshot.as_json()["history"] == {"57": [1, 3]}
+    with pytest.raises(ValueError, match="history of a stock item the request names"):
+        check(view(), read, history={58: [9]})
