@@ -27,7 +27,7 @@ the removal taking the whole of each item (`apply.depletes`).
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
@@ -89,7 +89,7 @@ def check(
     now), or why the plan no longer holds. `request` is the request built from `view` (`plan.plan_requests`): its
     lines must be the view's takes, merged by item, or this raises ValueError. `chosen`: the lines (from 0) a person
     named the stock items for."""
-    operation, place, _ = _places(view)
+    operation, place, destination = _places(view)
     if len(view.stock) != len(view.items) or not view.items:
         raise ValueError("a decided movement has the stock of every line")
     totals: dict[Pair, Decimal] = {}
@@ -105,6 +105,9 @@ def check(
             raise ValueError("a decided movement has the part and the stock of every line")
         stock = read[(part, place)]
         now = {item.pk: item for item in stock}
+        left = [
+            replace(item, quantity=max(item.quantity - taken.get(item.pk, Decimal(0)), Decimal(0))) for item in stock
+        ]  # what the lines before this one left, as `resolve_lines` picks from it
         for take in pick.takes:
             item = now.get(take.item)
             if item is None:
@@ -113,10 +116,14 @@ def check(
                 raise ValueError("two lines count the same stock item")
             held[item.pk] = item
             taken[item.pk] = taken.get(item.pk, Decimal(0)) + take.quantity
-        if why := _line_stale(operation, view, line, stock, [now[take.item] for take in pick.takes], line in chosen):
+        if why := _line_stale(
+            operation, view, line, stock, left, [now[take.item] for take in pick.takes], line in chosen
+        ):
             return Stale(f"line {line + 1}: {why}")
-    if {line["pk"]: Decimal(line["quantity"]) for line in request.body["items"]} != taken or (
-        request.operation is not operation
+    if (
+        {line["pk"]: Decimal(line["quantity"]) for line in request.body["items"]} != taken
+        or request.operation is not operation
+        or request.body.get("location") != destination
     ):
         raise ValueError("the request was not built from this movement")
     for pk, quantity in taken.items():
@@ -138,10 +145,12 @@ def _line_stale(
     view: MovementView,
     line: int,
     stock: Sequence[StockItem],
+    left: Sequence[StockItem],
     items: Sequence[StockItem],
     chosen: bool,
 ) -> str | None:
-    """Why one line's items no longer fit the rule that picked them, or None."""
+    """Why one line's items no longer fit the rule that picked them, or None. `stock`: the line's stock as read;
+    `left`: what the lines before it left of that."""
     serials = view.movement.line_items[line].serials
     if serials:
         missing = next((item for item in items if item.serial not in serials), None)
@@ -154,7 +163,7 @@ def _line_stale(
             return f"the stock at location {_places(view)[1]} is no longer one target stock item"
         return None
     if any(item.serial for item in items):
-        pool = [item for item in stock if item.available]
+        pool = [item for item in left if item.available]
         if any(not item.serial for item in pool):
             return "serialized and unserialized stock is mixed there now"
         if {item.pk for item in pool} != {item.pk for item in items}:

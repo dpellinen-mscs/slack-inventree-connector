@@ -187,3 +187,38 @@ def test_serialized_stock_taken_with_no_serial_named_must_still_be_all_of_it() -
     assert isinstance(check(planned, arrived, chosen={0}), Snapshot)
     mixed = {(1, SOURCE): [a, b, item(60, "4")], (1, DESTINATION): []}
     assert check(planned, mixed) == Stale("line 1: serialized and unserialized stock is mixed there now")
+
+
+def test_a_line_with_no_serial_named_takes_what_the_lines_before_it_left() -> None:
+    """ "1 ONT SN A" and "1 ONT": the resolver gives line 1 item 57 (A) and line 2 the one left, 58, and nothing
+    changed, so the plan holds (review of #113). A third serialized item arriving still makes line 2 stale."""
+    lines = (("ONT", "1"), ("ONT", "1"))
+    same_part = tuple(Match(MatchStatus.MATCHED, MatchRule.EXACT, 1) for _ in lines)
+    planned = view(stock=(picked((57, "1")), picked((58, "1"))), lines=lines, items=same_part)
+    first = replace(planned.movement.line_items[0], serials=("A",))
+    planned = replace(planned, movement=replace(planned.movement, line_items=(first, planned.movement.line_items[1])))
+    a, b = item(57, "1", serial="A"), item(58, "1", serial="B")
+    assert isinstance(check(planned, {(1, SOURCE): [a, b], (1, DESTINATION): []}), Snapshot)
+    by_person = replace(planned, movement=replace(planned.movement, line_items=lines_without_serials(planned)))
+    assert isinstance(check(by_person, {(1, SOURCE): [a, b], (1, DESTINATION): []}, chosen={0}), Snapshot)
+    arrived = {(1, SOURCE): [a, b, item(59, "1", serial="C")], (1, DESTINATION): []}
+    assert check(planned, arrived) == Stale(
+        "line 2: the serialized stock there changed, and the line names no serial numbers"
+    )
+
+
+def lines_without_serials(planned: MovementView) -> tuple[LineItem, ...]:
+    return tuple(replace(line, serials=()) for line in planned.movement.line_items)
+
+
+def test_a_request_to_another_destination_or_with_a_location_it_does_not_take_is_a_caller_error() -> None:
+    read = {(1, SOURCE): [item(57, "5")], (1, DESTINATION): []}
+    (request,) = plan_requests([view()], [Marker(new_marker_id(), AttemptKind.APPLY, 1)], user="U0SAM0001")
+    elsewhere = replace(request, body={**request.body, "location": DESTINATION + 1})
+    with pytest.raises(ValueError, match="not built from this movement"):
+        check_with(view(), elsewhere, read)
+    consume = view(MovementType.CONSUME)
+    (removal,) = plan_requests([consume], [Marker(new_marker_id(), AttemptKind.APPLY, 1)], user="U0SAM0001")
+    assert isinstance(check_with(consume, removal, read), Snapshot)
+    with pytest.raises(ValueError, match="not built from this movement"):
+        check_with(consume, replace(removal, body={**removal.body, "location": SOURCE}), read)
