@@ -1441,6 +1441,12 @@ snapshot of its last attempt (`Store.applied_attempt`) and records
 write of another post to the same stock item before this read-back shows
 as another writer's entry: `verify_failed`, a false alarm that fails
 safe. The caller should read back promptly. Nothing calls them yet.
+Their views come from the dry-run record of the plan's revision, never
+from a new reading ([ADR 0016](decisions/0016-apply-reads-the-dry-run-record.md)):
+`plan_record.views_of` rebuilds them and refuses a record that is gone,
+one whose movements do not hash to the plan's `input_hash`
+(`plan_record.plan_hash`), and one with a gate reason or a line without
+stock read.
 
 Another InvenTree user can still change the stock between steps 3 and 4.
 The connector cannot lock InvenTree, so that window cannot be closed, only
