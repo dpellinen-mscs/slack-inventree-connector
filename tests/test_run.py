@@ -32,8 +32,10 @@ from stockthread import run as run_module
 from stockthread.__main__ import install_stop_handlers
 from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import InvenTreeSettings, Settings, parse_settings
+from stockthread.core.marker import AttemptKind
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
-from stockthread.core.model import PostKey
+from stockthread.core.model import Operation, PostKey, RequestKey
+from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import StockItem
 from stockthread.inventree import InvenTreeError, InvenTreeReader, ServerInfo, VersionCheck, check_version
 from stockthread.llm.extract import WithinDeadline
@@ -439,6 +441,43 @@ def test_a_stop_during_startup_ends_before_connecting(tmp_path: Path, stop: thre
     assert run_with(tmp_path / "stockthread.db", stop, connection, check=check) == 0
     assert connection.calls == []
     assert lock_is_free(tmp_path / "stockthread.db")
+
+
+def test_a_write_a_crash_left_in_flight_is_unknown_before_anything_else_runs(
+    tmp_path: Path, stop: threading.Event, caplog: pytest.LogCaptureFixture
+) -> None:
+    database = tmp_path / "stockthread.db"
+    key = RequestKey(PostKey(WORKSPACE, CHANNEL, "1790000000.000100"), 1, 1)
+    crashed = Store.open(database, clock=lambda: datetime.now(UTC) - timedelta(hours=2))  # its heartbeat is stale
+    crashed.acquire_lock("crashed-run", stale_after=timedelta(minutes=1))
+    crashed.create_post(key.post)
+    crashed.create_plan(key.post, "0" * 64, (Operation.TRANSFER,))
+    crashed.transition(key, expected=RequestState.PLANNED, target=RequestState.APPROVED, actor=Actor.HUMAN)
+    marker = crashed.next_marker(key, AttemptKind.APPLY)
+    crashed.begin_attempt(
+        key,
+        AttemptKind.APPLY,
+        expected=RequestState.APPROVED,
+        actor=Actor.APPLIER,
+        snapshot={},
+        request_body={"notes": f"{marker} U0SAM0001"},
+        lock_owner="crashed-run",
+    )
+    crashed.close()  # the process died while sending: the request is still `applying`
+    states: list[RequestState] = []
+
+    def check(_: Settings) -> VersionCheck:
+        store = Store.open_read_only(database)
+        states.append(store.request(key).state)  # already concluded when startup reaches InvenTree
+        store.close()
+        stop.set()
+        return TESTED
+
+    with caplog.at_level(logging.WARNING, logger="stockthread"):
+        assert run_with(database, stop, FakeConnection(), check=check) == 0
+    assert states == [RequestState.UNKNOWN]
+    assert "post 1790000000.000100: request r1/1 was left in flight by a crash" in caplog.text
+    assert lock_is_free(database)
 
 
 def test_a_lost_lock_stops_with_exit_1_and_leaves_the_new_owner_alone(tmp_path: Path, stop: threading.Event) -> None:
