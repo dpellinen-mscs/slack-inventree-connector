@@ -193,8 +193,12 @@ async def apply_request(
         # Step 3: the history of each named item first, then the stock, so an entry written between the two reads
         # is one the read-back reports, never one it misses.
         named = sorted({int(line["pk"]) for line in request.body["items"]})
-        before = {pk: await reader.item_entries(pk) for pk in named}
-        snapshot = check(view, request, await _stock(reader, pairs(view)), history=before, chosen=chosen)
+        before = await _histories(reader, named)
+        snapshot = (
+            before
+            if isinstance(before, Stale)
+            else check(view, request, await _stock(reader, pairs(view)), history=before, chosen=chosen)
+        )
         if isinstance(snapshot, Stale):
             store.transition(key, expected=RequestState.APPROVED, target=RequestState.PLANNED, actor=Actor.APPLIER)
             return Applied(RequestState.PLANNED, f"back to review: {snapshot.why}")
@@ -309,6 +313,21 @@ async def _changes(reader: ApplyReader, view: MovementView, snapshot: Snapshot, 
 
 def _listed(pks: Any) -> str:
     return ", ".join(str(pk) for pk in sorted(pks))
+
+
+async def _histories(reader: ApplyReader, named: Sequence[int]) -> dict[int, list[int]] | Stale:
+    """The history of each named item, or `Stale` when one of them is gone: InvenTree answers 400 to the history of
+    an item it deleted (a depleted delete_on_deplete item), so a failed read is stale only if InvenTree says the item
+    does not exist. Any other failure raises."""
+    history: dict[int, list[int]] = {}
+    for pk in named:
+        try:
+            history[pk] = await reader.item_entries(pk)
+        except InvenTreeError:
+            if await reader.stock_item_gone(pk):
+                return Stale(f"stock item {pk} no longer exists")
+            raise
+    return history
 
 
 async def _read_back(

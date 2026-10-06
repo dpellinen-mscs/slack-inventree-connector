@@ -151,3 +151,13 @@ async def test_recovery_concludes_an_unknown_outcome_from_the_server(
     assert await recover(store, movement) is (RequestState.VERIFIED if landed else RequestState.FAILED)
     moved = scratch.api.items(scratch.part, scratch.other)
     assert sum(Decimal(str(row["quantity"])) for row in moved) == (Decimal(2) if landed else 0)
+
+
+@pytest.mark.anyio
+async def test_a_named_item_deleted_since_the_plan_sends_nothing(store: Store, scratch: Scratch) -> None:
+    item = scratch.stock(5, delete_on_deplete=True)
+    approved(store, Operation.TRANSFER)
+    scratch.api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 5}], "notes": "x"})
+    assert scratch.api.status(f"/api/stock/{item['pk']}/") == 404
+    assert await run(store, taken(scratch, item["pk"], "2")) is RequestState.PLANNED
+    assert scratch.api.items(scratch.part, scratch.other) == []
