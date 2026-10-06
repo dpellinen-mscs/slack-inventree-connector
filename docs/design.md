@@ -948,7 +948,13 @@ needs.
 
   v1.0 never creates stock items or locations. When an add or a count has
   no single target stock item, that is a review reason, and a human creates
-  the item in InvenTree.
+  the item in InvenTree. An item emptied to zero (and kept, with
+  delete_on_deplete off) still counts as a target: the stock read takes
+  both InvenTree's `in_stock` rows and those of its `depleted` rows that
+  would be in stock but for their quantity (an available status; no
+  customer, parent item, sales order or consuming build; not being built).
+  An emptied item that is lost or sent out is no target. A pick for a
+  transfer or a remove never takes from an empty item.
 - **Request bodies** (built: `core/write_request.py`, pure). One request
   per movement: `POST /api/stock/<transfer|remove|add|count>/` with
   `items` (one `{pk, quantity}` per stock item the pick took, quantities as
