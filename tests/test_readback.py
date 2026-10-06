@@ -185,7 +185,7 @@ def test_below_the_version_that_finds_it_the_entry_of_a_deleted_item_may_be_miss
 
 def test_only_a_removal_of_all_an_item_held_may_leave_it_gone() -> None:
     problems = transfer().verify(split_entries(), AFTER_SPLIT, gone=(57,))
-    assert problems[0] == "stock item 57 is gone, and only a removal of all it held may delete it"
+    assert problems[0] == "stock item 57 is gone, and only a removal of all it held or a count to 0 may delete it"
 
 
 def test_inputs_that_do_not_belong_together_are_a_caller_error() -> None:
@@ -199,3 +199,16 @@ def test_inputs_that_do_not_belong_together_are_a_caller_error() -> None:
         applied.verify(split_entries(), {(1, SOURCE): []})
     with pytest.raises(ValueError, match="gone names"):
         applied.verify(split_entries(), AFTER_SPLIT, gone=(58,))
+
+
+def test_a_count_to_zero_that_deleted_its_item_leaves_an_entry_of_no_item() -> None:
+    applied = Applied(
+        view(MovementType.COUNT, stock=(picked((57, "0")),), lines=(("Disc", "0"),)),
+        {(1, DESTINATION): [item(57, "5")]},
+    )
+    now = Read({(1, DESTINATION): []})
+    assert applied.verify([entry(700, None, 10, quantity=0.0)], now, gone=(57,)) == []
+    assert applied.verify([entry(700, None, 12, removed=5.0, quantity=0.0)], now, gone=(57,))[0].startswith(
+        "no history entry type 10 (quantity 0) of a deleted stock item"
+    )
+    assert applied.verify([], now, gone=(57,), api_version=DEPLETING_MARKER_FOUND_FROM - 1) == []

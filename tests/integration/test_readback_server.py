@@ -95,10 +95,15 @@ def test_char_history_deltas(api: RawApi, scratch: Scratch, movement_type: Movem
 
 
 @pytest.mark.parametrize("delete_on_deplete", [True, False])
-def test_char_a_removal_of_all_an_item_holds(api: RawApi, scratch: Scratch, delete_on_deplete: bool) -> None:
-    """Deleted: its entry has no item, and below API 530 the search misses it. Kept: it holds 0, entry and all."""
+@pytest.mark.parametrize(("movement_type", "quantity"), [(MovementType.CONSUME, "3"), (MovementType.COUNT, "0")])
+def test_char_a_write_that_empties_an_item(
+    api: RawApi, scratch: Scratch, delete_on_deplete: bool, movement_type: MovementType, quantity: str
+) -> None:
+    """A remove of all 3, or a count to 0. Deleted: its entry has no item, and below API 530 the search misses it.
+    Kept: it holds 0, entry and all."""
     item = scratch.stock(3, delete_on_deplete=delete_on_deplete)
-    assert apply(api, planned(scratch, MovementType.CONSUME, item["pk"], "3")) == ()
+    assert apply(api, planned(scratch, movement_type, item["pk"], quantity)) == ()
+    assert api.status(f"/api/stock/{item['pk']}/") == (404 if delete_on_deplete else 200)
 
 
 def test_another_writer_between_the_snapshot_and_the_write_is_seen(api: RawApi, scratch: Scratch) -> None:

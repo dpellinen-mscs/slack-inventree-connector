@@ -13,9 +13,9 @@ the snapshot used (`InvenTreeReader.stock_items`), and finds which stock items t
      what it holds;
    - an add (11): `added` the quantity and `quantity` what the item holds after; a remove (12): `removed` and
      `quantity` likewise; a count (10): `quantity` the count.
-   A remove that empties an item marked delete_on_deplete deletes the item; its entry stays, with no item. Below API
-   `DEPLETING_MARKER_FOUND_FROM` the search does not find that entry, so there it may be missing. Only such a
-   removal may leave an item gone.
+   A remove of all an item held, or a count to 0, deletes an item marked delete_on_deplete; its entry stays, with
+   no item. Below API `DEPLETING_MARKER_FOUND_FROM` the search does not find that entry, so there it may be missing.
+   Only such a write may leave an item gone (`empties`).
 2. The total at each pair is the snapshot's total plus the plan: a transfer or a remove takes its quantity from the
    source, a transfer puts it at the destination, an add puts it at its place, a count makes the item hold the count.
 
@@ -69,9 +69,9 @@ def verify(
     if not set(gone) <= lines.keys():
         raise ValueError("gone names a stock item the request does not")
     problems = [
-        f"stock item {pk} is gone, and only a removal of all it held may delete it"
+        f"stock item {pk} is gone, and only a removal of all it held or a count to 0 may delete it"
         for pk in sorted(gone)
-        if operation is not Operation.REMOVE or lines[pk] != snapshot.stock_items[pk]
+        if not empties(operation, lines[pk], snapshot.stock_items[pk])
     ]
     others = [entry.pk for entry in entries if entry.marker != marker]
     if others:
@@ -102,7 +102,7 @@ def _entries(
         if pk in gone:
             if found:
                 problems.append(f"stock item {pk} is gone, yet history entries {_pks(found)} name it")
-            of_deleted.append((REMOVED, {"removed": quantity, "quantity": Decimal(0)}))
+            of_deleted.append(_wanted(operation, destination, quantity, before))
         elif operation is Operation.TRANSFER and quantity < before:
             problems += _split(pk, quantity, before, found, by_item, lines)
         else:
@@ -121,6 +121,12 @@ def _entries(
     for owner, rest in sorted(by_item.items(), key=lambda pair: pair[0] or 0):
         problems.append(f"history entries {_pks(rest)} on stock item {owner}, which the request does not write")
     return problems
+
+
+def empties(operation: Operation, quantity: Decimal, before: Decimal) -> bool:
+    """Whether a line leaves its item at 0, which deletes an item marked delete_on_deplete: a remove of all it held,
+    or a count to 0 (measured: `test_char_a_write_that_empties_an_item`)."""
+    return (operation is Operation.REMOVE and quantity == before) or (operation is Operation.COUNT and quantity == 0)
 
 
 def _wanted(operation: Operation, destination: int | None, quantity: Decimal, before: Decimal) -> Wanted:
