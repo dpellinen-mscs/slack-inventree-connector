@@ -92,6 +92,7 @@ from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_l
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
 from stockthread.core.validate import photo_not_read, validate
 from stockthread.llm.extract import NoReading, ProviderError
+from stockthread.plan_record import plan_of
 from stockthread.slack.catchup import is_catch_up
 from stockthread.slack.ingest import (
     Click,
@@ -126,6 +127,7 @@ from stockthread.store import (
     DryRunOutcome,
     EventStatus,
     LockLost,
+    NewPlan,
     NewQuestion,
     QuestionStatus,
     ReviewItem,
@@ -1173,6 +1175,11 @@ class Worker:
         self._llm_waiting.pop(key, None)
         reply_ts = response.get("ts")
         valid = isinstance(reply_ts, str) and _SLACK_TS.fullmatch(reply_ts)
+        # A reply that could apply in full makes the post's plan revision, stored with it (ADR 0016); any other
+        # outcome leaves the post without one, so the plan is always the one of the reply that stands.
+        made = None
+        if sent.outcome is DryRunOutcome.REPLIED and sent.decided is not None:
+            made = plan_of(json.loads(json.dumps(sent.decided)))  # as the store gives the record back
         self.store.finish_dry_run(
             self.owner,
             key,
@@ -1185,6 +1192,7 @@ class Worker:
             changes=sent.changes,
             answers=sent.answers,
             question=sent.question,
+            plan=None if made is None else NewPlan(*made),
         )
         if sent.outcome is DryRunOutcome.RETRACTED:
             log.info("post %s: revision %d notice posted", key.ts, sent.revision)

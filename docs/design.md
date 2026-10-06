@@ -1446,7 +1446,17 @@ from a new reading ([ADR 0016](decisions/0016-apply-reads-the-dry-run-record.md)
 `plan_record.views_of` rebuilds them and refuses a record that is gone,
 one whose movements do not hash to the plan's `input_hash`
 (`plan_record.plan_hash`), and one with a gate reason or a line without
-stock read.
+stock read. The plan itself is made with the reply, in the transaction
+that records it (`Store.finish_dry_run`): a reply whose record could apply
+in full (`plan_record.plan_of`: it rebuilds, it is not rejected, and
+`plan_requests` builds every request from it) makes the post's next plan
+revision, with one `planned` request per movement. Every other outcome but
+`unchanged` (a reply that needs a human, a notice taking the reply back,
+withheld, failed, given up) leaves the post with no current plan. A plan
+replaced either way becomes stale, and its requests that have not started
+a write are cancelled. So the current plan is always the plan of the reply
+that stands in the thread. A plan is made with writes off too: the gate,
+not the planner, blocks it.
 
 Another InvenTree user can still change the stock between steps 3 and 4.
 The connector cannot lock InvenTree, so that window cannot be closed, only
