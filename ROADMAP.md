@@ -124,6 +124,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] Marker search: every attempt of one request, whole markers only (`InvenTreeReader.marker_entries`)
   - [x] Marker check: the markers found agree with the recorded states of every request of the post (`core/marker_check.py`, `Store.recorded_requests`)
   - [x] Marker check against InvenTree: search, and a missing marker excused only by every item's 404 (`apply.check_post_markers`)
+  - [x] Precondition: the plan still holds against the stock read now, and the snapshot stored with the attempt (`precondition.check`)
   - [x] Intent: the stored body's notes lead with the attempt's marker (`Store.next_marker`, `Store.begin_attempt`)
   - [x] Single write: one request sent once, its outcome accepted, refused or unknown (`InvenTreeWriter.send`)
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
