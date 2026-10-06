@@ -892,29 +892,30 @@ def test_the_current_plan_is_always_the_one_of_the_reply_that_stands(store: Stor
         store.place_message(OWNER, reply, user_id=LUIS, thread_ts=key.ts, window_seconds=5)
         store.finish_dry_run(OWNER, key, outcome, reply_ts, revision=n, result={}, plan=plan)
 
-    revision(2, DryRunOutcome.UNCHANGED, plan=plan)  # the same reply stands: so does its plan, approval and all
-    assert plans(path) == [(1, "1", "current", [("transfer", "approved"), ("add", "planned")])]
+    revision(2, DryRunOutcome.UNCHANGED, plan=plan)  # the message that joined staled it; reading the same remakes it
+    cancelled = [("transfer", "cancelled"), ("add", "cancelled")]
+    assert plans(path) == [
+        (1, "1", "stale", cancelled),
+        (2, "1", "current", [("transfer", "planned"), ("add", "planned")]),
+    ]
     with pytest.raises(LockLost):
         store.stale_plan("instance-b", key)
     store.stale_plan(OWNER, key)  # a reply is on its way
     store.stale_plan(OWNER, key)
-    assert plans(path) == [(1, "1", "stale", [("transfer", "cancelled"), ("add", "cancelled")])]
+    assert plans(path)[1] == (2, "1", "stale", cancelled)
     revision(3, DryRunOutcome.UNCHANGED, plan=plan)  # it was never posted, and the reply above stands again
-    assert plans(path)[-1] == (2, "1", "current", [("transfer", "planned"), ("add", "planned")])
+    assert plans(path)[-1] == (3, "1", "current", [("transfer", "planned"), ("add", "planned")])
     revision(4, DryRunOutcome.REPLIED, "1790000041.000100", NewPlan("2" * 64, (Operation.REMOVE,)))
-    assert plans(path)[1:] == [
-        (2, "1", "stale", [("transfer", "cancelled"), ("add", "cancelled")]),
-        (3, "2", "current", [("remove", "planned")]),
-    ]
+    assert plans(path)[2:] == [(3, "1", "stale", cancelled), (4, "2", "current", [("remove", "planned")])]
     revision(5, DryRunOutcome.UNCHANGED, plan=plan)  # not the plan of the reply that stands: made again
-    assert [(revision, input_hash, state) for revision, input_hash, state, _ in plans(path)][2:] == [
-        (3, "2", "stale"),
-        (4, "1", "current"),
+    assert [(revision, input_hash, state) for revision, input_hash, state, _ in plans(path)][3:] == [
+        (4, "2", "stale"),
+        (5, "1", "current"),
     ]
     revision(6, DryRunOutcome.UNCHANGED)  # the reply that stands could not apply after all
     revision(7, DryRunOutcome.REPLIED, "1790000071.000100", NewPlan("2" * 64, (Operation.REMOVE,)))
     revision(8, DryRunOutcome.REPLIED, "1790000081.000100")  # a reply that needs a human: no plan stands
-    assert [state for _, _, state, _ in plans(path)] == ["stale"] * 5
+    assert [state for _, _, state, _ in plans(path)] == ["stale"] * 6
     n = 8
     for outcome, reply_ts in (
         (DryRunOutcome.RETRACTED, "1790000099.000100"),
@@ -928,6 +929,25 @@ def test_the_current_plan_is_always_the_one_of_the_reply_that_stands(store: Stor
         assert [state for _, _, state, _ in plans(path)][-1] == "stale", outcome
         n += 2
     assert "current" not in [state for _, _, state, _ in plans(path)]
+
+
+def test_a_revision_made_by_an_answer_alone_that_reads_the_same_keeps_the_plan_approval_and_all(
+    store: Store, path: Path
+) -> None:
+    store.place_message(OWNER, KEY, user_id=SAM, thread_ts=None, window_seconds=5)
+    plan = NewPlan("1" * 64, (Operation.TRANSFER,))
+    question = NewQuestion({"ask": "confirm"}, False, [("y" * 22, {"kind": "yes"})], poster=SAM, expires_from=ROOT)
+    store.finish_dry_run(
+        OWNER, KEY, DryRunOutcome.REPLIED, "1790009999.000001", result={}, question=question, plan=plan
+    )
+    store.transition(
+        RequestKey(KEY, 1, 1), expected=RequestState.PLANNED, target=RequestState.APPROVED, actor=Actor.HUMAN
+    )
+    button = store.button("y" * 22)
+    assert button is not None
+    store.answer_question(OWNER, button, SAM)
+    store.finish_dry_run(OWNER, KEY, DryRunOutcome.UNCHANGED, revision=2, result={}, answers=1, plan=plan)
+    assert plans(path) == [(1, "1", "current", [("transfer", "approved")])]
 
 
 def test_a_change_noted_after_a_dry_run_makes_a_revision_that_reads_no_further(store: Store, path: Path) -> None:
@@ -3832,13 +3852,31 @@ def test_a_plan_that_cannot_be_worked_out_never_keeps_the_reply_from_being_recor
     assert plans(path) == []
 
 
-def test_an_edit_that_reads_the_same_keeps_the_plan(store: Store, clock: Clock, path: Path) -> None:
+def test_an_edit_stales_the_plan_at_once_and_a_revision_that_reads_the_same_makes_it_again(
+    store: Store, clock: Clock, path: Path
+) -> None:
     worker = stocked(store, clock, FakeStock({(1, 10): [ok(57, 5)]}))
-    before = plans(path)
+    [(_, first, _, _)] = plans(path)
     enqueue(store, edit_of(ROOT, "1790000040.000100", TAKE, TAKE + " "))
+    worker.drain()  # noted, not read yet: the post is due for a revision, and no plan of it may be approved
+    assert plans(path) == [(1, first, "stale", [("transfer", "cancelled")])]
     worker.step()
     assert revisions(path) == [(2, "unchanged", False)]
-    assert plans(path) == before
+    assert plans(path)[1] == (2, first, "current", [("transfer", "planned")])
+
+
+def test_a_thread_reply_stales_the_plan_at_once(store: Store, clock: Clock, path: Path) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(57, 5)]}))
+    enqueue(store, message("1790000040.000100", "on my way", user=LUIS, thread_ts=ROOT))
+    worker.drain()
+    assert [state for _, _, state, _ in plans(path)] == ["stale"]
+
+
+def test_an_edit_of_a_message_not_in_any_post_stales_no_plan(store: Store, clock: Clock, path: Path) -> None:
+    stocked(store, clock, FakeStock({(1, 10): [ok(57, 5)]}))
+    store.note_revision(OWNER, PostKey(WORKSPACE, CHANNEL, "1790000050.000100"))
+    store.note_revision(OWNER, PostKey(WORKSPACE, "C0OTHER01", ROOT))
+    assert [state for _, _, state, _ in plans(path)] == ["current"]
 
 
 def test_a_split_is_shown_item_by_item(store: Store, clock: Clock) -> None:

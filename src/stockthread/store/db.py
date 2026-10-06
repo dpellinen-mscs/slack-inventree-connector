@@ -519,6 +519,10 @@ class Store:
         instances never group the same channel differently. Timestamps must be in Slack's exact form
         ("1790000000.000100"): keys are compared as strings. `slack_event_id` is the stored event the message
         came from: the worker reads the message text from its raw body.
+
+        A message that joins a post makes its current plan stale at once, in the same transaction: the post is due
+        for a revision, and until that revision is recorded no plan of it may be approved. A revision that reads
+        the same makes the plan again (`finish_dry_run`).
         """
         if not user_id or window_seconds < 0:
             raise ValueError("a message needs a user, and the window cannot be negative")
@@ -576,6 +580,8 @@ class Store:
                 (post_id, workspace, channel, message.ts, user_id, thread_ts, self._now(), slack_event_id),
             )
             self._audit(Actor.PLANNER, "message_grouped", post_id=post_id)
+            if not created:
+                self._replace_plan(post_id, None)
             return key, created
 
     def post_messages(self, key: PostKey) -> list[str]:
@@ -689,7 +695,8 @@ class Store:
         """Remember that a message was edited or deleted, whether or not the message itself has arrived.
 
         Every event is noted, so each later edit of a message makes its post due again. Idempotent: once per
-        event, and once per message for a note without an event.
+        event, and once per message for a note without an event. The post of a message that has arrived loses its
+        current plan at once, as in `place_message`.
         """
         with self._transaction():
             self._check_lock(owner)
@@ -712,6 +719,11 @@ class Store:
                 (*key, slack_event_id, self._now()),
             )
             self._audit("ingest", "revision_noted", slack_event_id=slack_event_id)
+            held = self._db.execute(
+                "SELECT post_id FROM post_messages WHERE workspace_id = ? AND channel_id = ? AND ts = ?", key
+            ).fetchone()
+            if held is not None:
+                self._replace_plan(int(held[0]), None)
 
     def post_change_bodies(self, key: PostKey, through: int) -> dict[str, list[str | None]]:
         """Each noted edit or deletion of a message of the post, or of the message it is keyed on, up to the

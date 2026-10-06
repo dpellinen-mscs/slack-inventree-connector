@@ -1454,10 +1454,14 @@ revision, with one `planned` request per movement. An `unchanged`
 revision keeps the plan of the reply that still stands, or makes it again
 when it is no longer current. Every other outcome (a reply that needs a
 human, a notice taking the reply back, withheld, failed, given up) leaves
-the post with no current plan. Before any reply or notice is handed to
-Slack, the current plan becomes stale (`Store.stale_plan`): from then on
-the thread may show the new reply, even while its call is still running
-or if recording it fails. A plan replaced becomes stale, and its requests
+the post with no current plan. A message that joins the post, or an edit
+or deletion noted of one of its messages, makes the current plan stale at
+once, in the same transaction (`Store.place_message`,
+`Store.note_revision`): the post is due for a revision, and no plan of it
+may be approved before that revision is recorded. Before any reply or
+notice is handed to Slack, the current plan becomes stale too
+(`Store.stale_plan`): from then on the thread may show the new reply, even
+while its call is still running or if recording it fails. A plan replaced becomes stale, and its requests
 that have not started a write are cancelled. So a current plan is always
 the plan of the reply that stands in the thread. A plan is made with
 writes off too: the gate, not the planner, blocks it. A plan does not name
