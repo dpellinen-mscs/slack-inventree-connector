@@ -54,24 +54,26 @@ def views_of(result: Mapping[str, Any] | None, input_hash: str) -> list[Movement
         raise NotRebuilt("the record has no movements")
     try:
         return [_view(number, movement) for number, movement in enumerate(movements, start=1)]
-    except (KeyError, TypeError, ValueError, InvalidOperation) as error:
+    except (AttributeError, KeyError, TypeError, ValueError, InvalidOperation) as error:
         if isinstance(error, NotRebuilt):
             raise
         raise NotRebuilt(f"the record does not have the form of a dry-run record: {type(error).__name__}") from None
 
 
 def _view(number: int, stored: Mapping[str, Any]) -> MovementView:
-    if stored["gate"]:
+    if _list(stored["gate"]):
         raise NotRebuilt(f"movement {number} has a gate reason")
-    lines = stored["items"]
-    if not isinstance(lines, list) or not lines:
+    lines = _list(stored["items"])
+    if not lines:
         raise NotRebuilt(f"movement {number} has no lines")
     picks: list[SourcePick] = []
     named: dict[int | str, str] = {}
     for line, item in enumerate(lines):
         if item.get("stock") is None:
             raise NotRebuilt(f"movement {number}: the stock of line {line + 1} was not read")
-        picks.append(SourcePick(tuple(Take(_int(take["item"]), _taken(take["quantity"])) for take in item["stock"])))
+        picks.append(
+            SourcePick(tuple(Take(_int(take["item"]), _taken(take["quantity"])) for take in _list(item["stock"])))
+        )
         if "named" in item:
             named[line] = _str(item["named"])
     for side in ("source", "destination"):
@@ -85,13 +87,13 @@ def _view(number: int, stored: Mapping[str, Any]) -> MovementView:
                 _decimal(item["quantity"]),
                 _text(item["unit"]),
                 _decimal(item["pack_size"]),
-                tuple(_str(serial) for serial in item["serials"]),
+                tuple(_str(serial) for serial in _list(item["serials"])),
             )
             for item in lines
         ),
         _text(stored["source_text"]),
         _text(stored["destination_text"]),
-        frozenset(Flag(flag) for flag in stored["flags"]),
+        frozenset(Flag(flag) for flag in _list(stored["flags"])),
     )
     return MovementView(
         movement,
@@ -100,7 +102,7 @@ def _view(number: int, stored: Mapping[str, Any]) -> MovementView:
         _match(stored["destination"]),
         tuple(
             ReviewReason(ReasonCode(reason["code"]), ReasonSource(reason["source"]), _str(reason["detail"]))
-            for reason in stored["reasons"]
+            for reason in _list(stored["reasons"])
         ),
         tuple(picks),
         named,
@@ -112,7 +114,7 @@ def _match(stored: Mapping[str, Any] | None) -> Match | None:
         return None
     rule = stored["rule"]
     record = stored["record"]
-    candidates: Sequence[Any] = stored["candidates"]
+    candidates: Sequence[Any] = _list(stored["candidates"])
     return Match(
         MatchStatus(stored["status"]),
         None if rule is None else MatchRule(rule),
@@ -144,10 +146,17 @@ def _text(value: Any) -> str | None:
 
 
 def _taken(value: Any) -> Decimal:
+    """A take's quantity: zero only for a count to 0, which `build_request` alone may refuse for the rest."""
     quantity = Decimal(_str(value))
-    if not quantity.is_finite() or quantity <= 0:
-        raise ValueError("a take is a finite quantity above zero")
+    if not quantity.is_finite() or quantity < 0:
+        raise ValueError("a take is a finite quantity, zero or more")
     return quantity
+
+
+def _list(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        raise TypeError("a list field is a list")
+    return value
 
 
 def _decimal(value: Any) -> Decimal | None:

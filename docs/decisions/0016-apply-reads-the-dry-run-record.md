@@ -47,6 +47,8 @@ Three sources were possible:
   the settings (switch, policy, approvers), the server's version check,
   the vehicles from the current catalog, and the answers, the rejection
   and the Apply click from the store.
+- Checks of the dry run itself are not made again: a lower
+  `max_quantity` set after a plan was made does not block that plan.
 - Stock is read fresh too: the precondition (step 3) compares the rebuilt
   picks with InvenTree now, and sends the request back to review when they
   no longer hold.

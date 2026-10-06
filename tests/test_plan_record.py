@@ -53,6 +53,13 @@ def test_a_decided_record_rebuilds_the_views_it_was_written_from() -> None:
     assert record(*rebuilt)["movements"] == stored["movements"]
 
 
+def test_a_count_to_zero_rebuilds() -> None:
+    count = view(MovementType.COUNT, lines=(("Disc 40", "0"),), stock=(picked((57, "0")),))
+    stored = record(count)
+    assert stored["movements"][0]["gate"] == []
+    assert views_of(stored, plan_hash(stored)) == [count]
+
+
 def test_the_hash_covers_the_movements_only() -> None:
     stored = record(TO_TRUCK)
     assert plan_hash({**stored, "late": True}) == plan_hash(stored)
@@ -90,7 +97,10 @@ def test_a_line_without_stock_is_refused() -> None:
         (("items", 0, "stock", 0, "item"), "57"),
         (("items", 0, "stock", 0, "item"), True),
         (("items", 0, "stock", 0, "quantity"), "NaN"),
-        (("items", 0, "stock", 0, "quantity"), "0"),
+        (("items", 0, "stock", 0, "quantity"), "-1"),
+        (("items", 0, "serials"), "AB"),
+        (("items", 0), "junk"),
+        (("gate",), 0),
         (("items", 0, "stock", 0, "quantity"), 2),
         (("items", 0, "part", "status"), "found"),
         (("items", 0, "part"), None),
