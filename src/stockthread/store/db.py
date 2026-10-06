@@ -1543,6 +1543,34 @@ class Store:
         age = self._clock_now() - datetime.fromisoformat(finished_at)
         return UnknownAttempt(Marker.parse(marker), age, json.loads(snapshot), json.loads(body))
 
+    def conclude_crashed_writes(self, lock_owner: str) -> list[RequestKey]:
+        """Move every request a crashed run left `applying` or `undoing` to `unknown` or `undo_unknown`, as recovery,
+        and return their keys. Call it once at start, after taking the instance lock and before this process sends
+        any write: a write of this process in flight would become unknown too.
+
+        Its attempt's outcome becomes unknown now, so recovery's settle time starts now: the crashed run's write may
+        have reached the server and still be running there. A run that lost the lock while it was sending (a takeover
+        of a stale heartbeat) can no longer record its outcome (StateConflict); recovery concludes it. Such a run, if
+        stalled rather than dead, may send after the settle time: recovery then finds no marker (`failed`), and the
+        late write is the ADR 0015 case (the post stays blocked; the marker check reports it). Raises LockLost unless
+        `lock_owner` holds the instance lock."""
+        targets = {S.APPLYING: S.UNKNOWN, S.UNDOING: S.UNDO_UNKNOWN}
+        with self._transaction():
+            self._check_lock(lock_owner)
+            rows = self._db.execute(
+                "SELECT r.id, r.state, o.workspace_id, o.channel_id, o.ts, p.revision, r.sequence"
+                " FROM requests r JOIN plans p ON p.id = r.plan_id JOIN posts o ON o.id = p.post_id"
+                " WHERE r.state IN (?, ?) ORDER BY r.id",
+                (S.APPLYING.value, S.UNDOING.value),
+            ).fetchall()
+            keys: list[RequestKey] = []
+            for request_id, state, workspace, channel, ts, revision, sequence in rows:
+                target = targets[S(state)]
+                self._finish_attempt(request_id, target)
+                self._set_state(request_id, S(state), target, Actor.RECOVERY)
+                keys.append(RequestKey(PostKey(workspace, channel, ts), revision, sequence))
+            return keys
+
     def applied_attempt(self, key: RequestKey) -> AppliedAttempt:
         """The last attempt of the `applied` request `key`, the one to read back: InvenTree accepted it, or recovery
         found its marker. KeyError if the request is not `applied`."""
