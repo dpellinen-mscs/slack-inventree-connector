@@ -142,6 +142,8 @@ payloads whose channel or message does not fit the stored id.
   - [ ] Recovery of an unknown undo; the worker runs recovery
 - [ ] Plans with several requests, and the `partially_applied` state
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
+  - [x] The message: each movement's outcome, its exact changes, links to InvenTree and its marker (`replies.receipt`); due once every write of the plan concluded, recorded once posted (`Store.receipts_due`, `Store.receipt_posted`)
+  - [ ] Posted by the worker, with the Undo button
 - [ ] Undo by button, authorized and idempotent, built from the observed history
 - [ ] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
 - [ ] Instance lock: one connector per database

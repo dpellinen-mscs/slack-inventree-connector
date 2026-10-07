@@ -32,6 +32,7 @@ from stockthread.core.marker import MAX_ATTEMPT, AttemptKind, Marker, marked, ne
 from stockthread.core.marker_check import Outcome, RecordedAttempt, RecordedRequest
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import (
+    RECEIPT_STATES,
     UNSETTLED,
     Actor,
     RequestState,
@@ -236,6 +237,8 @@ class PlanRow:
     requests: tuple[RequestRow, ...]
     approved_by: str | None
     """The approver whose Apply click approved the plan; None when the policy approved it, or nothing did."""
+    receipt_ts: str | None = None
+    """The ts of the plan's receipt in the thread (`Store.receipt_posted`); None until it is posted."""
 
 
 @dataclass(frozen=True)
@@ -1484,16 +1487,17 @@ class Store:
     def plan(self, post: PostKey, revision: int) -> PlanRow:
         """Plan revision `revision` of the post; KeyError when there is none."""
         row = self._db.execute(
-            "SELECT p.id, p.input_hash, p.state, p.approved_by FROM plans p JOIN posts o ON o.id = p.post_id"
+            "SELECT p.id, p.input_hash, p.state, p.approved_by, p.receipt_ts FROM plans p"
+            " JOIN posts o ON o.id = p.post_id"
             " WHERE o.workspace_id = ? AND o.channel_id = ? AND o.ts = ? AND p.revision = ?",
             (post.workspace_id, post.channel_id, post.ts, revision),
         ).fetchone()
         if row is None:
             raise KeyError(f"no plan revision {revision} of post {post}")
-        plan_id, input_hash, state, approved_by = row
+        plan_id, input_hash, state, approved_by, receipt_ts = row
         (count,) = self._db.execute("SELECT count(*) FROM requests WHERE plan_id = ?", (plan_id,)).fetchone()
         requests = tuple(self.request(RequestKey(post, revision, sequence)) for sequence in range(1, count + 1))
-        return PlanRow(post, revision, str(input_hash), state == "current", requests, approved_by)
+        return PlanRow(post, revision, str(input_hash), state == "current", requests, approved_by, receipt_ts)
 
     def current_plan(self, post: PostKey) -> PlanRow | None:
         """The post's current plan revision, or None when it has none."""
@@ -1513,6 +1517,38 @@ class Store:
             " WHERE r.state IN ('approved', 'applied', 'unknown') ORDER BY o.id, p.revision, r.sequence"
         ).fetchall()
         return [RequestKey(PostKey(w, c, ts), int(revision), int(sequence)) for w, c, ts, revision, sequence in rows]
+
+    def receipts_due(self) -> list[tuple[PostKey, int]]:
+        """Every plan revision, as (post, revision), that is due its receipt (design section 7, step 6): it has no
+        receipt yet, and each of its requests concluded its write: `verified`, `verify_failed` or `failed`. A plan with
+        a request in any other state waits, so its receipt reports every request (ADR 0002). By post and revision."""
+        concluded = sorted(state.value for state in RECEIPT_STATES)
+        rows = self._db.execute(
+            "SELECT o.workspace_id, o.channel_id, o.ts, p.revision FROM plans p JOIN posts o ON o.id = p.post_id"
+            " WHERE p.receipt_ts IS NULL AND EXISTS (SELECT 1 FROM requests r WHERE r.plan_id = p.id)"
+            " AND NOT EXISTS (SELECT 1 FROM requests r WHERE r.plan_id = p.id AND r.state NOT IN (?, ?, ?))"
+            " ORDER BY o.id, p.revision",
+            concluded,
+        ).fetchall()
+        return [(PostKey(w, c, ts), int(revision)) for w, c, ts, revision in rows]
+
+    def receipt_posted(self, owner: str, post: PostKey, revision: int, ts: str) -> None:
+        """Record that the receipt of plan revision `revision` of the post was posted as the thread reply `ts`.
+        StateConflict, and nothing changes, when the plan already has a receipt or a request of it left the states
+        `receipts_due` reports (a person acted on it in between); KeyError when there is no such plan. `owner` must
+        hold the instance lock."""
+        if not ts:
+            raise ValueError("a receipt is a posted message: its ts is not empty")
+        with self._transaction():
+            self._check_lock(owner)
+            plan = self.plan(post, revision)
+            if plan.receipt_ts is not None:
+                raise StateConflict(f"plan revision {revision} already has its receipt")
+            if not plan.requests or any(row.state not in RECEIPT_STATES for row in plan.requests):
+                raise StateConflict(f"plan revision {revision} has a request whose write has not concluded")
+            plan_id, post_id = self._request(plan.requests[0].key)[1:]
+            self._db.execute("UPDATE plans SET receipt_ts = ? WHERE id = ?", (ts, plan_id))
+            self._audit(Actor.APPLIER, "receipt_posted", post_id=post_id, plan_id=plan_id)
 
     def _check_no_unknown_write(self, request_id: int, post_id: int, kind: AttemptKind) -> None:
         """WriteBlocked unless every earlier attempt of `kind` of the request was refused by InvenTree, and, for an

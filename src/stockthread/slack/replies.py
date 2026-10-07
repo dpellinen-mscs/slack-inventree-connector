@@ -1,4 +1,5 @@
-"""The dry-run reply in a post's thread: what would change, and every reason it needs a human.
+"""The replies in a post's thread: the dry run (what would change, and every reason it needs a human), its
+questions, and the receipt of what was written.
 
 Pure: it turns values into a `chat.postMessage` body (`text` and `blocks`). Text that came from
 the post (item and location words) is escaped, so a post cannot make the connector write a
@@ -8,6 +9,7 @@ mention such as <!channel> or a disguised link. Catalog names are escaped too.
 from __future__ import annotations
 
 import re
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -24,6 +26,7 @@ from stockthread.core.model import (
     operation_for,
 )
 from stockthread.core.questions import Ask, Choice, Question, choices
+from stockthread.core.requests import RequestState
 from stockthread.core.resolve import SourcePick, StockItem
 
 MAX_SECTION = 2900
@@ -532,3 +535,92 @@ def question_closed(answered_by: str | None, *, expired: bool = False) -> dict[s
     else:
         text = "This question was answered."
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+
+RECEIPT_WORDS = {
+    RequestState.VERIFIED: "applied, and read back as planned",
+    RequestState.VERIFY_FAILED: "written, but reading it back did not match the plan. Check it in InvenTree",
+    RequestState.FAILED: "not applied. InvenTree refused it, or shows no change from it",
+}
+"""What a request's state says in the receipt; the receipt is posted once every request is in one of these. A
+`failed` request is not said to have changed nothing: one recovery concluded may still land (ADR 0015)."""
+
+_LINK_SAFE = ":/%[]-._~!$'()*+,;="
+"""What a link keeps of the configured InvenTree URL as written. Anything else, such as `|`, `<`, `>` or `&`, is
+percent-encoded, so the URL cannot end the link or add markup."""
+
+
+def _link(inventree_url: str, kind: str, pk: int, label: str) -> str:
+    """A link to a record's page in InvenTree's web interface (`/web/stock/item/<pk>`, `/web/stock/location/<pk>`)."""
+    base = urllib.parse.quote(inventree_url.rstrip("/"), safe=_LINK_SAFE)
+    return f"<{base}/web/stock/{kind}/{pk}|{escape(label)}>"
+
+
+def _receipt_links(view: MovementView, locations: Mapping[int, str], inventree_url: str) -> str:
+    places = [match.record for match in (view.source, view.destination) if match is not None]
+    items = sorted({take.item for pick in view.stock if pick is not None for take in pick.takes})
+    links = [
+        _link(inventree_url, "location", pk, locations.get(pk, f"location #{pk}"))
+        for pk in dict.fromkeys(pk for pk in places if pk is not None)
+    ]
+    links += [_link(inventree_url, "item", pk, f"stock item #{pk}") for pk in items]
+    return f"In InvenTree: {' · '.join(links)}" if links else ""
+
+
+def receipt(
+    views: Sequence[MovementView],
+    states: Sequence[RequestState],
+    markers: Sequence[str],
+    parts: Mapping[int, str],
+    locations: Mapping[int, str],
+    *,
+    inventree_url: str,
+    approved_by: str | None,
+) -> dict[str, Any]:
+    """The receipt in the post's thread once a plan's writes have concluded (design section 7, step 6): for every
+    movement, what was written and what its read-back found, links to its places and stock items in InvenTree, and the
+    marker its history entries carry in their notes. One state and one marker per movement, in the post's order.
+
+    `approved_by`: the approver whose Apply click approved the plan, or None when the write policy approved it."""
+    if not views:
+        raise ValueError("a receipt shows at least one movement")
+    if len(states) != len(views) or len(markers) != len(views):
+        raise ValueError("one state and one marker per movement")
+    if any(state not in RECEIPT_WORDS for state in states):
+        raise ValueError("a receipt reports only writes that concluded")
+    if all(state is RequestState.VERIFIED for state in states):
+        heading, text = "*Applied.* Inventory was changed as below, and read back to check it.", "Applied"
+    elif all(state is RequestState.FAILED for state in states):
+        heading, text = "*Not applied.* InvenTree shows no change from it.", "Not applied"
+    else:
+        heading, text = "*Check this.* Not everything below went as planned.", "Check this"
+    if approved_by is None:
+        who = "Approved by the write policy, with no click."
+    elif _SLACK_USER.fullmatch(approved_by):
+        who = f"Approved by <@{approved_by}>."
+    else:
+        who = "Approved by a click."
+    blocks: list[dict[str, Any]] = [_section(f"{heading} {who}")]
+    for number, (view, state, marker) in enumerate(zip(views[:MAX_MOVEMENTS], states, markers, strict=False), 1):
+        movement = view.movement
+        title = TYPE_LABELS[movement.movement_type]
+        if len(views) > 1:
+            title = f"{number}. {title}"
+        lines = [_line(view, i, parts) for i in range(len(view.items))]
+        source = _named(movement.source_text, view.source, locations, "location", view.named.get("source"))
+        destination = _named(
+            movement.destination_text, view.destination, locations, "location", view.named.get("destination")
+        )
+        shown = [f"*{title}*: {RECEIPT_WORDS[state]}.", *lines, f"From {source} to {destination}"]
+        links = _receipt_links(view, locations, inventree_url)
+        if links:
+            shown.append(links)
+        blocks.append(_section("\n".join(shown)))
+        trail = f"Marker `{escape(marker)}` leads the notes of each stock history entry this wrote."
+        if state is RequestState.FAILED:
+            trail = f"Marker `{escape(marker)}`: no stock history entry carries it."
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": trail}]})
+    if len(views) > MAX_MOVEMENTS:
+        blocks.append(_section(f"…and {len(views) - MAX_MOVEMENTS} more movements, not shown here."))
+    count = f"{len(views)} movements" if len(views) > 1 else "1 movement"
+    return {"text": f"{text}: {count}.", "blocks": blocks}

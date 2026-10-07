@@ -402,3 +402,99 @@ def test_only_a_person_or_the_policy_approves(store: Store) -> None:
     with pytest.raises(IllegalTransition, match="made by"):
         store.approve_plan(OWNER, POST, 1, actor=Actor.APPLIER)
     assert store.request(KEY).state is S.PLANNED
+
+
+def write(store: Store, key: RequestKey, outcome: RequestState) -> None:
+    """Send request `key`, already approved, to `outcome` the way the apply protocol does, with no InvenTree."""
+    marker = store.next_marker(key, AttemptKind.APPLY)
+    store.begin_attempt(
+        key,
+        marker.kind,
+        expected=S.APPROVED,
+        actor=Actor.APPLIER,
+        snapshot={},
+        request_body={"notes": str(marker)},
+        lock_owner=OWNER,
+    )
+    if outcome is S.FAILED:
+        store.transition(key, expected=S.APPLYING, target=S.FAILED, actor=Actor.APPLIER)
+        return
+    store.transition(key, expected=S.APPLYING, target=S.APPLIED, actor=Actor.APPLIER)
+    if outcome is not S.APPLIED:
+        store.transition(key, expected=S.APPLIED, target=outcome, actor=Actor.APPLIER)
+
+
+@pytest.mark.anyio
+async def test_a_plan_is_due_its_receipt_once_its_write_is_read_back_and_only_once(store: Store) -> None:
+    reply(store, record(TAKE))
+    assert store.receipts_due() == []
+    approve_by_policy(store, OWNER, POST, ON)
+    assert store.receipts_due() == []
+    assert await step(store, FakeInvenTree()) == Applied(S.VERIFIED, "read back: as planned")
+    assert store.receipts_due() == [(POST, 1)]
+    assert store.plan(POST, 1).receipt_ts is None
+    store.receipt_posted(OWNER, POST, 1, "1700000200.000100")
+    assert store.plan(POST, 1).receipt_ts == "1700000200.000100"
+    assert store.receipts_due() == []
+    assert ("applier", "receipt_posted", None, None) in [row[1:] for row in store.audit(POST)]
+    with pytest.raises(StateConflict, match="already has its receipt"):
+        store.receipt_posted(OWNER, POST, 1, "1700000201.000100")
+    assert store.plan(POST, 1).receipt_ts == "1700000200.000100"
+
+
+@pytest.mark.parametrize("outcome", [S.VERIFIED, S.VERIFY_FAILED, S.FAILED])
+def test_every_concluded_write_makes_its_plan_due(store: Store, outcome: RequestState) -> None:
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, outcome)
+    assert store.receipts_due() == [(POST, 1)]
+
+
+@pytest.mark.parametrize("outcome", [S.APPROVED, S.APPLYING, S.APPLIED, S.UNKNOWN])
+def test_a_plan_waits_for_its_receipt_while_any_write_has_not_concluded(store: Store, outcome: RequestState) -> None:
+    two = view(lines=(("Disc 40", "2"), ("U7 Lite", "1")), stock=(picked((ITEM, "2")), picked((58, "1"))))
+    reply(store, record(TAKE, two))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, S.VERIFIED)
+    second = RequestKey(POST, 1, 2)
+    if outcome is not S.APPROVED:
+        marker = store.next_marker(second, AttemptKind.APPLY)
+        store.begin_attempt(
+            second,
+            marker.kind,
+            expected=S.APPROVED,
+            actor=Actor.APPLIER,
+            snapshot={},
+            request_body={"notes": str(marker)},
+            lock_owner=OWNER,
+        )
+        if outcome is S.APPLIED:
+            store.transition(second, expected=S.APPLYING, target=S.APPLIED, actor=Actor.APPLIER)
+        elif outcome is S.UNKNOWN:
+            store.transition(second, expected=S.APPLYING, target=S.UNKNOWN, actor=Actor.APPLIER)
+    assert store.request(second).state is outcome
+    assert store.receipts_due() == []
+    with pytest.raises(StateConflict, match="not concluded"):
+        store.receipt_posted(OWNER, POST, 1, "1700000200.000100")
+    assert store.plan(POST, 1).receipt_ts is None
+
+
+def test_a_plan_never_written_is_not_due_a_receipt(store: Store) -> None:
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    reply(store, record(TAKE, TAKE), revision=2)  # the approved request is cancelled with its stale plan
+    assert store.request(KEY).state is S.CANCELLED
+    assert store.receipts_due() == []
+
+
+def test_only_the_lock_holder_records_a_receipt(store: Store) -> None:
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, S.VERIFIED)
+    with pytest.raises(LockLost):
+        store.receipt_posted("worker-2", POST, 1, "1700000200.000100")
+    with pytest.raises(ValueError, match="not empty"):
+        store.receipt_posted(OWNER, POST, 1, "")
+    with pytest.raises(KeyError):
+        store.receipt_posted(OWNER, POST, 2, "1700000200.000100")
+    assert store.receipts_due() == [(POST, 1)]

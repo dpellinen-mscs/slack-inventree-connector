@@ -1432,6 +1432,16 @@ connector never has two InvenTree writes in flight and cannot race itself.
    entries, and a recount between the snapshot and the write is seen
    (`test_another_writers_entry_that_leaves_the_totals_right_is_still_seen`).
 6. **Record.** Move to `verified` and post the receipt.
+   Built (the receipt's message and its record): `replies.receipt` shows,
+   for every movement of the plan, what was written and whether its
+   read-back matched, links to its locations and stock items in
+   InvenTree's web interface (`/web/stock/location/<pk>`,
+   `/web/stock/item/<pk>`), and the marker its history entries carry. A
+   plan is due its receipt once every request is `verified`,
+   `verify_failed` or `failed` (`Store.receipts_due`), and
+   `Store.receipt_posted` records the reply's ts once (migration 0019). A
+   crash between the post and the record posts it again: a duplicate beats
+   a silent drop. Not posted by the worker yet, and no Undo button yet.
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
 It takes the process's writer lock, judges the whole plan again with the
