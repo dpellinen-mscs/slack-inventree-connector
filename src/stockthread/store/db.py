@@ -1433,11 +1433,13 @@ class Store:
         check_transition(expected, target, actor)
         _check_recovered(expected, target, marker_found)
         with self._transaction():
-            row, _, post_id = self._request(key)
+            row, plan_id, post_id = self._request(key)
             if row.state != expected:
                 raise StateConflict(f"request {key} is {row.state}, not {expected}")
             if target is S.APPROVED:
                 self._check_approvable(row, post_id)
+            if target in (S.APPROVED, S.PLANNED):  # a click stored with the plan approves only with `approve_plan`
+                self._db.execute("UPDATE plans SET approved_by = NULL WHERE id = ?", (plan_id,))
             if row.state in (S.APPLYING, S.UNDOING):
                 self._finish_attempt(row.id, target)
             if marker_found is not None:
@@ -1471,15 +1473,13 @@ class Store:
         with self._transaction():
             self._check_lock(owner)
             plan = self.plan(post, revision)
-            if any(row.state is not S.PLANNED for row in plan.requests):
+            if not plan.requests or any(row.state is not S.PLANNED for row in plan.requests):
                 raise StateConflict(f"plan revision {revision} has requests that are not planned")
             for row in plan.requests:
                 _, _, post_id = self._request(row.key)
                 self._check_approvable(row, post_id)
                 self._set_state(row.id, S.PLANNED, S.APPROVED, actor)
-            self._db.execute(
-                "UPDATE plans SET approved_by = ? WHERE post_id = ? AND revision = ?", (approver, post_id, revision)
-            )
+            self._db.execute("UPDATE plans SET approved_by = ? WHERE id = ?", (approver, self._request(row.key)[1]))
 
     def plan(self, post: PostKey, revision: int) -> PlanRow:
         """Plan revision `revision` of the post; KeyError when there is none."""

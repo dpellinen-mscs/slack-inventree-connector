@@ -7,6 +7,7 @@ import json
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -253,6 +254,19 @@ async def test_a_request_approved_with_no_approver_stored_waits_like_the_policy(
     store.transition(KEY, expected=S.PLANNED, target=S.APPROVED, actor=Actor.HUMAN)  # one request, no clicker
     assert store.plan(POST, 1).approved_by is None
     fake = FakeInvenTree()
+    assert (await step(store, fake)).why == "not written: movement 1: return waits for Apply"
+    assert fake.sent == []
+
+
+@pytest.mark.anyio
+async def test_a_request_sent_back_to_review_loses_its_plans_clicker(store: Store) -> None:
+    reply(store, record(BACK))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.HUMAN, approver=LUIS)
+    fake = FakeInvenTree(held="1")  # the stock changed since the plan
+    assert (await step(store, fake)).state is S.PLANNED
+    assert store.plan(POST, 1).approved_by is None
+    store.transition(KEY, expected=S.PLANNED, target=S.APPROVED, actor=Actor.HUMAN)
+    fake.items[ITEM][2] = Decimal(2)
     assert (await step(store, fake)).why == "not written: movement 1: return waits for Apply"
     assert fake.sent == []
 
