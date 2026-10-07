@@ -224,6 +224,19 @@ class NewQuestion:
 
 
 @dataclass(frozen=True)
+class PlanRow:
+    """A stored plan revision and its requests, in the post's order."""
+
+    post: PostKey
+    revision: int
+    input_hash: str
+    """`plan_record.plan_hash` of the dry-run record the plan was made from (ADR 0016)."""
+    current: bool
+    """False once a newer reading, a joined message or a noted change made it stale."""
+    requests: tuple[RequestRow, ...]
+
+
+@dataclass(frozen=True)
 class NewPlan:
     """The plan revision a dry-run reply that could apply in full makes (ADR 0016), stored with the reply."""
 
@@ -1422,21 +1435,72 @@ class Store:
             if row.state != expected:
                 raise StateConflict(f"request {key} is {row.state}, not {expected}")
             if target is S.APPROVED:
-                if row.plan_state != "current":
-                    raise WriteBlocked(f"plan revision {key.revision} is {row.plan_state}")
-                earlier = [
-                    state
-                    for revision, _, state in self._post_states(post_id, exclude=row.id)
-                    if revision < key.revision
-                ]
-                if not may_approve_new_revision(earlier):
-                    raise WriteBlocked("an earlier revision of this post left a stock change behind")
-                self._check_no_unknown_write(row.id, post_id, AttemptKind.APPLY)
+                self._check_approvable(row, post_id)
             if row.state in (S.APPLYING, S.UNDOING):
                 self._finish_attempt(row.id, target)
             if marker_found is not None:
                 self._recovered(row.id, marker_found)
             self._set_state(row.id, expected, target, actor)
+
+    def _check_approvable(self, row: RequestRow, post_id: int) -> None:
+        """WriteBlocked unless the request may be approved now: its plan revision is current, every request of an
+        earlier revision left no stock change behind, and no write of the post may still land."""
+        if row.plan_state != "current":
+            raise WriteBlocked(f"plan revision {row.key.revision} is {row.plan_state}")
+        earlier = [
+            state for revision, _, state in self._post_states(post_id, exclude=row.id) if revision < row.key.revision
+        ]
+        if not may_approve_new_revision(earlier):
+            raise WriteBlocked("an earlier revision of this post left a stock change behind")
+        self._check_no_unknown_write(row.id, post_id, AttemptKind.APPLY)
+
+    def approve_plan(self, owner: str, post: PostKey, revision: int, *, actor: Actor) -> None:
+        """Approve every request of plan `revision` of the post at once, or raise and change nothing: StateConflict
+        unless all of them are `planned`, and WriteBlocked as `transition` raises it for any one of them. A plan is
+        approved whole, never one request of it. `owner` must hold the instance lock."""
+        check_transition(S.PLANNED, S.APPROVED, actor)
+        with self._transaction():
+            self._check_lock(owner)
+            plan = self.plan(post, revision)
+            if any(row.state is not S.PLANNED for row in plan.requests):
+                raise StateConflict(f"plan revision {revision} has requests that are not planned")
+            for row in plan.requests:
+                _, _, post_id = self._request(row.key)
+                self._check_approvable(row, post_id)
+                self._set_state(row.id, S.PLANNED, S.APPROVED, actor)
+
+    def plan(self, post: PostKey, revision: int) -> PlanRow:
+        """Plan revision `revision` of the post; KeyError when there is none."""
+        row = self._db.execute(
+            "SELECT p.id, p.input_hash, p.state FROM plans p JOIN posts o ON o.id = p.post_id"
+            " WHERE o.workspace_id = ? AND o.channel_id = ? AND o.ts = ? AND p.revision = ?",
+            (post.workspace_id, post.channel_id, post.ts, revision),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"no plan revision {revision} of post {post}")
+        plan_id, input_hash, state = row
+        (count,) = self._db.execute("SELECT count(*) FROM requests WHERE plan_id = ?", (plan_id,)).fetchone()
+        requests = tuple(self.request(RequestKey(post, revision, sequence)) for sequence in range(1, count + 1))
+        return PlanRow(post, revision, str(input_hash), state == "current", requests)
+
+    def current_plan(self, post: PostKey) -> PlanRow | None:
+        """The post's current plan revision, or None when it has none."""
+        row = self._db.execute(
+            "SELECT p.revision FROM plans p JOIN posts o ON o.id = p.post_id"
+            " WHERE o.workspace_id = ? AND o.channel_id = ? AND o.ts = ? AND p.state = 'current'",
+            (post.workspace_id, post.channel_id, post.ts),
+        ).fetchone()
+        return None if row is None else self.plan(post, int(row[0]))
+
+    def requests_to_work(self) -> list[RequestKey]:
+        """Every request a step of the apply protocol is due for: `approved` (the write), `applied` (the read-back a
+        read error left undone) and `unknown` (recovery, once settled), by post, revision and sequence."""
+        rows = self._db.execute(
+            "SELECT o.workspace_id, o.channel_id, o.ts, p.revision, r.sequence FROM requests r"
+            " JOIN plans p ON p.id = r.plan_id JOIN posts o ON o.id = p.post_id"
+            " WHERE r.state IN ('approved', 'applied', 'unknown') ORDER BY o.id, p.revision, r.sequence"
+        ).fetchall()
+        return [RequestKey(PostKey(w, c, ts), int(revision), int(sequence)) for w, c, ts, revision, sequence in rows]
 
     def _check_no_unknown_write(self, request_id: int, post_id: int, kind: AttemptKind) -> None:
         """WriteBlocked unless every earlier attempt of `kind` of the request was refused by InvenTree, and, for an
