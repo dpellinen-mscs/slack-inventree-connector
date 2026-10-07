@@ -1514,6 +1514,19 @@ class Store:
         ).fetchall()
         return [RequestKey(PostKey(w, c, ts), int(revision), int(sequence)) for w, c, ts, revision, sequence in rows]
 
+    def apply_waits_for(self, key: RequestKey) -> str | None:
+        """Why the apply of request `key` must wait for another request of its post, or None. It waits while another
+        write of the post is in flight or not read back yet, and while an earlier request of its plan is `approved`
+        (that one is written first). Each ends without a person, so the request keeps its approval; every other
+        refusal of `begin_attempt` is for good."""
+        _, _, post_id = self._request(key)
+        for revision, sequence, state in self._post_states(post_id, exclude=self.request(key).id):
+            if state in NOT_READ_BACK:
+                return f"request {sequence} of plan revision {revision} is {state}"
+            if revision == key.revision and sequence < key.sequence and state is S.APPROVED:
+                return f"request {sequence} of this plan is approved and is written first"
+        return None
+
     def _check_no_unknown_write(self, request_id: int, post_id: int, kind: AttemptKind) -> None:
         """WriteBlocked unless every earlier attempt of `kind` of the request was refused by InvenTree, and, for an
         apply, no write of the post has an unknown outcome whose marker recovery did not find (ADR 0015): a write

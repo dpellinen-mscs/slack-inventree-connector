@@ -1434,12 +1434,18 @@ connector never has two InvenTree writes in flight and cannot race itself.
 6. **Record.** Move to `verified` and post the receipt.
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
-It takes the process's writer lock, judges the whole plan again with the
+It takes the process's writer lock, and waits, nothing read and still
+`approved`, while another write of the post is in flight or not read back
+or an earlier request of its plan is still `approved`
+(`Store.apply_waits_for`). It judges the whole plan again with the
 marker the attempt will carry (a block leaves the request `approved`,
 nothing read), runs the marker check (any finding: `verify_failed`, nothing
 sent), reads each named item's history and then the stock (stale:
 `planned`; a named item InvenTree deleted since the plan, whose history
-read fails, is stale too), stores the intent, sends once, and records `failed`, `unknown`
+read fails, is stale too), stores the intent (a store refusal,
+`WriteBlocked`, is for good once the waits are over: the request goes back
+to `planned`, so a sibling of a write that went wrong never holds its
+approval forever), sends once, and records `failed`, `unknown`
 or `applied`. A request the writer refuses to send is `failed`; any other
 error or a cancellation while sending is `unknown`. After `applied` it reads back (the 404s,
 the API version, the marker's entries, the stock, then the history of the

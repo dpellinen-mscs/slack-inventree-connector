@@ -24,7 +24,7 @@ from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, M
 from stockthread.precondition import Pair, Snapshot, Stale, built_from, check, pairs
 from stockthread.readback import created, verify
 from stockthread.slack.replies import MovementView
-from stockthread.store import Store
+from stockthread.store import Store, WriteBlocked
 from stockthread.writer import Outcome, Sent, WriteRefused
 
 
@@ -161,18 +161,22 @@ async def apply_request(
     for (`precondition.check`). `lock` is the process's one writer lock: steps 2 to 6 run under it, so the connector
     never has two writes in flight.
 
-    Each outcome is a state of the request: still `approved` when the gate blocks it now (nothing read or
-    written), `verify_failed` when the history already disagrees with the store, `planned` when the stock changed
-    since the plan, `failed` when InvenTree refused the write (or the writer refused to send it), `unknown` when the
-    outcome is not known (recovery's), `verified` or `verify_failed` after the read-back. A read error before the
-    write leaves the request `approved` and raises; one in the read-back leaves it `applied` (not read back, which
-    blocks every other write of the post; `readback_request` concludes it) and raises. Nothing is written twice:
-    `begin_attempt` refuses a second attempt of a write that was not refused.
+    Each outcome is a state of the request: still `approved` when it waits for another request of the post
+    (`Store.apply_waits_for`) or the gate blocks it now (nothing read or written), `planned` when the store refuses
+    the write for good (`WriteBlocked`: an earlier request of the plan or a write of the post went wrong, so this
+    one goes back to review), `verify_failed` when the history already disagrees with the store, `planned` when the
+    stock changed since the plan, `failed` when InvenTree refused the write (or the writer refused to send it),
+    `unknown` when the outcome is not known (recovery's), `verified` or `verify_failed` after the read-back. A read
+    error before the write leaves the request `approved` and raises; one in the read-back leaves it `applied` (not
+    read back, which blocks every other write of the post; `readback_request` concludes it) and raises. Nothing is
+    written twice: `begin_attempt` refuses a second attempt of a write that was not refused.
     """
     async with lock:
         row = store.request(key)
         if row.state is not RequestState.APPROVED:
             raise ValueError(f"request {key} is {row.state}, not approved")
+        if waits := store.apply_waits_for(key):
+            return Applied(RequestState.APPROVED, f"not written yet: {waits}")
         # Step 1: the gate again, with the marker the attempt will carry.
         marker = store.next_marker(key, AttemptKind.APPLY)
         judgement = rejudge(marker)
@@ -202,15 +206,19 @@ async def apply_request(
         if isinstance(snapshot, Stale):
             store.transition(key, expected=RequestState.APPROVED, target=RequestState.PLANNED, actor=Actor.APPLIER)
             return Applied(RequestState.PLANNED, f"back to review: {snapshot.why}")
-        attempt = store.begin_attempt(
-            key,
-            AttemptKind.APPLY,
-            expected=RequestState.APPROVED,
-            actor=Actor.APPLIER,
-            snapshot=snapshot.as_json(),
-            request_body=dict(request.body),
-            lock_owner=lock_owner,
-        )
+        try:
+            attempt = store.begin_attempt(
+                key,
+                AttemptKind.APPLY,
+                expected=RequestState.APPROVED,
+                actor=Actor.APPLIER,
+                snapshot=snapshot.as_json(),
+                request_body=dict(request.body),
+                lock_owner=lock_owner,
+            )
+        except WriteBlocked as blocked:  # for good: what would wait was waited for above, under the same lock
+            store.transition(key, expected=RequestState.APPROVED, target=RequestState.PLANNED, actor=Actor.APPLIER)
+            return Applied(RequestState.PLANNED, f"back to review: {blocked}")
         # Step 4: send once. From here on, only InvenTree's own answer makes the outcome known.
         try:
             sent = await writer.send(request)

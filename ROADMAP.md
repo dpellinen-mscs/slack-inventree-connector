@@ -135,6 +135,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] The plan of a reply that could apply in full is made with the reply, and any other outcome but `unchanged` leaves no plan current (`Store.finish_dry_run`, `plan_record.plan_of`)
   - [x] A message that joins a post, or a noted edit or deletion, stales its plan at once; a revision that reads the same makes it again
   - [x] The step for one request: write an `approved` one, read back an `applied` one, recover an `unknown` one (`applier.work_request`, `Store.requests_to_work`); a plan is approved whole (`Store.approve_plan`)
+  - [x] A request waits, keeping its approval, while a sibling is due or in flight, and goes back to review when the store refuses it for good (`Store.apply_waits_for`)
   - [ ] Worker: run the step in the run loop, with the receipt (ADR 0004)
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)

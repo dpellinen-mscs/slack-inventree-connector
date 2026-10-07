@@ -287,6 +287,72 @@ async def test_no_marker_and_no_change_is_failed_and_never_sent_again(store: Sto
 
 
 @pytest.mark.anyio
+async def test_a_sibling_approved_before_a_write_of_its_post_may_still_land_goes_back_to_review(
+    store: Store,
+) -> None:
+    two = PostKey(POST.workspace_id, POST.channel_id, "1700000001.000100")
+    first, second = RequestKey(two, 1, 1), RequestKey(two, 1, 2)
+    store.create_post(two)
+    store.create_plan(two, "1" * 64, (Operation.TRANSFER, Operation.TRANSFER))
+    store.approve_plan(OWNER, two, 1, actor=Actor.POLICY)
+    markers = [Marker(row.marker_id, AttemptKind.APPLY, 1) for row in store.plan(two, 1).requests]
+
+    def rejudge(marker: Marker) -> Judgement:
+        sent = [marker if marker.marker_id == m.marker_id else m for m in markers]
+        return Judgement(
+            Verdict.ALLOWED, "approved by the policy", None, plan_requests([MOVE, MOVE], sent, user="U0SAM0001")
+        )
+
+    fake = FakeInvenTree()
+    fake.answer = Outcome.UNKNOWN
+    lock = fake.lock = anyio.Lock()
+    common: dict[str, Any] = {"store": store, "reader": fake, "lock": lock}
+    assert (await apply_request(first, MOVE, rejudge, writer=fake, lock_owner=OWNER, **common)).state is S.UNKNOWN
+    recovered = await recover_request(first, MOVE, settle=timedelta(0), **common)
+    assert recovered.state is S.FAILED  # no marker, no change: ADR 0015 says it may still land
+    fake.answer = Outcome.ACCEPTED
+    applied = await apply_request(second, MOVE, rejudge, writer=fake, lock_owner=OWNER, **common)
+    assert applied.state is S.PLANNED
+    assert applied.why == "back to review: an earlier request of this plan is not verified"
+    assert store.request(second).state is S.PLANNED
+    assert len(fake.sent) == 1
+    with pytest.raises(WriteBlocked):  # and it is not approved again while that write may land
+        store.transition(second, expected=S.PLANNED, target=S.APPROVED, actor=Actor.HUMAN)
+
+
+@pytest.mark.anyio
+async def test_a_sibling_waits_with_its_approval_while_an_earlier_write_is_unknown_or_unwritten(
+    store: Store,
+) -> None:
+    two = PostKey(POST.workspace_id, POST.channel_id, "1700000001.000100")
+    first, second = RequestKey(two, 1, 1), RequestKey(two, 1, 2)
+    store.create_post(two)
+    store.create_plan(two, "1" * 64, (Operation.TRANSFER, Operation.TRANSFER))
+    store.approve_plan(OWNER, two, 1, actor=Actor.POLICY)
+    markers = [Marker(row.marker_id, AttemptKind.APPLY, 1) for row in store.plan(two, 1).requests]
+
+    def rejudge(marker: Marker) -> Judgement:
+        sent = [marker if marker.marker_id == m.marker_id else m for m in markers]
+        requests = plan_requests([MOVE, MOVE], sent, user="U0SAM0001")
+        return Judgement(Verdict.ALLOWED, "approved by the policy", None, requests)
+
+    fake = FakeInvenTree()
+    fake.fail_reads = True  # a wait reads nothing
+    lock = fake.lock = anyio.Lock()
+    common: dict[str, Any] = {"store": store, "reader": fake, "writer": fake, "lock": lock, "lock_owner": OWNER}
+    waits = await apply_request(second, MOVE, rejudge, **common)
+    assert waits == Applied(S.APPROVED, "not written yet: request 1 of this plan is approved and is written first")
+    fake.fail_reads = False
+    fake.answer = Outcome.UNKNOWN
+    assert (await apply_request(first, MOVE, rejudge, **common)).state is S.UNKNOWN
+    fake.fail_reads = True
+    waits = await apply_request(second, MOVE, rejudge, **common)
+    assert waits == Applied(S.APPROVED, "not written yet: request 1 of plan revision 1 is unknown")
+    assert store.request(second).state is S.APPROVED
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.anyio
 async def test_no_marker_but_the_stock_moved_is_verify_failed(store: Store) -> None:
     """A write that ran without its history entry (a 500 after the commit, on 1.5.6 with PostgreSQL)."""
     fake = FakeInvenTree()
