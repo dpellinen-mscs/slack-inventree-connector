@@ -417,3 +417,24 @@ async def test_a_history_read_error_on_an_item_that_exists_still_raises_in_recov
     with pytest.raises(InvenTreeError):
         await recover(store, fake)
     assert store.request(KEY).state is S.UNDO_UNKNOWN
+
+
+@pytest.mark.anyio
+async def test_a_history_read_error_on_an_item_that_exists_raises_around_the_undo(store: Store) -> None:
+    """Only an item InvenTree says is gone is reported gone: before the undo the error raises and nothing is sent;
+    in the undo's read-back it leaves the undo unknown."""
+    fake = await applied(store)
+    fake.history_fails = {ITEM}
+    with pytest.raises(InvenTreeError):
+        await undo(store, fake)
+    assert store.request(KEY).state is S.VERIFIED
+    assert len(fake.sent) == 1
+
+    def fail_history() -> None:
+        fake.history_fails = {ITEM}
+
+    fake.history_fails = set()
+    fake.after_write = fail_history
+    with pytest.raises(InvenTreeError):
+        await undo(store, fake)
+    assert store.request(KEY).state is S.UNDO_UNKNOWN
