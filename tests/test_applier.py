@@ -7,6 +7,7 @@ import json
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,8 @@ POST = PostKey("T0ACME001", "C0ACME001", "1700000000.000100")
 KEY = RequestKey(POST, 1, 1)
 TAKE = view(stock=(picked((ITEM, "2")),))
 """Sam takes all 2 of item 57 from location 10 to his truck, location 11, every match exact: a clear take-out."""
+BACK = view(MovementType.RETURN, stock=(picked((ITEM, "2")),))
+"""Sam returns the same 2 items: a return always waits for an approver's Apply click."""
 TESTED = VersionCheck(ServerInfo("1.5.6", DEPLETING_MARKER_FOUND_FROM), True, "tested")
 ON = GateNow(
     Policy(True, frozenset({MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE}), frozenset({LUIS}), TESTED),
@@ -97,7 +100,6 @@ async def step(
     now: GateNow = ON,
     *,
     settle: timedelta = timedelta(seconds=120),
-    clicked_by: str | None = None,
 ) -> Applied:
     lock = fake.lock = anyio.Lock()
     return await work_request(
@@ -109,7 +111,6 @@ async def step(
         lock_owner=OWNER,
         gate_now=lambda: now,
         settle=settle,
-        clicked_by=clicked_by,
     )
 
 
@@ -141,8 +142,7 @@ def test_writes_off_approve_nothing(store: Store) -> None:
 
 
 def test_a_return_waits_for_apply(store: Store) -> None:
-    back = view(MovementType.RETURN, stock=(picked((ITEM, "2")),))
-    reply(store, record(back))
+    reply(store, record(BACK))
     judgement = approve_by_policy(store, OWNER, POST, ON)
     assert judgement is not None
     assert judgement.verdict is Verdict.WAITS
@@ -228,18 +228,58 @@ async def test_writes_turned_off_while_the_write_waits_for_the_lock_write_nothin
 
 
 @pytest.mark.anyio
-async def test_an_approval_by_click_writes_only_with_the_approver_named(store: Store) -> None:
-    back = view(MovementType.RETURN, stock=(picked((ITEM, "2")),))
-    reply(store, record(back))
-    store.approve_plan(OWNER, POST, 1, actor=Actor.HUMAN)
+async def test_a_plan_approved_by_a_click_is_written_with_the_approver_named(store: Store) -> None:
+    reply(store, record(BACK))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.HUMAN, approver=LUIS)
+    assert store.plan(POST, 1).approved_by == LUIS
     fake = FakeInvenTree()
-    waits = await step(store, fake)  # the clicker is not known: the return waits, and is not written
-    assert (waits.state, fake.sent) == (S.APPROVED, [])
-    assert waits.why == "not written: movement 1: return waits for Apply"
-    assert (await step(store, fake, clicked_by=SAM)).state is S.APPROVED  # Sam is no approver
-    assert fake.sent == []
-    assert (await step(store, fake, clicked_by=LUIS)).state is S.VERIFIED
+    assert (await step(store, fake)).state is S.VERIFIED
     assert str(fake.sent[0].body["notes"]).endswith(LUIS)
+
+
+@pytest.mark.anyio
+async def test_a_click_counts_only_while_its_clicker_is_an_approver(store: Store) -> None:
+    reply(store, record(BACK))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.HUMAN, approver=LUIS)
+    fake = FakeInvenTree()
+    removed = replace(ON, policy=replace(ON.policy, approvers=frozenset()))
+    waits = await step(store, fake, now=removed)
+    assert waits == Applied(S.APPROVED, "not written: movement 1: return waits for Apply")
+    assert fake.sent == []
+
+
+@pytest.mark.anyio
+async def test_a_request_approved_with_no_approver_stored_waits_like_the_policy(store: Store) -> None:
+    reply(store, record(BACK))
+    store.transition(KEY, expected=S.PLANNED, target=S.APPROVED, actor=Actor.HUMAN)  # one request, no clicker
+    assert store.plan(POST, 1).approved_by is None
+    fake = FakeInvenTree()
+    assert (await step(store, fake)).why == "not written: movement 1: return waits for Apply"
+    assert fake.sent == []
+
+
+@pytest.mark.anyio
+async def test_a_request_sent_back_to_review_loses_its_plans_clicker(store: Store) -> None:
+    reply(store, record(BACK))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.HUMAN, approver=LUIS)
+    fake = FakeInvenTree(held="1")  # the stock changed since the plan
+    assert (await step(store, fake)).state is S.PLANNED
+    assert store.plan(POST, 1).approved_by is None
+    store.transition(KEY, expected=S.PLANNED, target=S.APPROVED, actor=Actor.HUMAN)
+    fake.items[ITEM][2] = Decimal(2)
+    assert (await step(store, fake)).why == "not written: movement 1: return waits for Apply"
+    assert fake.sent == []
+
+
+def test_a_persons_approval_names_the_approver_and_only_a_persons_does(store: Store) -> None:
+    reply(store, record(TAKE))
+    with pytest.raises(ValueError, match="names the approver"):
+        store.approve_plan(OWNER, POST, 1, actor=Actor.HUMAN)
+    with pytest.raises(ValueError, match="names the approver"):
+        store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY, approver=LUIS)
+    assert store.request(KEY).state is S.PLANNED
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    assert store.plan(POST, 1).approved_by is None
 
 
 @pytest.mark.anyio
@@ -249,7 +289,7 @@ async def test_a_plan_without_its_record_is_never_written(store: Store) -> None:
     with pytest.raises(NotRebuilt, match="no dry-run record"):
         approve_by_policy(store, OWNER, POST, ON)
     assert store.request(KEY).state is S.PLANNED
-    store.approve_plan(OWNER, POST, 1, actor=Actor.HUMAN)
+    store.approve_plan(OWNER, POST, 1, actor=Actor.HUMAN, approver=LUIS)
     fake = FakeInvenTree()
     with pytest.raises(NotRebuilt, match="no dry-run record"):
         await step(store, fake)

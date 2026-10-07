@@ -120,12 +120,11 @@ async def work_request(
     lock_owner: str,
     gate_now: Callable[[], GateNow],
     settle: timedelta,
-    clicked_by: str | None = None,
 ) -> Applied:
     """The next step of the apply protocol for request `key` (`Store.requests_to_work`): the write of an `approved`
     request (`apply.apply_request`, judged again under the writer lock with `gate_now()`, the plan and the answers
-    read then), the read-back of an `applied` one (`apply.readback_request`), or the recovery of an `unknown` one
-    (`apply.recover_request`). `clicked_by`: the approver whose Apply click approved the plan, if one did.
+    read then, with the approver whose click approved the plan, `PlanRow.approved_by`), the read-back of an `applied`
+    one (`apply.readback_request`), or the recovery of an `unknown` one (`apply.recover_request`).
 
     Raises NotRebuilt, and changes nothing, when the plan's record cannot be acted on; ValueError for a request in any
     other state; and what the step raises."""
@@ -136,7 +135,7 @@ async def work_request(
 
         def rejudge(marker: Marker) -> Judgement:
             fresh = plan_views(store, store.plan(key.post, key.revision))
-            return judge_plan(fresh, gate_now(), clicked_by=clicked_by, marker=marker)
+            return judge_plan(fresh, gate_now(), clicked_by=fresh.plan.approved_by, marker=marker)
 
         return await apply_request(
             key, view, rejudge, store=store, reader=reader, writer=writer, lock=lock, lock_owner=lock_owner
