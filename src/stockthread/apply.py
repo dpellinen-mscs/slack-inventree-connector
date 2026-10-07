@@ -360,10 +360,10 @@ async def undo_apply(
     read back (`inverse.verify_undo`). A refusal before the intent (an attempt the store refuses, a finding, no apply
     that wrote, no undo the history allows) leaves the state as it was and says why; a read error there raises and
     changes nothing. Then: `undo_failed` when InvenTree refused the undo or the writer refused to send it,
-    `undo_unknown` when its outcome is not known, `undone` or `verify_failed` after the read-back. A read error in the
-    read-back moves it to `undo_unknown` and raises: there is no state for an undo accepted but not read back, and
-    recovery of an unknown undo finds its marker and reads it back (ADR 0017). Whether the undo is still allowed
-    (`undo.max_age`, who may ask) is the caller's to decide."""
+    `undo_unknown` when its outcome is not known, `undone` or `verify_failed` after the read-back. A read error (or
+    any other exception) in the read-back moves it to `undo_unknown` and raises: there is no state for an undo
+    accepted but not read back, and recovery of an unknown undo finds its marker and reads it back (ADR 0017).
+    Whether the undo is still allowed (`undo.max_age`, who may ask) is the caller's to decide."""
     async with lock:
         row = store.request(key)
         if row.state not in UNDOABLE:
@@ -419,10 +419,10 @@ async def undo_apply(
             after = await reader.marker_entries(row.marker_id)
             now = await _stock(reader, pairs(view))
             later = {reversal.item: await reader.item_entries(reversal.item) for reversal in found}
+            problems = tuple(verify_undo(view, found, attempt.marker, before, after, now, history=later))
         except BaseException:
             store.transition(key, expected=RequestState.UNDOING, target=RequestState.UNDO_UNKNOWN, actor=Actor.APPLIER)
             raise
-        problems = tuple(verify_undo(view, found, attempt.marker, before, after, now, history=later))
         target = RequestState.VERIFY_FAILED if problems else RequestState.UNDONE
         store.transition(key, expected=RequestState.UNDOING, target=target, actor=Actor.APPLIER)
         return Applied(target, "undo read back: " + ("does not agree" if problems else "as built"), problems)

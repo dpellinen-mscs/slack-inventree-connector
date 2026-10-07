@@ -41,7 +41,11 @@ for that).
    raises. Recovery of an unknown undo (not built yet) finds the marker and
    reads it back, which is what an "undo accepted, not read back" state
    would need anyway. The attempt's outcome then says `unknown`, though
-   InvenTree answered; the trail line of the run says why.
+   InvenTree answered; the trail line of the run says why. Recovery of an
+   unknown undo must therefore never conclude "not found, so nothing
+   changed" (`undo_unknown` to `verified`) from a marker search alone: it
+   compares the stock with the undo's snapshot too, as `recover_request`
+   does for an apply, and anything else is `verify_failed`.
 
 ## Consequences
 
