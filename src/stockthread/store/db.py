@@ -1527,6 +1527,19 @@ class Store:
                 return f"request {sequence} of this plan is approved and is written first"
         return None
 
+    def plan_stopped_before(self, key: RequestKey) -> str | None:
+        """Why the plan of request `key` stopped before it, or None: an earlier request of the plan is neither
+        `verified` nor `rejected` and no step of it is due or in flight (`apply_waits_for` waits for those). The plan
+        is applied in order and stops at the first request that went wrong, so this one goes back to review; asked
+        before the gate, because a plan whose clicker was cleared would wait at the gate forever."""
+        _, _, post_id = self._request(key)
+        for revision, sequence, state in sorted(self._post_states(post_id, exclude=self.request(key).id)):
+            if revision != key.revision or sequence >= key.sequence:
+                continue
+            if state not in (S.VERIFIED, S.REJECTED, S.APPROVED) and state not in NOT_READ_BACK:
+                return f"request {sequence} of this plan is {state}"
+        return None
+
     def _check_no_unknown_write(self, request_id: int, post_id: int, kind: AttemptKind) -> None:
         """WriteBlocked unless every earlier attempt of `kind` of the request was refused by InvenTree, and, for an
         apply, no write of the post has an unknown outcome whose marker recovery did not find (ADR 0015): a write

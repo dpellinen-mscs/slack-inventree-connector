@@ -142,6 +142,12 @@ class Applied:
     """What the marker check or the read-back found, when the request is `verify_failed`."""
 
 
+def _back_to_review(store: Store, key: RequestKey, why: str) -> Applied:
+    """An `approved` request the store refuses to write for good goes back to `planned`, nothing sent."""
+    store.transition(key, expected=RequestState.APPROVED, target=RequestState.PLANNED, actor=Actor.APPLIER)
+    return Applied(RequestState.PLANNED, f"back to review: {why}")
+
+
 async def apply_request(
     key: RequestKey,
     view: MovementView,
@@ -163,8 +169,9 @@ async def apply_request(
 
     Each outcome is a state of the request: still `approved` when it waits for another request of the post
     (`Store.apply_waits_for`) or the gate blocks it now (nothing read or written), `planned` when the store refuses
-    the write for good (`WriteBlocked`: an earlier request of the plan or a write of the post went wrong, so this
-    one goes back to review), `verify_failed` when the history already disagrees with the store, `planned` when the
+    the write for good (an earlier request of the plan went wrong, `Store.plan_stopped_before`, checked before the
+    gate with nothing read; or `WriteBlocked`: a write of the post may still land, or the attempt limit), so it goes
+    back to review, `verify_failed` when the history already disagrees with the store, `planned` when the
     stock changed since the plan, `failed` when InvenTree refused the write (or the writer refused to send it),
     `unknown` when the outcome is not known (recovery's), `verified` or `verify_failed` after the read-back. A read
     error before the write leaves the request `approved` and raises; one in the read-back leaves it `applied` (not
@@ -177,8 +184,13 @@ async def apply_request(
             raise ValueError(f"request {key} is {row.state}, not approved")
         if waits := store.apply_waits_for(key):
             return Applied(RequestState.APPROVED, f"not written yet: {waits}")
+        if stopped := store.plan_stopped_before(key):
+            return _back_to_review(store, key, stopped)
         # Step 1: the gate again, with the marker the attempt will carry.
-        marker = store.next_marker(key, AttemptKind.APPLY)
+        try:
+            marker = store.next_marker(key, AttemptKind.APPLY)
+        except WriteBlocked as blocked:  # the attempt limit
+            return _back_to_review(store, key, str(blocked))
         judgement = rejudge(marker)
         if not judgement.allowed:
             return Applied(RequestState.APPROVED, f"not written: {judgement.why}")
@@ -217,8 +229,7 @@ async def apply_request(
                 lock_owner=lock_owner,
             )
         except WriteBlocked as blocked:  # for good: what would wait was waited for above, under the same lock
-            store.transition(key, expected=RequestState.APPROVED, target=RequestState.PLANNED, actor=Actor.APPLIER)
-            return Applied(RequestState.PLANNED, f"back to review: {blocked}")
+            return _back_to_review(store, key, str(blocked))
         # Step 4: send once. From here on, only InvenTree's own answer makes the outcome known.
         try:
             sent = await writer.send(request)

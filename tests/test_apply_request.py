@@ -313,7 +313,7 @@ async def test_a_sibling_approved_before_a_write_of_its_post_may_still_land_goes
     fake.answer = Outcome.ACCEPTED
     applied = await apply_request(second, MOVE, rejudge, writer=fake, lock_owner=OWNER, **common)
     assert applied.state is S.PLANNED
-    assert applied.why == "back to review: an earlier request of this plan is not verified"
+    assert applied.why == "back to review: request 1 of this plan is failed"
     assert store.request(second).state is S.PLANNED
     assert len(fake.sent) == 1
     with pytest.raises(WriteBlocked):  # and it is not approved again while that write may land
@@ -350,6 +350,47 @@ async def test_a_sibling_waits_with_its_approval_while_an_earlier_write_is_unkno
     assert waits == Applied(S.APPROVED, "not written yet: request 1 of plan revision 1 is unknown")
     assert store.request(second).state is S.APPROVED
     assert len(fake.sent) == 1
+    store.transition(first, expected=S.UNKNOWN, target=S.FAILED, actor=Actor.RECOVERY, marker_found=False)
+    ended = await apply_request(second, MOVE, rejudge, **common)  # the wait ends: the plan stopped at request 1
+    assert ended == Applied(S.PLANNED, "back to review: request 1 of this plan is failed")
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.anyio
+async def test_every_later_request_of_a_persons_plan_goes_back_to_review_once_one_went_wrong(store: Store) -> None:
+    three = PostKey(POST.workspace_id, POST.channel_id, "1700000002.000100")
+    keys = [RequestKey(three, 1, sequence) for sequence in (1, 2, 3)]
+    store.create_post(three)
+    store.create_plan(three, "2" * 64, (Operation.TRANSFER,) * 3)
+    store.approve_plan(OWNER, three, 1, actor=Actor.HUMAN, approver="U0LUIS001")
+    marker = store.next_marker(keys[0], AttemptKind.APPLY)
+    store.begin_attempt(
+        keys[0],
+        marker.kind,
+        expected=S.APPROVED,
+        actor=Actor.APPLIER,
+        snapshot={},
+        request_body={"notes": str(marker)},
+        lock_owner=OWNER,
+    )
+    store.transition(keys[0], expected=S.APPLYING, target=S.FAILED, actor=Actor.APPLIER)  # InvenTree refused it
+
+    def never(marker: Marker) -> Judgement:
+        raise AssertionError("judged a request whose plan stopped before it")
+
+    fake = FakeInvenTree()
+    fake.fail_reads = True  # nothing is read either
+    lock = fake.lock = anyio.Lock()
+    common: dict[str, Any] = {"store": store, "reader": fake, "writer": fake, "lock": lock, "lock_owner": OWNER}
+    assert await apply_request(keys[1], MOVE, never, **common) == Applied(
+        S.PLANNED, "back to review: request 1 of this plan is failed"
+    )
+    assert store.plan(three, 1).approved_by is None  # cleared with the first request sent back
+    assert await apply_request(keys[2], MOVE, never, **common) == Applied(
+        S.PLANNED, "back to review: request 1 of this plan is failed"
+    )
+    assert [row.state for row in store.plan(three, 1).requests] == [S.FAILED, S.PLANNED, S.PLANNED]
+    assert fake.sent == []
 
 
 @pytest.mark.anyio
