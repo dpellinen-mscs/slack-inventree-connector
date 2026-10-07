@@ -8,7 +8,8 @@ measured on 1.4.3 and 1.5.6). It needs one entry per line, on that line's item, 
 - a transfer of a whole item (a location entry, 20): transfer the item back to the source; it must be at the
   destination and hold what it held then;
 - a transfer of part of an item (a split entry, 42, on the item): transfer the new item back to the source; it must
-  be at the destination and hold the quantity;
+  be at the destination and hold the quantity, and the item it came from must have no other change between the
+  snapshot and the apply (moved elsewhere first, the stock did not come from the source);
 - an add (11): remove what was added; the item must hold what the add left;
 - a remove (12): add back what was removed; the item must still exist where it was;
 - a count (10): count back to what the snapshot held; the item must hold the count the apply set.
@@ -64,6 +65,17 @@ class Reversal:
     holds: Decimal | None
     """What `item` must hold now: exactly what the apply left it holding (every change since writes an entry, so
     another quantity is a change nobody can account for). None for the undo of a remove: it adds to what is there."""
+    split_from: int | None = None
+    """For a split: the line's stock item, which the new item was taken from."""
+    split_entry: int | None = None
+    """For a split: the apply's split entry on `split_from`. An entry on `split_from` older than it and not in the
+    snapshot is a change between the snapshot and the apply (the item moved, say): the new item may then not have
+    come from the source the undo sends it back to."""
+
+    @property
+    def history_items(self) -> tuple[int, ...]:
+        """The stock items whose history `check_undo` needs."""
+        return (self.item,) if self.split_from is None else (self.item, self.split_from)
 
 
 @dataclass(frozen=True)
@@ -145,7 +157,7 @@ def _read(
             child, moved = entry.deltas.get("stockitem"), _number(entry.deltas.get("removed"))
             if type(child) is not int or child < 1 or child == pk or moved is None or moved <= 0:
                 return _shape(pk, entry)
-            return Reversal(child, moved, moved)
+            return Reversal(child, moved, moved, split_from=pk, split_entry=entry.pk)
         return _shape(pk, entry)
     if entry.tracking_type != ENTRY_TYPE[operation]:
         return _shape(pk, entry)
@@ -193,9 +205,12 @@ def check_undo(
     """Why the undo of `found` (`reversals` of the apply `marker`) cannot be built on the stock as it is now, or
     None. `read`: the stock items of every part of the movement where the undo acts (a transfer's destination, else
     where the movement acted), read now with `InvenTreeReader.stock_items`; `entries`: every entry of the request's
-    marker id, read now (`InvenTreeReader.marker_entries`); `history`: the history entry pks of each
-    `Reversal.item`, read now. The only entries allowed since the snapshot are the apply's own; an item the undo
-    takes stock from must be available (status OK, nothing allocated: an allocation writes no history entry)."""
+    marker id, read now (`InvenTreeReader.marker_entries`); `history`: the history entry pks of each stock item of
+    `Reversal.history_items`, read now. The only entries allowed since the snapshot are the apply's own; on the item
+    a split took from, only those older than the apply's split entry count (history entry pks grow with time, and
+    InvenTree writes a change and its entry in one transaction): the undo leaves that item alone, so a change to it
+    after the apply is no reason to refuse. An item the undo takes stock from must be available (status OK, nothing
+    allocated: an allocation writes no history entry)."""
     if others := _others(marker, entries):
         return others
     operation, place, destination = places(view)
@@ -205,9 +220,19 @@ def check_undo(
     held = {item.pk: item for (part, where), items in read.items() if part in parts and where == at for item in items}
     own = {entry.pk for entry in entries}
     for reversal in found:
+        if missing := [pk for pk in reversal.history_items if pk not in history]:
+            raise ValueError(f"no history read for stock item {missing[0]}")
+        if reversal.split_from is not None and reversal.split_entry is not None:
+            parent = reversal.split_from
+            new = set(history[parent]) - set(snapshot.history.get(parent, ())) - own
+            if between := sorted(entry for entry in new if entry < reversal.split_entry):
+                listed = ", ".join(str(entry) for entry in between)
+                return NoUndo(
+                    f"stock item {parent} has history entries {listed} between the snapshot and the apply that are "
+                    f"not this request's: the {_decimal(reversal.quantity)} split from it may not have come from "
+                    "the source"
+                )
         pk = reversal.item
-        if pk not in history:
-            raise ValueError(f"no history read for stock item {pk}")
         later = set(history[pk]) - set(snapshot.history.get(pk, ())) - own
         if later:
             listed = ", ".join(str(entry) for entry in sorted(later))

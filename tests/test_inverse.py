@@ -43,8 +43,9 @@ class Applied:
     def check(self, found: list[Reversal], now: Read, entries: list[MarkedEntry], **later: list[int]) -> NoUndo | None:
         """`check_undo` with each reversed item's history: its old entry, the apply's entries on it, and `later`."""
         history = {
-            r.item: [*([r.item * 10] if r.item != NEW else []), *(e.pk for e in entries if e.item == r.item)]
+            pk: [*([pk * 10] if pk != NEW else []), *(e.pk for e in entries if e.item == pk)]
             for r in found
+            for pk in r.history_items
         }
         for pk, extra in later.items():
             history[int(pk.removeprefix("on_"))] += extra
@@ -73,7 +74,7 @@ AFTER_WHOLE: Read = {(1, DESTINATION): [item(57, "5"), item(80, "3")]}
 def test_a_partial_transfer_is_undone_by_moving_the_new_item_back_to_the_source() -> None:
     applied = transfer("2")
     found = applied.reversals(SPLIT)
-    assert found == [Reversal(NEW, Decimal(2), Decimal(2))]
+    assert found == [Reversal(NEW, Decimal(2), Decimal(2), split_from=57, split_entry=700)]
     assert applied.check(found, AFTER_SPLIT, SPLIT) is None
     request = undo_request(applied.view, found, UNDO, user="U0DAN0001")
     assert request.operation is Operation.TRANSFER
@@ -124,7 +125,7 @@ def test_an_undo_reverses_what_the_history_shows_not_what_the_plan_said() -> Non
     """A verify_failed apply that moved 1, not the planned 2: the undo moves back the 1 that moved."""
     applied = transfer("2")
     short = [entry(700, 57, 42, removed=1.0, quantity=4.0, stockitem=NEW), entry(701, NEW, 40, stockitem=57)]
-    assert applied.reversals(short) == [Reversal(NEW, Decimal(1), Decimal(1))]
+    assert applied.reversals(short) == [Reversal(NEW, Decimal(1), Decimal(1), split_from=57, split_entry=700)]
 
 
 @pytest.mark.parametrize(
@@ -188,6 +189,28 @@ def test_another_writers_entry_since_the_apply_refuses_the_undo() -> None:
     assert isinstance(found, list)
     refused = applied.check(found, AFTER_SPLIT, SPLIT, on_90=[705])
     assert refused == NoUndo("stock item 90 has history entries 705 since the apply that are not this request's")
+
+
+def test_a_change_to_the_split_item_between_the_snapshot_and_the_apply_refuses_the_undo() -> None:
+    """Item 57 moved from the source to another location (entry 650) after the snapshot, then the apply split 2
+    from it: the 2 did not come from the source, so sending them there is no undo. Entry 650 is in neither the
+    snapshot nor the marker's entries: readback calls this verify_failed, a state that may be undone."""
+    applied = transfer("2")
+    found = applied.reversals(SPLIT)
+    assert isinstance(found, list)
+    refused = applied.check(found, AFTER_SPLIT, SPLIT, on_57=[650])
+    assert refused == NoUndo(
+        "stock item 57 has history entries 650 between the snapshot and the apply that are not this request's: "
+        "the 2 split from it may not have come from the source"
+    )
+
+
+def test_a_change_to_the_split_item_after_the_apply_does_not_refuse_the_undo() -> None:
+    """The undo moves the new item back and leaves item 57 alone: someone taking from 57 since is no reason."""
+    applied = transfer("2")
+    found = applied.reversals(SPLIT)
+    assert isinstance(found, list)
+    assert applied.check(found, AFTER_SPLIT, SPLIT, on_57=[705]) is None
 
 
 def test_an_entry_of_another_attempt_found_now_refuses_the_undo() -> None:
@@ -264,8 +287,10 @@ def test_inputs_that_do_not_belong_together_are_a_caller_error() -> None:
         reversals(applied.view, applied.request, APPLY, Snapshot({}, {}), SPLIT)
     found = applied.reversals(SPLIT)
     assert isinstance(found, list)
-    with pytest.raises(ValueError, match="no history read"):
+    with pytest.raises(ValueError, match="no history read for stock item 90"):
         check_undo(applied.view, found, APPLY, applied.snapshot, AFTER_SPLIT, entries=SPLIT, history={})
+    with pytest.raises(ValueError, match="no history read for stock item 57"):
+        check_undo(applied.view, found, APPLY, applied.snapshot, AFTER_SPLIT, entries=SPLIT, history={NEW: [701]})
     with pytest.raises(ValueError, match="apply marker"):
         reversals(applied.view, applied.request, UNDO, applied.snapshot, SPLIT)
     with pytest.raises(ValueError, match="undo marker"):
