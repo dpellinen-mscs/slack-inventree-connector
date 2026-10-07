@@ -205,3 +205,31 @@ async def test_a_named_item_deleted_since_the_plan_sends_nothing(store: Store, s
     assert scratch.api.status(f"/api/stock/{item['pk']}/") == 404
     assert await run(store, taken(scratch, item["pk"], "2")) is RequestState.PLANNED
     assert scratch.api.items(scratch.part, scratch.other) == []
+
+
+@pytest.mark.parametrize(("fault", "landed"), [(Fault.DROP_AFTER, True), (Fault.DROP_BEFORE, False)])
+@pytest.mark.anyio
+async def test_recovery_of_an_unknown_undo_whose_item_was_deleted_concludes(
+    store: Store, scratch: Scratch, proxy: FaultProxy, fault: Fault, landed: bool
+) -> None:
+    """The reversed item is used up and deleted before recovery runs. Its history query would answer 400; recovery
+    concludes verify_failed instead of failing on every run. On this server the apply's entries no longer show the
+    deleted item either, so the apply-history check concludes it first; the 400 path is in test_undo_apply.py."""
+    item = scratch.stock(5, delete_on_deplete=True)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], "5")
+    assert await run(store, movement) is RequestState.VERIFIED
+    proxy.inject(Rule("POST", PATHS[Operation.TRANSFER], fault, status=502))
+    lock = anyio.Lock()
+    async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(proxy.url), token()) as writer:
+        undo = await undo_apply(
+            KEY, movement, store=store, reader=reader, writer=writer, lock=lock, lock_owner=OWNER, user="U0DAN0001"
+        )
+        assert undo.state is RequestState.UNDO_UNKNOWN, undo
+        proxy.wait_for(1)
+        scratch.api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 5}], "notes": "used up"})
+        assert scratch.api.status(f"/api/stock/{item['pk']}/") == 404
+        recovered = await recover_undo(KEY, movement, store=store, reader=reader, lock=lock, settle=timedelta(0))
+    assert recovered.state is RequestState.VERIFY_FAILED, recovered
+    assert recovered.problems, recovered
+    assert store.recorded_requests(POST)[0].attempts[-1].marker_found is landed

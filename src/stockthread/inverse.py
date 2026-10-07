@@ -358,10 +358,12 @@ def verify_undo(
     read: Mapping[Pair, Sequence[StockItem]],
     *,
     history: Mapping[int, Collection[int]],
+    gone: Collection[int] = (),
 ) -> list[str]:
     """What the read-back of the undo `marker` of `found` disagrees with, or nothing. `before`: `undo_snapshot`;
     `entries`: every entry of the request's marker id, read now; `read`: the stock of `precondition.pairs(view)`, read
-    now, then `history`: the entries of each `Reversal.item`, read now.
+    now, then `history`: the entries of each `Reversal.item`, read now, but for the reversed items InvenTree says
+    are `gone` (it has no history of an item it deleted): each of those is a problem.
 
     It checks three things, as `readback` does for an apply: the undo marker is on exactly one entry per reversed
     item, of the type and with the numbers the undo writes; every reversed item is where the undo leaves it, holding
@@ -406,6 +408,9 @@ def verify_undo(
             )
     own = {entry.pk for entry in entries}
     for reversal in found:
+        if reversal.item in gone:
+            problems.append(f"stock item {reversal.item} is gone")
+            continue
         if reversal.item not in history:
             raise ValueError(f"no history read for stock item {reversal.item}")
         later = set(history[reversal.item]) - before.history.get(reversal.item, frozenset()) - own
@@ -421,10 +426,12 @@ def undo_changes(
     read: Mapping[Pair, Sequence[StockItem]],
     *,
     history: Mapping[int, Collection[int]],
+    gone: Collection[int] = (),
 ) -> list[str]:
     """How the stock differs from `before` (`undo_snapshot`), the stock the undo of `found` was built on: what
     recovery compares with when the undo's marker is not found. `read`: the stock of `precondition.pairs(view)`, read
-    now, then `history`: the entries of each `Reversal.item`, read now. Empty means the undo did not run: every total
+    now, then `history`: the entries of each `Reversal.item`, read now, but for the reversed items InvenTree says
+    are `gone`: each of those is a change. Empty means the undo did not run: every total
     is what it was, every reversed item is where it was holding what the apply left (`Reversal.holds`), and no
     reversed item has a history entry `before` lacks. The undo writes on its reversed items only, so a change to a
     split's parent is none of its doing; any other change makes the outcome one recovery cannot conclude."""
@@ -447,6 +454,9 @@ def undo_changes(
             says = f"the undo's snapshot says {_decimal(total)}"
             changes.append(f"part {pair[0]} at location {pair[1]} holds {_decimal(now)}, {says}")
     for reversal in found:
+        if reversal.item in gone:
+            changes.append(f"stock item {reversal.item} is gone")
+            continue
         if reversal.item not in history:
             raise ValueError(f"no history read for stock item {reversal.item}")
         new = set(history[reversal.item]) - before.history.get(reversal.item, frozenset())

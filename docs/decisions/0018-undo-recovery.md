@@ -47,7 +47,12 @@ the stock before the apply, so it cannot be used.
      split's parent are not compared: the undo never writes there.
    - The apply's entries no longer show what the undo reversed (history
      deleted): `verify_failed`, with whether the marker was found.
-3. A read error raises and changes nothing: the request stays
+   - A reversed item InvenTree deleted (used up with delete_on_deplete):
+     its history query answers 400, so recovery asks whether the item
+     exists instead of reading it. Gone is a problem, found or not:
+     `verify_failed`. `undo_apply`'s own read-back does the same, and an
+     undo whose reversed item is already gone is refused before it starts.
+3. Any other read error raises and changes nothing: the request stays
    `undo_unknown`, and recovery runs again later.
 
 ## Consequences

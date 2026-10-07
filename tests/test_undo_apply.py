@@ -207,6 +207,33 @@ async def test_a_read_error_in_the_undo_read_back_leaves_it_unknown(store: Store
 
 
 @pytest.mark.anyio
+async def test_a_reversed_item_deleted_before_the_undo_refuses_it_and_changes_nothing(store: Store) -> None:
+    fake = await applied(store)
+    del fake.items[ITEM]  # used up at the destination; InvenTree deleted it and keeps its history
+    refused = await undo(store, fake)
+    assert refused == Applied(S.VERIFIED, "no undo: stock item 57 no longer exists")
+    assert store.markers(KEY) == [Marker(store.request(KEY).marker_id, AttemptKind.APPLY, 1)]
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.anyio
+async def test_a_reversed_item_deleted_right_after_the_undo_is_verify_failed_not_unknown(store: Store) -> None:
+    fake = await applied(store)
+
+    def used_up() -> None:
+        del fake.items[ITEM]
+
+    fake.after_write = used_up
+    done = await undo(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.problems == (
+        f"stock item 57 is not at location {SOURCE}",
+        f"part 1 at location {SOURCE} holds 0, the undo should leave 2",
+        "stock item 57 is gone",
+    )
+
+
+@pytest.mark.anyio
 async def test_a_read_error_before_the_undo_changes_nothing(store: Store) -> None:
     fake = await applied(store)
     fake.fail_stock_reads = True
@@ -368,3 +395,25 @@ async def test_an_apply_history_that_no_longer_shows_what_the_undo_reversed_is_v
     (problem,) = done.problems
     assert problem.startswith("stock item 57 has 0 history entries of the apply, not 1: ")
     assert undo_found(store) is lands
+
+
+@pytest.mark.parametrize("lands", [True, False])
+@pytest.mark.anyio
+async def test_a_reversed_item_deleted_before_recovery_is_verify_failed(store: Store, lands: bool) -> None:
+    """InvenTree refuses the history of an item it deleted (`test_char_deplete_deletes_item_keeps_history`):
+    recovery reports the item gone instead of failing on every run, the undo found or not."""
+    fake = await unknown_undo(store, lands=lands)
+    del fake.items[ITEM]
+    done = await recover(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.problems[-1] == "stock item 57 is gone"
+    assert undo_found(store) is lands
+
+
+@pytest.mark.anyio
+async def test_a_history_read_error_on_an_item_that_exists_still_raises_in_recovery(store: Store) -> None:
+    fake = await unknown_undo(store, lands=True)
+    fake.history_fails = {ITEM}
+    with pytest.raises(InvenTreeError):
+        await recover(store, fake)
+    assert store.request(KEY).state is S.UNDO_UNKNOWN

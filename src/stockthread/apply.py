@@ -395,7 +395,9 @@ async def undo_apply(
         found = reversals(view, request, written.marker, snapshot, await reader.marker_entries(row.marker_id))
         if isinstance(found, NoUndo):
             return Applied(row.state, f"no undo: {found.why}")
-        history = {pk: await reader.item_entries(pk) for reversal in found for pk in reversal.history_items}
+        history = await _histories(reader, sorted({pk for reversal in found for pk in reversal.history_items}))
+        if isinstance(history, Stale):
+            return Applied(row.state, f"no undo: {history.why}")
         read = await _stock(reader, pairs(view))
         entries = await reader.marker_entries(row.marker_id)
         if refused := check_undo(view, found, written.marker, snapshot, read, entries=entries, history=history):
@@ -429,8 +431,8 @@ async def undo_apply(
         try:
             after = await reader.marker_entries(row.marker_id)
             now = await _stock(reader, pairs(view))
-            later = {reversal.item: await reader.item_entries(reversal.item) for reversal in found}
-            problems = tuple(verify_undo(view, found, attempt.marker, before, after, now, history=later))
+            later, gone = await _reversed_histories(reader, found)
+            problems = tuple(verify_undo(view, found, attempt.marker, before, after, now, history=later, gone=gone))
         except BaseException:
             store.transition(key, expected=RequestState.UNDOING, target=RequestState.UNDO_UNKNOWN, actor=Actor.APPLIER)
             raise
@@ -459,8 +461,9 @@ async def recover_undo(
     every total and every reversed item's history is as the undo's snapshot has it: `undo_failed`, the apply's stock
     standing, and never sent again (ADR 0015: it may still land). Not found, and anything else: `verify_failed`.
     Entries of the request's id that carry neither the apply nor this undo are `verify_failed`, found or not, and
-    so is an apply history that no longer shows what the undo reversed. Read errors raise and change nothing, so it
-    stays `undo_unknown` and a later run concludes it. Nothing is written."""
+    so is an apply history that no longer shows what the undo reversed, and a reversed item InvenTree deleted. Other
+    read errors raise and change nothing, so it stays `undo_unknown` and a later run concludes it. Nothing is
+    written."""
     async with lock:
         row = store.request(key)
         if row.state is not RequestState.UNDO_UNKNOWN:
@@ -491,18 +494,21 @@ async def recover_undo(
         _check_stored_undo(view, undone, attempt.marker, attempt.body)
         # The stock before the history, as in every read-back.
         read = await _stock(reader, pairs(view))
-        history = {reversal.item: await reader.item_entries(reversal.item) for reversal in undone}
+        history, gone = await _reversed_histories(reader, undone)
         others = sorted(entry.pk for entry in entries if entry.marker not in (written.marker, attempt.marker))
         another = [f"history entries {_listed(others)} carry another attempt"] if others else []
         if found:
-            problems = (*another, *verify_undo(view, undone, attempt.marker, before, entries, read, history=history))
+            problems = (
+                *another,
+                *verify_undo(view, undone, attempt.marker, before, entries, read, history=history, gone=gone),
+            )
             target = RequestState.VERIFY_FAILED if problems else RequestState.UNDONE
             store.transition(
                 key, expected=RequestState.UNDO_UNKNOWN, target=target, actor=Actor.RECOVERY, marker_found=True
             )
             why = "undo marker found; read back: " + ("does not agree" if problems else "as built")
             return Applied(target, why, problems)
-        changes = another + undo_changes(undone, before, read, history=history)
+        changes = another + undo_changes(undone, before, read, history=history, gone=gone)
         target = RequestState.VERIFY_FAILED if changes else RequestState.UNDO_FAILED
         store.transition(
             key, expected=RequestState.UNDO_UNKNOWN, target=target, actor=Actor.RECOVERY, marker_found=False
@@ -573,6 +579,22 @@ async def _histories(reader: ApplyReader, named: Sequence[int]) -> dict[int, lis
                 return Stale(f"stock item {pk} no longer exists")
             raise
     return history
+
+
+async def _reversed_histories(reader: ApplyReader, found: Sequence[Reversal]) -> tuple[dict[int, list[int]], list[int]]:
+    """The history of each reversed item, and the reversed items InvenTree deleted (a depleted delete_on_deplete
+    item: its history read answers 400), which an undo's read-back reports instead of reading. Any other failure
+    raises."""
+    history: dict[int, list[int]] = {}
+    gone: list[int] = []
+    for reversal in found:
+        try:
+            history[reversal.item] = await reader.item_entries(reversal.item)
+        except InvenTreeError:
+            if not await reader.stock_item_gone(reversal.item):
+                raise
+            gone.append(reversal.item)
+    return history, gone
 
 
 async def _read_back(

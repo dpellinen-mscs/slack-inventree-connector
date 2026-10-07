@@ -34,6 +34,7 @@ class FakeInvenTree:
         self.with_entry = True
         """False: the write leaves no history entry (1.5.6 with PostgreSQL, `test_char_overlong_notes_...`)."""
         self.before_write: Callable[[], None] | None = None
+        self.after_write: Callable[[], None] | None = None
         self.fail_reads = False
         self.fail_reads_after_write = False
         self.history_fails: set[int] = set()
@@ -100,6 +101,8 @@ class FakeInvenTree:
                         {"location": request.body["location"], "quantity": float(stock[2])},
                         20,
                     )
+        if self.after_write is not None:
+            self.after_write()
         if self.answer is not Outcome.ACCEPTED:  # it ran, but the answer did not say so (a timeout, a 5xx)
             return Sent(self.answer, f"POST {request.path}: {self.answer}")
         return Sent(Outcome.ACCEPTED, f"POST {request.path}: 201", 201)
