@@ -98,6 +98,9 @@ plan to leave them, so it never reports a write that is still going on."""
 UNSETTLED: frozenset[RequestState] = frozenset({S.APPLYING, S.UNKNOWN, S.UNDOING, S.UNDO_UNKNOWN})
 """States in which a write may be in flight. Nothing else may be sent for the post."""
 
+UNDOABLE: frozenset[RequestState] = frozenset({S.VERIFIED, S.VERIFY_FAILED, S.UNDO_FAILED})
+"""The states an undo may start from, by a person (`Actor.HUMAN`): `apply.undo_apply`, `Store.undo_refusal`."""
+
 
 class IllegalTransition(Exception):
     """A transition that the state machine does not allow, or not for this actor."""

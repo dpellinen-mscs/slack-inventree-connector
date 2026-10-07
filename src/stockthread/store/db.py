@@ -33,6 +33,7 @@ from stockthread.core.marker_check import Outcome, RecordedAttempt, RecordedRequ
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import (
     RECEIPT_STATES,
+    UNDOABLE,
     UNSETTLED,
     WORKING,
     Actor,
@@ -1836,6 +1837,46 @@ class Store:
             raise AssertionError(f"{len(found)} applies of request {key} wrote")
         ((marker, snapshot, body),) = found
         return AppliedAttempt(Marker.parse(marker), json.loads(snapshot), json.loads(body))
+
+    def undo_refusal(self, key: RequestKey, *, max_age: timedelta) -> str | None:
+        """Why no undo of request `key` may be asked for now, or None: what an Undo button checks, as offered and as
+        clicked, before `apply.undo_apply` (design section 7, "Undo"). An undo starts only from a `verified`,
+        `verify_failed` or `undo_failed` request whose apply wrote less than `max_age` ago (by the store clock, from
+        when the apply's outcome was recorded), and only when every earlier undo of it was refused by InvenTree: one
+        that wrote, or whose outcome was unknown (even one recovery concluded `undo_failed`, ADR 0018), would reverse
+        the apply twice. It reads the store only. Whatever passes here is checked again by `undo_apply` under the
+        writer lock, with the stock, and a block that passes (another write of the post in flight) is its to report."""
+        row, _, _ = self._request(key)
+        if row.state not in UNDOABLE:
+            return f"the request is {row.state}: only a movement that was written and read back can be undone"
+        written = self._db.execute(
+            "SELECT finished_at FROM request_attempts WHERE request_id = ? AND kind = ?"
+            " AND (outcome = 'accepted' OR (outcome = 'unknown' AND marker_found = 1))",
+            (row.id, AttemptKind.APPLY.value),
+        ).fetchall()
+        if not written:
+            return "no apply of this request wrote"
+        if len(written) > 1:
+            raise AssertionError(f"{len(written)} applies of request {key} wrote")
+        undos = [
+            outcome
+            for (outcome,) in self._db.execute(
+                "SELECT outcome FROM request_attempts WHERE request_id = ? AND kind = ?",
+                (row.id, AttemptKind.UNDO.value),
+            ).fetchall()
+        ]
+        if any(outcome != "refused" for outcome in undos):
+            return "an earlier undo was not refused by InvenTree: it wrote, or it may still land"
+        if len(undos) >= MAX_ATTEMPT:
+            return f"{MAX_ATTEMPT} attempts is the limit"
+        ((finished_at,),) = written
+        if finished_at is None:
+            raise AssertionError(f"the apply of request {key} that wrote has no time its outcome was recorded")
+        if self._clock_now() - datetime.fromisoformat(finished_at) >= max_age:
+            return (
+                f"the movement was written more than {max_age.total_seconds() / 3600:g} hours ago: undo it in InvenTree"
+            )
+        return None
 
     def attempt_snapshot(self, marker: Marker) -> Any:
         """The snapshot stored for the attempt with `marker` (step 3 of the apply protocol). KeyError if no attempt

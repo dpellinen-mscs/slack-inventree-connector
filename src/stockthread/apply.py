@@ -17,7 +17,7 @@ import anyio
 from stockthread.core.marker import AttemptKind, Marker, marked
 from stockthread.core.marker_check import Finding, FindingKind, check_markers
 from stockthread.core.model import Operation, PostKey, RequestKey
-from stockthread.core.requests import Actor, RequestState
+from stockthread.core.requests import UNDOABLE, Actor, RequestState
 from stockthread.core.resolve import StockItem, stock_items
 from stockthread.core.write_request import PATHS, WriteRequest
 from stockthread.gate import Judgement
@@ -345,10 +345,6 @@ async def readback_request(
         return Applied(target, "read back: " + ("does not agree with the plan" if problems else "as planned"), problems)
 
 
-UNDOABLE = (RequestState.VERIFIED, RequestState.VERIFY_FAILED, RequestState.UNDO_FAILED)
-"""The states an undo may start from (by a person: `Actor.HUMAN`)."""
-
-
 async def undo_apply(
     key: RequestKey,
     view: MovementView,
@@ -374,7 +370,8 @@ async def undo_apply(
     `undo_unknown` when its outcome is not known, `undone` or `verify_failed` after the read-back. A read error (or
     any other exception) in the read-back moves it to `undo_unknown` and raises: there is no state for an undo
     accepted but not read back, and recovery of an unknown undo finds its marker and reads it back (ADR 0017).
-    Whether the undo is still allowed (`undo.max_age`, who may ask) is the caller's to decide."""
+    Whether the undo is still allowed (`undo.max_age_hours`, who may ask) is the caller's to decide:
+    `applier.undo_refusal`."""
     async with lock:
         row = store.request(key)
         if row.state not in UNDOABLE:

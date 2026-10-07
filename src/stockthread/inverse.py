@@ -23,7 +23,7 @@ deleted (delete_on_deplete), though it existed before. A transfer back carries
 restored per part and location, not by stock item id.
 
 What this does not decide: whether the request may be undone at all (its state, an earlier undo that wrote,
-`undo.max_age`). The store and the caller do.
+`undo.max_age_hours`). The store and the caller do (`applier.undo_refusal`).
 
 A refusal names pks, entry types and quantities only: never notes or other text from InvenTree.
 """
