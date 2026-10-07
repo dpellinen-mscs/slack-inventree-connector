@@ -22,6 +22,7 @@ editing history.
 | [0014](0014-dev-workspace-capture-fixtures.md) | Two Slack fixtures may come from the dev workspace capture | Accepted |
 | [0015](0015-unknown-writes-are-never-retried.md) | Recovery's conclusion lives on the attempt, and an unknown write is never retried | Accepted |
 | [0016](0016-apply-reads-the-dry-run-record.md) | Apply acts on the dry-run record the thread was shown, never on a new reading | Accepted |
+| [0017](0017-undo-read-back-states.md) | An undo is read back against the stock it was built on, and its outcomes reuse the apply's states | Accepted |
 
 ## Template
 

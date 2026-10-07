@@ -33,13 +33,14 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.model import Operation
 from stockthread.core.resolve import StockItem, Take
 from stockthread.core.write_request import WriteRequest, _check_quantity, _decimal, build_request
 from stockthread.inventree import MarkedEntry
-from stockthread.precondition import Pair, Snapshot, built_from, places, record
+from stockthread.precondition import Pair, Snapshot, built_from, pairs, places, record
 from stockthread.readback import ADDED, COUNTED, MOVED, REMOVED, SPLIT_CHILD, _number
 from stockthread.slack.replies import MovementView
 
@@ -262,3 +263,152 @@ def undo_request(
     takes = [Take(reversal.item, reversal.quantity) for reversal in found]
     location = place if operation is Operation.TRANSFER else None
     return build_request(UNDO_OPERATION[operation], takes, marker=marker, user=user, link=link, location=location)
+
+
+UNDO_ENTRY = {Operation.ADD: REMOVED, Operation.REMOVE: ADDED, Operation.COUNT: COUNTED}
+"""The entry the undo of an add, a remove and a count writes on its item. The undo of a transfer moves a whole item
+(the line's, or the new one a split made) back: a location entry."""
+
+
+@dataclass(frozen=True)
+class UndoSnapshot:
+    """The stock just before the undo is sent, what its read-back compares with: an undo is checked against the stock
+    it was built on, not the apply's snapshot (another item at the same place may have changed since the apply)."""
+
+    totals: Mapping[Pair, Decimal]
+    """What each pair `precondition.pairs` names held."""
+    where: Mapping[int, Pair]
+    """The pair each `Reversal.item` was read at."""
+    history: Mapping[int, frozenset[int]]
+    """The history entry pks of each stock item of `Reversal.history_items`."""
+
+    def as_json(self) -> dict[str, Any]:
+        """The stored form, the attempt's snapshot: `{"totals": {"<part>@<location>": "<quantity>"}, "where":
+        {"<pk>": "<part>@<location>"}, "history": {"<pk>": [<entry pk>, ...]}}`. It has no `stock_items`: the step-2
+        depletion excuse (`apply.depletes`) never applies to an undo, which `check_undo` keeps from emptying an item."""
+        return {
+            "totals": {_pair(pair): _decimal(total) for pair, total in sorted(self.totals.items())},
+            "where": {str(pk): _pair(pair) for pk, pair in sorted(self.where.items())},
+            "history": {str(pk): sorted(entries) for pk, entries in sorted(self.history.items())},
+        }
+
+
+def _pair(pair: Pair) -> str:
+    return f"{pair[0]}@{pair[1]}"
+
+
+def undo_snapshot(
+    view: MovementView,
+    found: Sequence[Reversal],
+    read: Mapping[Pair, Sequence[StockItem]],
+    history: Mapping[int, Collection[int]],
+) -> UndoSnapshot:
+    """The snapshot of the stock `check_undo` passed: `read` and `history` as given to it. ValueError if a pair of
+    the movement or a reversed item was not read."""
+    wanted = pairs(view)
+    if missing := [pair for pair in wanted if pair not in read]:
+        raise ValueError(f"no stock read for part {missing[0][0]} at location {missing[0][1]}")
+    totals = {pair: sum((item.quantity for item in read[pair]), Decimal(0)) for pair in wanted}
+    where = {item.pk: pair for pair in wanted for item in read[pair]}
+    if missing_items := [reversal.item for reversal in found if reversal.item not in where]:
+        raise ValueError(f"stock item {missing_items[0]} was not read")
+    if missing_history := [pk for reversal in found for pk in reversal.history_items if pk not in history]:
+        raise ValueError(f"no history read for stock item {missing_history[0]}")
+    return UndoSnapshot(
+        totals,
+        {reversal.item: where[reversal.item] for reversal in found},
+        {pk: frozenset(history[pk]) for reversal in found for pk in reversal.history_items},
+    )
+
+
+def verify_undo(
+    view: MovementView,
+    found: Sequence[Reversal],
+    marker: Marker,
+    before: UndoSnapshot,
+    entries: Sequence[MarkedEntry],
+    read: Mapping[Pair, Sequence[StockItem]],
+    *,
+    history: Mapping[int, Collection[int]],
+) -> list[str]:
+    """What the read-back of the undo `marker` of `found` disagrees with, or nothing. `before`: `undo_snapshot`;
+    `entries`: every entry of the request's marker id, read now; `read`: the stock of `precondition.pairs(view)`, read
+    now, then `history`: the entries of each `Reversal.item`, read now.
+
+    It checks three things, as `readback` does for an apply: the undo marker is on exactly one entry per reversed
+    item, of the type and with the numbers the undo writes; every reversed item is where the undo leaves it, holding
+    what it should, and each total moved by exactly the reversed quantities; and no reversed item has an entry since
+    `before` that is not this request's."""
+    if marker.kind is not AttemptKind.UNDO:
+        raise ValueError("an undo is read back with its undo marker")
+    operation, place, destination = places(view)
+    problems: list[str] = []
+    mine = [entry for entry in entries if entry.marker == marker]
+    expected_totals = dict(before.totals)
+    for reversal in found:
+        part, at = before.where[reversal.item]
+        on = [entry for entry in mine if entry.item == reversal.item]
+        if len(on) != 1:
+            problems.append(f"stock item {reversal.item} has {len(on)} history entries of the undo, not 1")
+        elif problem := _undo_entry(operation, place, reversal, on[0]):
+            problems.append(problem)
+        if operation is Operation.TRANSFER:
+            if place is None or at != destination:
+                raise ValueError(f"stock item {reversal.item} was not read at the transfer's destination")
+            expected_totals[(part, at)] -= reversal.quantity
+            expected_totals[(part, place)] += reversal.quantity
+            left: tuple[Pair, Decimal | None] = ((part, place), reversal.quantity)
+        elif operation is Operation.ADD:
+            expected_totals[(part, at)] -= reversal.quantity
+            left = ((part, at), None if reversal.holds is None else reversal.holds - reversal.quantity)
+        elif operation is Operation.REMOVE:
+            expected_totals[(part, at)] += reversal.quantity
+            left = ((part, at), None)
+        else:
+            if reversal.holds is None:
+                raise ValueError("the reversal of a count holds what the count set")
+            expected_totals[(part, at)] += reversal.quantity - reversal.holds
+            left = ((part, at), reversal.quantity)
+        problems += _left(reversal.item, *left, read)
+    for pair, total in sorted(expected_totals.items()):
+        now = sum((item.quantity for item in read.get(pair, ())), Decimal(0))
+        if pair not in read or now != total:
+            problems.append(
+                f"part {pair[0]} at location {pair[1]} holds {_decimal(now)}, the undo should leave {_decimal(total)}"
+            )
+    own = {entry.pk for entry in entries}
+    for reversal in found:
+        if reversal.item not in history:
+            raise ValueError(f"no history read for stock item {reversal.item}")
+        later = set(history[reversal.item]) - before.history.get(reversal.item, frozenset()) - own
+        if later:
+            listed = ", ".join(str(entry) for entry in sorted(later))
+            problems.append(f"stock item {reversal.item} has history entries {listed} that are not this request's")
+    return problems
+
+
+def _undo_entry(operation: Operation, place: int | None, reversal: Reversal, entry: MarkedEntry) -> str | None:
+    if operation is Operation.TRANSFER:
+        kind, numbers = MOVED, {"location": place, "quantity": reversal.quantity}
+    elif operation is Operation.COUNT:
+        kind, numbers = COUNTED, {"quantity": reversal.quantity}
+    else:
+        kind = UNDO_ENTRY[operation]
+        numbers = {"removed" if operation is Operation.ADD else "added": reversal.quantity}
+    if entry.tracking_type != kind:
+        return f"the undo's entry {entry.pk} on stock item {reversal.item} is of type {entry.tracking_type}, not {kind}"
+    for key, want in numbers.items():
+        got = entry.deltas.get(key)
+        same = got == want if key == "location" else _number(got) == want
+        if not same:
+            return f"the undo's entry {entry.pk} on stock item {reversal.item} does not show {key} {want}"
+    return None
+
+
+def _left(pk: int, pair: Pair, holds: Decimal | None, read: Mapping[Pair, Sequence[StockItem]]) -> list[str]:
+    now = {item.pk: item for item in read.get(pair, ())}
+    if pk not in now:
+        return [f"stock item {pk} is not at location {pair[1]}"]
+    if holds is not None and now[pk].quantity != holds:
+        return [f"stock item {pk} holds {_decimal(now[pk].quantity)}, the undo should leave {_decimal(holds)}"]
+    return []

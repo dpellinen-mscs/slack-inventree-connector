@@ -1,6 +1,6 @@
 """The apply protocol (design section 7, "Apply protocol"): `apply_request` runs steps 1 to 6 for one request,
-`check_post_markers` is step 2, the marker check of a whole post against InvenTree, and `recover_request` concludes an
-apply whose outcome is unknown ("Unknown outcomes and recovery").
+`check_post_markers` is step 2, the marker check of a whole post against InvenTree, `recover_request` concludes an
+apply whose outcome is unknown ("Unknown outcomes and recovery"), and `undo_apply` runs one undo ("Undo").
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from stockthread.core.resolve import StockItem, stock_items
 from stockthread.core.write_request import PATHS, WriteRequest
 from stockthread.gate import Judgement
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, MarkedEntry, ServerInfo
+from stockthread.inverse import NoUndo, check_undo, reversals, undo_request, undo_snapshot, verify_undo
 from stockthread.precondition import Pair, Snapshot, Stale, built_from, check, pairs
 from stockthread.readback import created, verify
 from stockthread.slack.replies import MovementView
@@ -331,6 +332,100 @@ async def readback_request(
         target = RequestState.VERIFY_FAILED if problems else RequestState.VERIFIED
         store.transition(key, expected=RequestState.APPLIED, target=target, actor=Actor.APPLIER)
         return Applied(target, "read back: " + ("does not agree with the plan" if problems else "as planned"), problems)
+
+
+UNDOABLE = (RequestState.VERIFIED, RequestState.VERIFY_FAILED, RequestState.UNDO_FAILED)
+"""The states an undo may start from (by a person: `Actor.HUMAN`)."""
+
+
+async def undo_apply(
+    key: RequestKey,
+    view: MovementView,
+    *,
+    store: Store,
+    reader: ApplyReader,
+    writer: Sender,
+    lock: anyio.Lock,
+    lock_owner: str,
+    user: str,
+    link: str | None = None,
+) -> Applied:
+    """Undo the apply of request `key` (design section 7, "Undo") once, as the person `user` asked: `key` is
+    `verified`, `verify_failed` or `undo_failed`, and `view` is the movement its request was built from.
+
+    The protocol of `apply_request`, with an undo marker: the marker check of the post (step 2), then the undo built
+    from the entries of the apply that wrote (`inverse.reversals`), checked on the stock read now
+    (`inverse.check_undo`: histories first, then the stock, so an entry written between the two reads is one the
+    read-back reports), the intent stored with the stock it was built on (`inverse.undo_snapshot`), sent once, and
+    read back (`inverse.verify_undo`). A refusal before the intent (an attempt the store refuses, a finding, no apply
+    that wrote, no undo the history allows) leaves the state as it was and says why; a read error there raises and
+    changes nothing. Then: `undo_failed` when InvenTree refused the undo or the writer refused to send it,
+    `undo_unknown` when its outcome is not known, `undone` or `verify_failed` after the read-back. A read error (or
+    any other exception) in the read-back moves it to `undo_unknown` and raises: there is no state for an undo
+    accepted but not read back, and recovery of an unknown undo finds its marker and reads it back (ADR 0017).
+    Whether the undo is still allowed (`undo.max_age`, who may ask) is the caller's to decide."""
+    async with lock:
+        row = store.request(key)
+        if row.state not in UNDOABLE:
+            raise ValueError(f"request {key} is {row.state}, not one an undo may start from")
+        try:
+            marker = store.next_marker(key, AttemptKind.UNDO)
+        except WriteBlocked as blocked:
+            return Applied(row.state, f"no undo: {blocked}")
+        if findings := await check_post_markers(reader, store, key.post):
+            problems = tuple(f"{finding.marker}: {finding.why}" for finding in findings)
+            return Applied(row.state, "no undo: the stock history disagrees with the records", problems)
+        try:
+            written = store.written_apply(key)
+        except KeyError:
+            return Applied(row.state, "no undo: no apply of this request wrote")
+        request = _stored_request(row.operation, written.body, written.marker, view)
+        snapshot = Snapshot.from_json(written.snapshot)
+        found = reversals(view, request, written.marker, snapshot, await reader.marker_entries(row.marker_id))
+        if isinstance(found, NoUndo):
+            return Applied(row.state, f"no undo: {found.why}")
+        history = {pk: await reader.item_entries(pk) for reversal in found for pk in reversal.history_items}
+        read = await _stock(reader, pairs(view))
+        entries = await reader.marker_entries(row.marker_id)
+        if refused := check_undo(view, found, written.marker, snapshot, read, entries=entries, history=history):
+            return Applied(row.state, f"no undo: {refused.why}")
+        before = undo_snapshot(view, found, read, history)
+        undo = undo_request(view, found, marker, user=user, link=link)
+        try:
+            attempt = store.begin_attempt(
+                key,
+                AttemptKind.UNDO,
+                expected=row.state,
+                actor=Actor.HUMAN,
+                snapshot=before.as_json(),
+                request_body=dict(undo.body),
+                lock_owner=lock_owner,
+            )
+        except WriteBlocked as blocked:
+            return Applied(row.state, f"no undo: {blocked}")
+        try:
+            sent = await writer.send(undo)
+        except WriteRefused as error:
+            store.transition(key, expected=RequestState.UNDOING, target=RequestState.UNDO_FAILED, actor=Actor.APPLIER)
+            return Applied(RequestState.UNDO_FAILED, f"not sent: {error}")
+        except BaseException:
+            store.transition(key, expected=RequestState.UNDOING, target=RequestState.UNDO_UNKNOWN, actor=Actor.APPLIER)
+            raise
+        if sent.outcome is not Outcome.ACCEPTED:
+            target = RequestState.UNDO_FAILED if sent.outcome is Outcome.REFUSED else RequestState.UNDO_UNKNOWN
+            store.transition(key, expected=RequestState.UNDOING, target=target, actor=Actor.APPLIER)
+            return Applied(target, sent.why)
+        try:
+            after = await reader.marker_entries(row.marker_id)
+            now = await _stock(reader, pairs(view))
+            later = {reversal.item: await reader.item_entries(reversal.item) for reversal in found}
+            problems = tuple(verify_undo(view, found, attempt.marker, before, after, now, history=later))
+        except BaseException:
+            store.transition(key, expected=RequestState.UNDOING, target=RequestState.UNDO_UNKNOWN, actor=Actor.APPLIER)
+            raise
+        target = RequestState.VERIFY_FAILED if problems else RequestState.UNDONE
+        store.transition(key, expected=RequestState.UNDOING, target=target, actor=Actor.APPLIER)
+        return Applied(target, "undo read back: " + ("does not agree" if problems else "as built"), problems)
 
 
 def _stored_request(operation: Operation, body: Any, marker: Marker, view: MovementView) -> WriteRequest:
