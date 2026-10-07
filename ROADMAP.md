@@ -145,7 +145,8 @@ payloads whose channel or message does not fit the stored id.
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
 - [ ] Undo by button, authorized and idempotent, built from the observed history
   - [x] The undo request, built from the apply's history entries and refused when the stock moved on since (`inverse.reversals`, `check_undo`, `undo_request`)
-  - [ ] The undo attempt: store, send, read-back, recovery; `undo.max_age`; the button
+  - [x] The undo attempt: store, send, read-back (`apply.undo_apply`, ADR 0017)
+  - [ ] `undo.max_age` and the Undo button (recovery of an unknown undo: under "Unknown outcomes")
 - [ ] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
 - [ ] Instance lock: one connector per database
 - [ ] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word matches, fuzzy matches and picked candidates as aliases, for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo offers to forget the alias

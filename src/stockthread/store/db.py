@@ -57,6 +57,7 @@ OUTCOMES: dict[RequestState, str] = {
     S.UNDONE: "accepted",
     S.UNDO_FAILED: "refused",
     S.UNDO_UNKNOWN: "unknown",
+    S.VERIFY_FAILED: "accepted",  # only from undoing: an accepted undo whose read-back disagrees (ADR 0017)
 }
 """The outcome of the open attempt, by the state a request leaves `applying` or `undoing` for."""
 
@@ -1761,6 +1762,22 @@ class Store:
         if found is None:
             raise AssertionError(f"request {key} is applied, but its last attempt is not an apply accepted or found")
         marker, snapshot, body = found
+        return AppliedAttempt(Marker.parse(marker), json.loads(snapshot), json.loads(body))
+
+    def written_apply(self, key: RequestKey) -> AppliedAttempt:
+        """The apply attempt of request `key` that wrote, the one an undo reverses: InvenTree accepted it, or recovery
+        found its marker. KeyError if none did; AssertionError if two did (`begin_attempt` allows one)."""
+        row = self.request(key)
+        found = self._db.execute(
+            "SELECT marker, snapshot, request_body FROM request_attempts WHERE request_id = ? AND kind = ?"
+            " AND (outcome = 'accepted' OR (outcome = 'unknown' AND marker_found = 1))",
+            (row.id, AttemptKind.APPLY.value),
+        ).fetchall()
+        if not found:
+            raise KeyError(f"no apply of request {key} wrote")
+        if len(found) > 1:
+            raise AssertionError(f"{len(found)} applies of request {key} wrote")
+        ((marker, snapshot, body),) = found
         return AppliedAttempt(Marker.parse(marker), json.loads(snapshot), json.loads(body))
 
     def attempt_snapshot(self, marker: Marker) -> Any:

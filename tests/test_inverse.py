@@ -12,7 +12,7 @@ from stockthread.core.marker import AttemptKind, Marker, new_marker_id
 from stockthread.core.model import MovementType, Operation
 from stockthread.core.resolve import StockItem
 from stockthread.inventree import MarkedEntry
-from stockthread.inverse import NoUndo, Reversal, check_undo, reversals, undo_request
+from stockthread.inverse import NoUndo, Reversal, check_undo, reversals, undo_request, undo_snapshot, verify_undo
 from stockthread.plan import plan_requests
 from stockthread.precondition import Snapshot, check
 from stockthread.slack.replies import MovementView
@@ -309,3 +309,64 @@ def test_an_item_that_held_nothing_before_is_not_emptied_by_an_undo(
     assert applied.reversals([entry(700, 57, kind, **deltas)]) == NoUndo(
         "stock item 57 held 0 before the apply: the undo would empty it, which may delete it"
     )
+
+
+BEFORE_UNDO: Read = {(1, SOURCE): [item(57, "3"), item(58, "1")], (1, DESTINATION): [item(80, "3"), item(NEW, "2")]}
+AFTER_UNDO: Read = {(1, SOURCE): [item(57, "3"), item(58, "1"), item(NEW, "2")], (1, DESTINATION): [item(80, "3")]}
+
+
+def split_undone(undo_entry: MarkedEntry, now: Read = AFTER_UNDO) -> list[str]:
+    """`verify_undo` of the partial transfer's undo: item 90 (2) moved back from the destination to the source."""
+    applied = transfer("2")
+    found = applied.reversals(SPLIT)
+    assert isinstance(found, list)
+    history = {57: [570, 700], NEW: [701]}
+    before = undo_snapshot(applied.view, found, BEFORE_UNDO, history)
+    entries = [*SPLIT, undo_entry]
+    later = {NEW: [701, undo_entry.pk]}
+    return verify_undo(applied.view, found, UNDO, before, entries, now, history=later)
+
+
+def test_the_undo_of_a_split_reads_back_as_built() -> None:
+    assert split_undone(entry(800, NEW, 20, marker=UNDO, location=SOURCE, quantity=2.0)) == []
+
+
+@pytest.mark.parametrize(
+    ("undo_entry", "why"),
+    [
+        (entry(800, NEW, 42, marker=UNDO, location=SOURCE, quantity=2.0), "entry 800 on stock item 90 is of type 42"),
+        (entry(800, NEW, 20, marker=UNDO, location=DESTINATION, quantity=2.0), "does not show location"),
+        (entry(800, NEW, 20, marker=UNDO, location=SOURCE, quantity=1.0), "does not show quantity 2"),
+        (entry(800, 57, 20, marker=UNDO, location=SOURCE, quantity=2.0), "stock item 90 has 0 history entries"),
+    ],
+)
+def test_an_undo_entry_of_another_shape_is_a_read_back_problem(undo_entry: MarkedEntry, why: str) -> None:
+    assert any(why in problem for problem in split_undone(undo_entry))
+
+
+def test_an_undo_that_left_the_stock_elsewhere_is_a_read_back_problem() -> None:
+    stayed: Read = {(1, SOURCE): [item(57, "3"), item(58, "1")], (1, DESTINATION): [item(80, "3"), item(NEW, "2")]}
+    problems = split_undone(entry(800, NEW, 20, marker=UNDO, location=SOURCE, quantity=2.0), stayed)
+    assert problems == [
+        f"stock item 90 is not at location {SOURCE}",
+        f"part 1 at location {SOURCE} holds 4, the undo should leave 6",
+        f"part 1 at location {DESTINATION} holds 5, the undo should leave 3",
+    ]
+
+
+def test_the_undo_of_a_count_reads_back_the_count_it_set_back() -> None:
+    """Item 57 held 5, the count set 2, the undo counts 5 again."""
+    applied = Applied(view(MovementType.COUNT), {(1, DESTINATION): [item(57, "5")]})
+    entries = [entry(700, 57, 10, quantity=2.0)]
+    found = applied.reversals(entries)
+    assert isinstance(found, list)
+    before = undo_snapshot(applied.view, found, {(1, DESTINATION): [item(57, "2")]}, {57: [570, 700]})
+    counted = [*entries, entry(800, 57, 10, marker=UNDO, quantity=5.0)]
+    now: Read = {(1, DESTINATION): [item(57, "5")]}
+    assert verify_undo(applied.view, found, UNDO, before, counted, now, history={57: [570, 700, 800]}) == []
+    short: Read = {(1, DESTINATION): [item(57, "4")]}
+    problems = verify_undo(applied.view, found, UNDO, before, counted, short, history={57: [570, 700, 800]})
+    assert "stock item 57 holds 4, the undo should leave 5" in problems
+    wrong = [*entries, entry(800, 57, 10, marker=UNDO, quantity=4.0)]
+    problems = verify_undo(applied.view, found, UNDO, before, wrong, now, history={57: [570, 700, 800]})
+    assert problems == ["the undo's entry 800 on stock item 57 does not show quantity 5"]

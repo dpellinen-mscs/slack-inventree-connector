@@ -1261,7 +1261,7 @@ A plan has its own state: `current`, `stale`, `expired`, `applied`,
 | `verified` | Read-back agrees with the plan | `undoing` |
 | `verify_failed` | Read-back or recovery found something unexpected | `accepted` or `undoing`, by the operator |
 | `accepted` | The operator accepted the observed state. Final | |
-| `undoing` | Undo intent stored | `undone`, `undo_failed`, `undo_unknown` (also by recovery at start, after a crash) |
+| `undoing` | Undo intent stored | `undone`, `undo_failed`, `undo_unknown` (also by recovery at start, after a crash, and after a read error in the undo's read-back), `verify_failed` (accepted, but the read-back disagrees; ADR 0017) |
 | `undo_failed` | InvenTree refused the undo. Nothing was written | `undoing`, by a human, as a new attempt (only after refused undos) |
 | `undo_unknown` | The outcome of the undo is not known | `undone`, `verified` or `verify_failed`, by recovery |
 | `undone` | The undo is verified. Final | |
@@ -1611,7 +1611,7 @@ For stock that is not serialized, undo restores quantities per part and
 location. It does not promise to restore stock item ids, because a split
 changes them.
 
-Built (the undo request, not its protocol yet): `inverse.reversals` reads
+Built: `apply.undo_apply` runs one undo by the protocol (ADR 0017: its read-back compares with the stock the undo was built on, `inverse.verify_undo`), not wired to a button yet, without recovery of an unknown undo. Also built: `inverse.reversals` reads
 what each line of the apply did from the entries that carry its marker
 (one entry per line, on the line's item: a location or split entry for a
 transfer, the added, removed or counted entry otherwise; anything else, or
