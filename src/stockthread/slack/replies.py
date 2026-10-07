@@ -1,4 +1,5 @@
-"""The dry-run reply in a post's thread: what would change, and every reason it needs a human.
+"""The replies in a post's thread: the dry run (what would change, and every reason it needs a human), its
+questions, and the receipt of what was written.
 
 Pure: it turns values into a `chat.postMessage` body (`text` and `blocks`). Text that came from
 the post (item and location words) is escaped, so a post cannot make the connector write a
@@ -8,6 +9,7 @@ mention such as <!channel> or a disguised link. Catalog names are escaped too.
 from __future__ import annotations
 
 import re
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -24,6 +26,7 @@ from stockthread.core.model import (
     operation_for,
 )
 from stockthread.core.questions import Ask, Choice, Question, choices
+from stockthread.core.requests import RequestState
 from stockthread.core.resolve import SourcePick, StockItem
 
 MAX_SECTION = 2900
@@ -532,3 +535,107 @@ def question_closed(answered_by: str | None, *, expired: bool = False) -> dict[s
     else:
         text = "This question was answered."
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+
+RECEIPT_WORDS = {
+    RequestState.VERIFIED: "applied, and read back as planned",
+    RequestState.VERIFY_FAILED: "the check of this write found a problem. Look at it in InvenTree before relying on it",
+    RequestState.FAILED: "not applied. InvenTree refused it, or showed no change from it when checked",
+    RequestState.ACCEPTED: "written. An approver accepted the problem its check found",
+    RequestState.UNDO_FAILED: "an undo of it failed. Look at it in InvenTree",
+    RequestState.UNDONE: "undone",
+    RequestState.PLANNED: "not applied. Stock changed since the plan, so it waits for review",
+    RequestState.REJECTED: "not applied. It was rejected",
+    RequestState.CANCELLED: "not applied. A newer reading of the post replaced it",
+    RequestState.EXPIRED: "not applied. It expired",
+}
+"""What a request's state says in the receipt: every state but those in which a step is due or in flight (`WORKING`).
+`verify_failed` and `failed` claim no more than their every path guarantees: a `verify_failed` request may have been
+found by its marker check with nothing sent, and a `failed` one concluded by recovery may still land (ADR 0015)."""
+
+NOT_WRITTEN = frozenset(
+    {RequestState.FAILED, RequestState.PLANNED, RequestState.REJECTED, RequestState.CANCELLED, RequestState.EXPIRED}
+)
+"""States of a request no write of which InvenTree showed."""
+
+_LINK_SAFE = ":/%[]-._~!$'()*+,;="
+"""What a link keeps of the configured InvenTree URL as written. Anything else, such as `|`, `<`, `>` or `&`, is
+percent-encoded, so the URL cannot end the link or add markup."""
+
+
+def _link(inventree_url: str, kind: str, pk: int, label: str) -> str:
+    """A link to a record's page in InvenTree's web interface (`/web/stock/item/<pk>`, `/web/stock/location/<pk>`)."""
+    base = urllib.parse.quote(inventree_url.rstrip("/"), safe=_LINK_SAFE)
+    return f"<{base}/web/stock/{kind}/{pk}|{escape(label)}>"
+
+
+def _receipt_links(view: MovementView, locations: Mapping[int, str], inventree_url: str) -> str:
+    """The links of a movement's places and stock items; none for a URL that is not ASCII (a host name would be
+    percent-encoded into a wrong link)."""
+    if not inventree_url.isascii():
+        return ""
+    places = [match.record for match in (view.source, view.destination) if match is not None]
+    items = sorted({take.item for pick in view.stock if pick is not None for take in pick.takes})
+    links = [
+        _link(inventree_url, "location", pk, locations.get(pk, f"location #{pk}"))
+        for pk in dict.fromkeys(pk for pk in places if pk is not None)
+    ]
+    links += [_link(inventree_url, "item", pk, f"stock item #{pk}") for pk in items]
+    return f"In InvenTree: {' · '.join(links)}" if links else ""
+
+
+def receipt(
+    views: Sequence[MovementView],
+    states: Sequence[RequestState],
+    markers: Sequence[str],
+    parts: Mapping[int, str],
+    locations: Mapping[int, str],
+    *,
+    inventree_url: str,
+    approved_by: str | None,
+) -> dict[str, Any]:
+    """The receipt in the post's thread once no step of its plan's writes is due or in flight (design section 7, step
+    6): for every movement, its state, what it was to change, links to its places and stock items in InvenTree, and
+    the marker its history entries carry in their notes. One state and one marker per movement, in the post's order.
+
+    `approved_by`: the approver whose Apply click approved the plan, or None when the write policy approved it."""
+    if not views:
+        raise ValueError("a receipt shows at least one movement")
+    if len(states) != len(views) or len(markers) != len(views):
+        raise ValueError("one state and one marker per movement")
+    if any(state not in RECEIPT_WORDS for state in states):
+        raise ValueError("a receipt reports no request whose write is due or in flight")
+    if all(state is RequestState.VERIFIED for state in states):
+        heading, text = "*Applied.* Inventory was changed as below, and read back to check it.", "Applied"
+    elif all(state in NOT_WRITTEN for state in states):
+        heading, text = "*Not applied.*", "Not applied"
+    else:
+        heading, text = "*Check this.* Not everything below went as planned.", "Check this"
+    if approved_by is None:
+        who = "Approved by the write policy, with no click."
+    elif _SLACK_USER.fullmatch(approved_by):
+        who = f"Approved by <@{approved_by}>."
+    else:
+        who = "Approved by a click."
+    blocks: list[dict[str, Any]] = [_section(f"{heading} {who}")]
+    for number, (view, state, marker) in enumerate(zip(views[:MAX_MOVEMENTS], states, markers, strict=False), 1):
+        movement = view.movement
+        title = TYPE_LABELS[movement.movement_type]
+        if len(views) > 1:
+            title = f"{number}. {title}"
+        lines = [_line(view, i, parts) for i in range(len(view.items))]
+        source = _named(movement.source_text, view.source, locations, "location", view.named.get("source"))
+        destination = _named(
+            movement.destination_text, view.destination, locations, "location", view.named.get("destination")
+        )
+        shown = "\n".join([f"*{title}*: {RECEIPT_WORDS[state]}.", *lines, f"From {source} to {destination}"])
+        links = _receipt_links(view, locations, inventree_url)
+        if links and len(shown) + 1 + len(links) <= MAX_SECTION:  # never cut inside a link
+            shown = f"{shown}\n{links}"
+        blocks.append(_section(shown))
+        trail = f"Marker `{escape(marker)}`: InvenTree's stock history entries of this request carry it in their notes."
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": trail}]})
+    if len(views) > MAX_MOVEMENTS:
+        blocks.append(_section(f"…and {len(views) - MAX_MOVEMENTS} more movements, not shown here."))
+    count = f"{len(views)} movements" if len(views) > 1 else "1 movement"
+    return {"text": f"{text}: {count}.", "blocks": blocks}
