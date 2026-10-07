@@ -1385,11 +1385,14 @@ class Store:
         return self._request(key)[0]
 
     def _set_state(self, request_id: int, expected: RequestState, target: RequestState, actor: Actor) -> None:
-        """The compare-and-set. Call inside a transaction, after every check."""
+        """The compare-and-set. Call inside a transaction, after every check. An approval starts a new try, so it
+        forgets the state a receipt reported: the try's outcome is reported even when it is that state again."""
         check_transition(expected, target, actor)
         cursor = self._db.execute(
-            "UPDATE requests SET state = ?, updated_at = ? WHERE id = ? AND state = ?",
-            (target.value, self._now(), request_id, expected.value),
+            "UPDATE requests SET state = ?, updated_at = ?,"
+            " receipt_state = CASE WHEN ? = 'approved' THEN NULL ELSE receipt_state END"
+            " WHERE id = ? AND state = ?",
+            (target.value, self._now(), target.value, request_id, expected.value),
         )
         if cursor.rowcount != 1:
             raise StateConflict(f"request {request_id} is no longer {expected}")
@@ -1525,8 +1528,8 @@ class Store:
     def receipts_due(self) -> list[tuple[PostKey, int]]:
         """Every plan revision, as (post, revision), that is due a receipt (design section 7, step 6): no request of
         it is `WORKING`, and one of them is in a `RECEIPT_STATES` state that no receipt of the plan reported (none
-        did, or the request was tried again since). The receipt then reports every request (ADR 0002). By post and
-        revision."""
+        did, or the request was approved again since: `_set_state` forgets the reported state then). The receipt
+        then reports every request (ADR 0002). By post and revision."""
         return self._receipts_due()
 
     def _receipts_due(self, plan_id: int | None = None) -> list[tuple[PostKey, int]]:

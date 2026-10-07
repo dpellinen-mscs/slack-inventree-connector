@@ -503,16 +503,18 @@ def test_a_write_whose_sibling_went_back_to_review_is_reported_at_once(store: St
     assert store.receipts_due() == []
 
 
-def test_a_write_tried_again_after_its_receipt_is_reported_again(store: Store) -> None:
+@pytest.mark.parametrize("outcome", [S.VERIFIED, S.VERIFY_FAILED, S.FAILED])
+def test_a_write_tried_again_after_its_receipt_is_reported_again(store: Store, outcome: RequestState) -> None:
     reply(store, record(TAKE))
     store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
     write(store, KEY, S.FAILED)
     store.receipt_posted(OWNER, POST, 1, "1700000200.000100", [S.FAILED])
     store.transition(KEY, expected=S.FAILED, target=S.APPROVED, actor=Actor.HUMAN)
+    assert store.request(KEY).receipt_state is None  # the try the receipt reported is over
     assert store.receipts_due() == []  # the new try is due: the receipt waits for it
-    write(store, KEY, S.VERIFIED)
+    write(store, KEY, outcome)  # refused again included: the same state is a new outcome
     assert store.receipts_due() == [(POST, 1)]
-    store.receipt_posted(OWNER, POST, 1, "1700000300.000100", [S.VERIFIED])
+    store.receipt_posted(OWNER, POST, 1, "1700000300.000100", [outcome])
     assert store.plan(POST, 1).receipt_ts == "1700000300.000100"
     assert store.receipts_due() == []
 

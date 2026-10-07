@@ -1441,16 +1441,15 @@ connector never has two InvenTree writes in flight and cannot race itself.
    nothing sent, and a `failed` one concluded by recovery may still land
    (ADR 0015). A plan is due a receipt once no request of it has a step
    due or in flight (`WORKING`) and one of them is `verified`,
-   `verify_failed` or `failed` in a state no receipt reported
-   (`Store.receipts_due`), so a sibling sent back to review does not hold
-   the receipt back, and a write tried again is reported again.
+   `verify_failed` or `failed` and no receipt reported it since its last
+   approval (`Store.receipts_due`), so a sibling sent back to review does
+   not hold the receipt back, and a write tried again is reported again,
+   even when it ends in the same state.
    `Store.receipt_posted` records the reply's ts and the states it
    reported, only while they are still the states (migration 0019, which
    marks every write concluded before it as reported). A crash between the
    post and the record posts it again: a duplicate beats a silent drop.
-   Not posted by the worker yet, and no Undo button yet. Known gap: a
-   request that ADR 0015 refuses stays `approved`, and holds its plan's
-   receipt back until the plans-with-several-requests item ends it.
+   Not posted by the worker yet, and no Undo button yet.
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
 It takes the process's writer lock, and waits, nothing read and still

@@ -141,7 +141,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
   - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`, run by `run.run` at start)
   - [ ] Recovery of an unknown undo; the worker runs recovery
-- [ ] Plans with several requests, and the `partially_applied` state (a request ADR 0015 refuses must leave `approved`, or it holds its plan's receipt back)
+- [ ] Plans with several requests, and the `partially_applied` state
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
   - [x] The message: each movement's state, its exact changes, links to InvenTree and its marker (`replies.receipt`); due once no write of the plan is due or in flight and one concluded unreported, recorded with the states it reported (`Store.receipts_due`, `Store.receipt_posted`, migration 0019)
   - [ ] Posted by the worker, with the Undo button
