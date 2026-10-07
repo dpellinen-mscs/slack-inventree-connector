@@ -36,15 +36,27 @@ from stockthread.core.model import (
     PostKey,
     ReasonCode,
     ReasonSource,
+    RequestKey,
     ReviewReason,
 )
-from stockthread.core.resolve import STATUS_OK, StockItem
+from stockthread.core.requests import Actor, RequestState
+from stockthread.core.resolve import STATUS_OK, SourcePick, StockItem, Take
 from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
+from stockthread.plan_record import plan_hash, views_of
 from stockthread.slack.ingest import Drop, Revised
 from stockthread.slack.listener import Listener
 from stockthread.slack.replies import APPROVERS_ONLY, CLICK_FEEDBACK, NO_APPROVERS, MovementView
-from stockthread.store import MAX_EVENT_ATTEMPTS, Answered, DryRunOutcome, LockLost, NewQuestion, StateConflict, Store
+from stockthread.store import (
+    MAX_EVENT_ATTEMPTS,
+    Answered,
+    DryRunOutcome,
+    LockLost,
+    NewPlan,
+    NewQuestion,
+    StateConflict,
+    Store,
+)
 from stockthread.store import db as store_db
 from stockthread.worker import (
     DRAIN_BATCH,
@@ -836,6 +848,86 @@ def test_revisions_are_recorded_in_order_and_each_reads_further(store: Store, pa
                 raw.execute(change)
         raw.execute("UPDATE dry_run_revisions SET result = NULL")  # retention may expire the quoted words
     assert store.dry_run_history(key)[1].result is None
+
+
+def plans(path: Path) -> list[tuple[int, str, str, list[tuple[str, str]]]]:
+    """(revision, first character of the input hash, state, [(operation, state) of each request]) of every plan."""
+    with sqlite3.connect(path) as raw:
+        return [
+            (
+                revision,
+                input_hash[0],
+                state,
+                raw.execute(
+                    "SELECT operation, state FROM requests WHERE plan_id = ? ORDER BY sequence", (plan_id,)
+                ).fetchall(),
+            )
+            for plan_id, revision, input_hash, state in raw.execute(
+                "SELECT id, revision, input_hash, state FROM plans ORDER BY revision"
+            ).fetchall()
+        ]
+
+
+def test_the_current_plan_is_always_the_one_of_the_reply_that_stands(store: Store, path: Path) -> None:
+    key = PostKey(WORKSPACE, CHANNEL, "1790000000.000100")
+    store.place_message(OWNER, key, user_id=SAM, thread_ts=None, window_seconds=5)
+    plan = NewPlan("1" * 64, (Operation.TRANSFER, Operation.ADD))
+    with pytest.raises(ValueError, match="only a reply with its record"):
+        store.finish_dry_run(OWNER, key, DryRunOutcome.SILENT, result={}, plan=plan)
+    with pytest.raises(ValueError, match="only a reply with its record"):
+        store.finish_dry_run(OWNER, key, DryRunOutcome.REPLIED, "1790000001.000100", plan=plan)
+    with pytest.raises(ValueError, match="at least one request"):
+        store.finish_dry_run(
+            OWNER, key, DryRunOutcome.REPLIED, "1790000001.000100", result={}, plan=NewPlan("1" * 64, ())
+        )
+    assert plans(path) == []
+    store.finish_dry_run(OWNER, key, DryRunOutcome.REPLIED, "1790000001.000100", result={}, plan=plan)
+    assert plans(path) == [(1, "1", "current", [("transfer", "planned"), ("add", "planned")])]
+    store.transition(
+        RequestKey(key, 1, 1), expected=RequestState.PLANNED, target=RequestState.APPROVED, actor=Actor.HUMAN
+    )
+
+    def revision(n: int, outcome: DryRunOutcome, reply_ts: str | None = None, plan: NewPlan | None = None) -> None:
+        reply = PostKey(WORKSPACE, CHANNEL, f"17900000{n:02d}.000100")
+        store.place_message(OWNER, reply, user_id=LUIS, thread_ts=key.ts, window_seconds=5)
+        store.finish_dry_run(OWNER, key, outcome, reply_ts, revision=n, result={}, plan=plan)
+
+    revision(2, DryRunOutcome.UNCHANGED, plan=plan)  # the same reply stands: so does its plan, approval and all
+    assert plans(path) == [(1, "1", "current", [("transfer", "approved"), ("add", "planned")])]
+    with pytest.raises(LockLost):
+        store.stale_plan("instance-b", key)
+    store.stale_plan(OWNER, key)  # a reply is on its way
+    store.stale_plan(OWNER, key)
+    assert plans(path) == [(1, "1", "stale", [("transfer", "cancelled"), ("add", "cancelled")])]
+    revision(3, DryRunOutcome.UNCHANGED, plan=plan)  # it was never posted, and the reply above stands again
+    assert plans(path)[-1] == (2, "1", "current", [("transfer", "planned"), ("add", "planned")])
+    revision(4, DryRunOutcome.REPLIED, "1790000041.000100", NewPlan("2" * 64, (Operation.REMOVE,)))
+    assert plans(path)[1:] == [
+        (2, "1", "stale", [("transfer", "cancelled"), ("add", "cancelled")]),
+        (3, "2", "current", [("remove", "planned")]),
+    ]
+    revision(5, DryRunOutcome.UNCHANGED, plan=plan)  # not the plan of the reply that stands: made again
+    assert [(revision, input_hash, state) for revision, input_hash, state, _ in plans(path)][2:] == [
+        (3, "2", "stale"),
+        (4, "1", "current"),
+    ]
+    revision(6, DryRunOutcome.UNCHANGED)  # the reply that stands could not apply after all
+    revision(7, DryRunOutcome.REPLIED, "1790000071.000100", NewPlan("2" * 64, (Operation.REMOVE,)))
+    revision(8, DryRunOutcome.REPLIED, "1790000081.000100")  # a reply that needs a human: no plan stands
+    assert [state for _, _, state, _ in plans(path)] == ["stale"] * 5
+    n = 8
+    for outcome, reply_ts in (
+        (DryRunOutcome.RETRACTED, "1790000099.000100"),
+        (DryRunOutcome.WITHHELD, None),
+        (DryRunOutcome.FAILED, None),
+        (DryRunOutcome.GAVE_UP, None),
+    ):
+        revision(n + 1, DryRunOutcome.REPLIED, f"17900000{n + 1:02d}.000200", NewPlan("4" * 64, (Operation.ADD,)))
+        assert [state for _, _, state, _ in plans(path)][-1] == "current"
+        revision(n + 2, outcome, reply_ts)
+        assert [state for _, _, state, _ in plans(path)][-1] == "stale", outcome
+        n += 2
+    assert "current" not in [state for _, _, state, _ in plans(path)]
 
 
 def test_a_change_noted_after_a_dry_run_makes_a_revision_that_reads_no_further(store: Store, path: Path) -> None:
@@ -3655,6 +3747,98 @@ def test_a_clear_transfer_shows_and_records_the_stock_item_it_takes_from(store: 
     assert movement["items"][0]["stock"] == [{"item": 57, "quantity": "2"}]
     assert movement["reasons"] == []
     assert store.questions(KEY) == []
+
+
+def test_a_reply_that_could_apply_makes_the_posts_plan_from_its_record(store: Store, clock: Clock, path: Path) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(57, 5)]}))
+    reply, _ = posted(worker)
+    assert "this could apply" in reply_text(reply)
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    [(revision, _, state, requests)] = plans(path)
+    assert (revision, state, requests) == (1, "current", [("transfer", "planned")])
+    with sqlite3.connect(path) as raw:
+        assert raw.execute("SELECT input_hash FROM plans").fetchone() == (plan_hash(record.result),)
+    assert views_of(record.result, plan_hash(record.result))[0].stock[0] == SourcePick((Take(57, Decimal(2)),))
+    assert worker.step() == 0
+    assert len(plans(path)) == 1  # once
+
+
+def test_a_reply_that_needs_a_human_makes_no_plan_until_an_answer_settles_it(
+    store: Store, clock: Clock, path: Path
+) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(41, 5, "B1"), ok(57, 5, "B2")]}))
+    reply, ts = posted(worker)
+    assert "this could apply" not in reply_text(reply)
+    assert plans(path) == []
+    clicked(store, click_on(reply, ts, 1, SAM), "1")
+    worker.step()
+    assert "this could apply" in reply_text(newest(worker)[0])
+    assert [(revision, state, requests) for revision, _, state, requests in plans(path)] == [
+        (1, "current", [("transfer", "planned")])
+    ]
+
+
+def test_a_revision_that_takes_the_reply_back_leaves_no_plan_standing(store: Store, clock: Clock, path: Path) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(57, 5)]}))
+    assert [state for _, _, state, _ in plans(path)] == ["current"]
+    enqueue(store, message("1790000040.000100", "actually make that 3", thread_ts=ROOT))
+    worker.step()
+    clock.at("1790000070.000000")
+    worker.step()
+    assert revisions(path) == [(2, "retracted", True)]
+    assert [(state, requests) for _, _, state, requests in plans(path)] == [("stale", [("transfer", "cancelled")])]
+
+
+def test_no_plan_is_current_while_a_revised_reply_is_on_its_way(store: Store, clock: Clock, path: Path) -> None:
+    slack = SlowSlack()
+    slack.slow = 0
+    worker = Worker(approving(), store, OWNER, slack, lambda: CATALOG, clock, stock=FakeStock({(1, 10): [ok(57, 5)]}))
+    enqueue(store, message(ROOT, TAKE))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert [state for _, _, state, _ in plans(path)] == ["current"]
+    slack.slow = 1
+    enqueue(store, edit_of(ROOT, "1790000031.000100", TAKE, "took 3 Disc 40 from main stock to truck 1"))
+    clock.at("1790000060.000000")
+    worker.step()
+    assert len(slack.posted) == 1  # the revised reply's call has not returned: Slack may show it already
+    assert plans(path) == [(1, plans(path)[0][1], "stale", [("transfer", "cancelled")])]
+    clock.at("1790000070.000000")
+    worker.step()
+    assert len(slack.posted) == 2
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert quantities(record) == ["3"]
+    assert [(revision, state) for revision, _, state, _ in plans(path)] == [(1, "stale"), (2, "current")]
+    with sqlite3.connect(path) as raw:
+        assert raw.execute("SELECT input_hash FROM plans WHERE revision = 2").fetchone() == (plan_hash(record.result),)
+
+
+def test_a_plan_that_cannot_be_worked_out_never_keeps_the_reply_from_being_recorded(
+    store: Store, clock: Clock, path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(result: Any) -> None:
+        raise AttributeError("synthetic")
+
+    monkeypatch.setattr(worker_module, "plan_of", broken)
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(57, 5)]}))
+    reply, _ = posted(worker)
+    assert "this could apply" in reply_text(reply)
+    assert replies(path) == [(ROOT, "1790009999.000001", True)]
+    assert plans(path) == []
+
+
+def test_an_edit_that_reads_the_same_keeps_the_plan(store: Store, clock: Clock, path: Path) -> None:
+    worker = stocked(store, clock, FakeStock({(1, 10): [ok(57, 5)]}))
+    before = plans(path)
+    enqueue(store, edit_of(ROOT, "1790000040.000100", TAKE, TAKE + " "))
+    worker.step()
+    assert revisions(path) == [(2, "unchanged", False)]
+    assert plans(path) == before
 
 
 def test_a_split_is_shown_item_by_item(store: Store, clock: Clock) -> None:

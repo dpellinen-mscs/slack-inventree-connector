@@ -2,7 +2,8 @@
 
 `plan_hash` is a plan revision's `input_hash`: the SHA-256 of the canonical JSON of the record's movements.
 `views_of` rebuilds the views of a record that could apply in full, and refuses anything else, so a write never
-acts on a reading other than the one the reply showed. Nothing here reads InvenTree or Slack.
+acts on a reading other than the one the reply showed. `plan_of` says whether a record makes a plan revision at
+all, and what it holds. Nothing here reads InvenTree or Slack.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from stockthread.core.marker import AttemptKind, Marker, new_marker_id
 from stockthread.core.model import (
     CandidateMovement,
     Flag,
@@ -21,11 +23,13 @@ from stockthread.core.model import (
     MatchRule,
     MatchStatus,
     MovementType,
+    Operation,
     ReasonCode,
     ReasonSource,
     ReviewReason,
 )
 from stockthread.core.resolve import SourcePick, Take
+from stockthread.plan import plan_requests
 from stockthread.slack.replies import MovementView
 
 
@@ -37,6 +41,22 @@ def plan_hash(result: Mapping[str, Any]) -> str:
     """The `input_hash` of a plan revision made from the dry-run record `result`."""
     canonical = json.dumps(result.get("movements"), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def plan_of(result: Mapping[str, Any]) -> tuple[str, list[Operation]] | None:
+    """The `input_hash` and the operations, one per movement, of the plan revision the dry-run record `result`
+    makes, or None when it makes none: a rejected reading, or a record `views_of` refuses or `plan_requests` cannot
+    build every request of. The requests are built here only to be checked; each write builds its own."""
+    if result.get("rejected") is not None:
+        return None
+    input_hash = plan_hash(result)
+    try:
+        views = views_of(result, input_hash)
+        markers = [Marker(new_marker_id(), AttemptKind.APPLY, 1) for _ in views]
+        requests = plan_requests(views, markers, user=_str(result["poster"]))
+    except (KeyError, TypeError, ValueError):  # NotRebuilt and NotDecided, or a poster that is no Slack user id
+        return None
+    return input_hash, [request.operation for request in requests]
 
 
 def views_of(result: Mapping[str, Any] | None, input_hash: str) -> list[MovementView]:

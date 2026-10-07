@@ -1446,7 +1446,24 @@ from a new reading ([ADR 0016](decisions/0016-apply-reads-the-dry-run-record.md)
 `plan_record.views_of` rebuilds them and refuses a record that is gone,
 one whose movements do not hash to the plan's `input_hash`
 (`plan_record.plan_hash`), and one with a gate reason or a line without
-stock read.
+stock read. The plan itself is made with the reply, in the transaction
+that records it (`Store.finish_dry_run`): a reply whose record could apply
+in full (`plan_record.plan_of`: it rebuilds, it is not rejected, and
+`plan_requests` builds every request from it) makes the post's next plan
+revision, with one `planned` request per movement. An `unchanged`
+revision keeps the plan of the reply that still stands, or makes it again
+when it is no longer current. Every other outcome (a reply that needs a
+human, a notice taking the reply back, withheld, failed, given up) leaves
+the post with no current plan. Before any reply or notice is handed to
+Slack, the current plan becomes stale (`Store.stale_plan`): from then on
+the thread may show the new reply, even while its call is still running
+or if recording it fails. A plan replaced becomes stale, and its requests
+that have not started a write are cancelled. So a current plan is always
+the plan of the reply that stands in the thread. A plan is made with
+writes off too: the gate, not the planner, blocks it. A plan does not name
+the dry-run revision it came from: any record whose movements hash to its
+`input_hash` rebuilds the same views, because `views_of` reads nothing
+else.
 
 Another InvenTree user can still change the stock between steps 3 and 4.
 The connector cannot lock InvenTree, so that window cannot be closed, only

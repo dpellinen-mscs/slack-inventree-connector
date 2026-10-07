@@ -223,6 +223,16 @@ class NewQuestion:
     """The Slack time the plan's expiry counts from."""
 
 
+@dataclass(frozen=True)
+class NewPlan:
+    """The plan revision a dry-run reply that could apply in full makes (ADR 0016), stored with the reply."""
+
+    input_hash: str
+    """`plan_record.plan_hash` of the record the reply is stored with."""
+    operations: Sequence[Operation]
+    """One per movement, in the post's order."""
+
+
 class QuestionStatus(StrEnum):
     OPEN = "open"
     ANSWERED = "answered"
@@ -812,6 +822,7 @@ class Store:
         changes: int | None = None,
         answers: int | None = None,
         question: NewQuestion | None = None,
+        plan: NewPlan | None = None,
     ) -> None:
         """Record the outcome of the post's dry run `revision`, and the timestamp of what was posted when Slack
         gave one. Each revision once, in order.
@@ -831,8 +842,19 @@ class Store:
         The first dry run fixes the Slack time the post's plan expires from (`plan_from`): its question's
         `expires_from`, or else the time of the newest message it read. The post's revisions, and every question
         asked about it, count from that one time.
+
+        The post's current plan follows the reply that stands in the thread, in the same transaction, so no reply
+        is ever stored with another reply's plan. `plan` is the plan of that reply when it could apply in full: for
+        `replied`, the plan of the new reply, which becomes the current revision; for `unchanged`, the plan of the
+        reply that still stands, kept when it is current already and made again otherwise (after `stale_plan`, or a
+        reply given up on). Every other outcome leaves the post with no current plan. A plan replaced becomes stale,
+        and its requests that have not started a write are cancelled.
         """
         posted = (DryRunOutcome.REPLIED, DryRunOutcome.RETRACTED)
+        if plan is not None and (outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or result is None):
+            raise ValueError("only a reply with its record makes a plan")
+        if plan is not None and not plan.operations:
+            raise ValueError("a plan revision holds at least one request")
         if reply_ts is not None and (outcome not in posted or not _SLACK_TS.fullmatch(reply_ts)):
             raise ValueError("only a reply has a timestamp, in Slack's form")
         if revision < 1 or (revision == 1 and outcome in (DryRunOutcome.UNCHANGED, DryRunOutcome.RETRACTED)):
@@ -901,6 +923,12 @@ class Store:
                     self._questions_go_stale(post_id, now)
                 if question is not None:
                     self._ask(post_id, key, revision, reply_ts, question, now)
+                current = self._db.execute(
+                    "SELECT input_hash FROM plans WHERE post_id = ? AND state = 'current'", (post_id,)
+                ).fetchone()
+                kept = outcome is DryRunOutcome.UNCHANGED and plan is not None and current == (plan.input_hash,)
+                if not kept:
+                    self._replace_plan(post_id, plan)
                 return
             cursor = self._db.execute(
                 "UPDATE posts SET dry_run_at = ?, reply_ts = ?, plan_from = ? WHERE id = ? AND dry_run_at IS NULL",
@@ -916,6 +944,7 @@ class Store:
             self._audit(Actor.PLANNER, f"dry_run_{outcome.value}", post_id=post_id)
             if question is not None:
                 self._ask(post_id, key, revision, reply_ts, question, now)
+            self._replace_plan(post_id, plan)
 
     def _questions_go_stale(self, post_id: int, now: str) -> None:
         cursor = self._db.execute(
@@ -1220,7 +1249,8 @@ class Store:
         """Store a new plan revision with one planned request per operation, and return its revision.
 
         The earlier current revision becomes stale, and its planned and approved requests are
-        cancelled. Requests that already started a write keep their state.
+        cancelled. Requests that already started a write keep their state. The worker makes plans with
+        `finish_dry_run` instead, together with the reply they belong to.
         """
         if not operations:
             raise ValueError("a plan revision holds at least one request")
@@ -1228,41 +1258,62 @@ class Store:
             post_id = self._post_id(post)
             if post_id is None:
                 raise KeyError(f"no post {post}")
-            (last,) = self._db.execute(
-                "SELECT coalesce(max(revision), 0) FROM plans WHERE post_id = ?", (post_id,)
-            ).fetchone()
-            for (plan_id,) in self._db.execute(
-                "SELECT id FROM plans WHERE post_id = ? AND state = 'current'", (post_id,)
+            self._replace_plan(post_id, None)
+            return self._insert_plan(post_id, NewPlan(input_hash, operations))
+
+    def stale_plan(self, owner: str, key: PostKey) -> None:
+        """Leave the post with no current plan: a reply that is about to be posted may replace the one that stands.
+        `finish_dry_run` makes its plan, if any, once its outcome is recorded."""
+        with self._transaction():
+            self._check_lock(owner)
+            post_id = self._post_id(key)
+            if post_id is None:
+                raise KeyError("no such post")
+            self._replace_plan(post_id, None)
+
+    def _replace_plan(self, post_id: int, plan: NewPlan | None) -> None:
+        """Make the post's current plan revision stale, cancelling its requests that have not started a write, and
+        store `plan`, if any, as the new current revision. Call inside a transaction."""
+        for (plan_id,) in self._db.execute(
+            "SELECT id FROM plans WHERE post_id = ? AND state = 'current'", (post_id,)
+        ).fetchall():
+            self._db.execute("UPDATE plans SET state = 'stale' WHERE id = ?", (plan_id,))
+            self._audit(Actor.PLANNER, "plan_stale", post_id=post_id, plan_id=plan_id)
+            for request_id, state in self._db.execute(
+                "SELECT id, state FROM requests WHERE plan_id = ? AND state IN ('planned', 'approved')",
+                (plan_id,),
             ).fetchall():
-                self._db.execute("UPDATE plans SET state = 'stale' WHERE id = ?", (plan_id,))
-                self._audit(Actor.PLANNER, "plan_stale", post_id=post_id, plan_id=plan_id)
-                for request_id, state in self._db.execute(
-                    "SELECT id, state FROM requests WHERE plan_id = ? AND state IN ('planned', 'approved')",
-                    (plan_id,),
-                ).fetchall():
-                    self._set_state(request_id, S(state), S.CANCELLED, Actor.PLANNER)
-            revision = int(last) + 1
+                self._set_state(request_id, S(state), S.CANCELLED, Actor.PLANNER)
+        if plan is not None:
+            self._insert_plan(post_id, plan)
+
+    def _insert_plan(self, post_id: int, plan: NewPlan) -> int:
+        """Store `plan` as the post's next revision, current, with one planned request per operation."""
+        (last,) = self._db.execute(
+            "SELECT coalesce(max(revision), 0) FROM plans WHERE post_id = ?", (post_id,)
+        ).fetchone()
+        revision = int(last) + 1
+        cursor = self._db.execute(
+            "INSERT INTO plans (post_id, revision, input_hash, state, created_at) VALUES (?, ?, ?, 'current', ?)",
+            (post_id, revision, plan.input_hash, self._now()),
+        )
+        plan_id = int(cursor.lastrowid or 0)
+        self._audit(Actor.PLANNER, "plan_created", post_id=post_id, plan_id=plan_id)
+        for sequence, operation in enumerate(plan.operations, start=1):
             cursor = self._db.execute(
-                "INSERT INTO plans (post_id, revision, input_hash, state, created_at) VALUES (?, ?, ?, 'current', ?)",
-                (post_id, revision, input_hash, self._now()),
+                "INSERT INTO requests (plan_id, sequence, operation, state, marker_id, updated_at)"
+                " VALUES (?, ?, ?, 'planned', ?, ?)",
+                (plan_id, sequence, Operation(operation).value, new_marker_id(), self._now()),
             )
-            plan_id = int(cursor.lastrowid or 0)
-            self._audit(Actor.PLANNER, "plan_created", post_id=post_id, plan_id=plan_id)
-            for sequence, operation in enumerate(operations, start=1):
-                cursor = self._db.execute(
-                    "INSERT INTO requests (plan_id, sequence, operation, state, marker_id, updated_at)"
-                    " VALUES (?, ?, ?, 'planned', ?, ?)",
-                    (plan_id, sequence, Operation(operation).value, new_marker_id(), self._now()),
-                )
-                self._audit(
-                    Actor.PLANNER,
-                    "request_created",
-                    post_id=post_id,
-                    plan_id=plan_id,
-                    request_id=int(cursor.lastrowid or 0),
-                    to_state=S.PLANNED.value,
-                )
-            return revision
+            self._audit(
+                Actor.PLANNER,
+                "request_created",
+                post_id=post_id,
+                plan_id=plan_id,
+                request_id=int(cursor.lastrowid or 0),
+                to_state=S.PLANNED.value,
+            )
+        return revision
 
     # Requests
 

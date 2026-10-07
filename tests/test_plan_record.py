@@ -7,18 +7,22 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from views import picked, view
+from views import SOURCE, picked, view
 
 from stockthread.core.model import (
     CandidateMovement,
     Extraction,
     LineItem,
+    Match,
+    MatchRule,
+    MatchStatus,
     MovementType,
+    Operation,
     ReasonCode,
     ReasonSource,
     ReviewReason,
 )
-from stockthread.plan_record import NotRebuilt, plan_hash, views_of
+from stockthread.plan_record import NotRebuilt, plan_hash, plan_of, views_of
 from stockthread.slack.replies import MovementView
 from stockthread.worker import _record
 
@@ -117,3 +121,32 @@ def test_a_record_not_of_the_dry_runs_form_is_refused(path: tuple[Any, ...], val
     target[path[-1]] = value
     with pytest.raises(NotRebuilt):
         views_of(stored, plan_hash(stored))
+
+
+def test_a_record_that_could_apply_makes_a_plan_of_one_request_per_movement() -> None:
+    stored = record(TO_TRUCK, view(MovementType.RECEIVE), view(MovementType.CONSUME))
+    assert plan_of(stored) == (plan_hash(stored), [Operation.TRANSFER, Operation.ADD, Operation.REMOVE])
+
+
+def test_a_record_that_could_not_apply_in_full_makes_no_plan() -> None:
+    reason = ReviewReason(ReasonCode.IMPLIED_SOURCE, ReasonSource.RULE)
+    assert plan_of(record(TO_TRUCK, view(reasons=(reason,)))) is None
+    assert plan_of({**record(TO_TRUCK), "rejected": 7}) is None
+    assert plan_of({**record(TO_TRUCK), "poster": "sam"}) is None  # no user a write could name
+    assert plan_of({key: value for key, value in record(TO_TRUCK).items() if key != "poster"}) is None
+    assert plan_of(record()) is None
+    assert plan_of({"withheld": "too_old"}) is None
+
+
+@pytest.mark.parametrize(
+    "decided",
+    [
+        view(destination=Match(MatchStatus.MATCHED, MatchRule.EXACT, SOURCE)),  # to the place it takes from
+        view(MovementType.RECEIVE, stock=(picked((57, "1"), (58, "1")),)),  # an add acts on one stock item
+    ],
+)
+def test_a_record_whose_requests_cannot_be_built_makes_no_plan(decided: MovementView) -> None:
+    stored = record(decided)
+    assert stored["movements"][0]["gate"] == []
+    assert views_of(stored, plan_hash(stored)) == [decided]
+    assert plan_of(stored) is None
