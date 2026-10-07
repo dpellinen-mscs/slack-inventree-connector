@@ -343,3 +343,28 @@ def test_a_stored_undo_the_apply_history_does_not_make_is_refused() -> None:
         _check_stored_undo(MOVE, found, marker, {**body, "items": [{"pk": ITEM, "quantity": "1", "merge": False}]})
     with pytest.raises(ValueError, match="does not lead its notes with its marker"):
         _check_stored_undo(MOVE, found, Marker(marker.marker_id, AttemptKind.UNDO, 2), body)
+
+
+@pytest.mark.anyio
+async def test_an_undo_found_with_another_attempt_in_the_history_is_verify_failed(store: Store) -> None:
+    fake = await unknown_undo(store, lands=True)
+    fake.write_entry(ITEM, f"{undo_marker(store, 2)} U0DAN0001", {}, 1)  # an attempt nobody recorded
+    done = await recover(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.problems[0] == "history entries 1003 carry another attempt"
+    assert undo_found(store) is True
+
+
+@pytest.mark.parametrize("lands", [True, False])
+@pytest.mark.anyio
+async def test_an_apply_history_that_no_longer_shows_what_the_undo_reversed_is_verify_failed(
+    store: Store, lands: bool
+) -> None:
+    fake = await unknown_undo(store, lands=lands)
+    fake.entries = [entry for entry in fake.entries if entry[0] != 1001]  # the apply's entry, deleted by an admin
+    done = await recover(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.why == "the apply's history no longer shows what the undo reversed"
+    (problem,) = done.problems
+    assert problem.startswith("stock item 57 has 0 history entries of the apply, not 1: ")
+    assert undo_found(store) is lands

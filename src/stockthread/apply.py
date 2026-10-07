@@ -457,9 +457,9 @@ async def recover_undo(
     (`inverse.UndoSnapshot`), and the stored undo body must be the one they make. Then: the undo's marker found, it is
     read back like any undo (`inverse.verify_undo`): `undone` or `verify_failed`. Not found, and every reversed item,
     every total and every reversed item's history is as the undo's snapshot has it: `undo_failed`, the apply's stock
-    standing, and never sent again (ADR 0015: it may still land). Not found, and anything else, or entries of the
-    request's id that carry neither the apply nor this undo: `verify_failed`. The apply's entries no longer showing
-    what the undo reversed is `verify_failed` too, as found or not. Read errors raise and change nothing, so it
+    standing, and never sent again (ADR 0015: it may still land). Not found, and anything else: `verify_failed`.
+    Entries of the request's id that carry neither the apply nor this undo are `verify_failed`, found or not, and
+    so is an apply history that no longer shows what the undo reversed. Read errors raise and change nothing, so it
     stays `undo_unknown` and a later run concludes it. Nothing is written."""
     async with lock:
         row = store.request(key)
@@ -492,17 +492,17 @@ async def recover_undo(
         # The stock before the history, as in every read-back.
         read = await _stock(reader, pairs(view))
         history = {reversal.item: await reader.item_entries(reversal.item) for reversal in undone}
+        others = sorted(entry.pk for entry in entries if entry.marker not in (written.marker, attempt.marker))
+        another = [f"history entries {_listed(others)} carry another attempt"] if others else []
         if found:
-            problems = tuple(verify_undo(view, undone, attempt.marker, before, entries, read, history=history))
+            problems = (*another, *verify_undo(view, undone, attempt.marker, before, entries, read, history=history))
             target = RequestState.VERIFY_FAILED if problems else RequestState.UNDONE
             store.transition(
                 key, expected=RequestState.UNDO_UNKNOWN, target=target, actor=Actor.RECOVERY, marker_found=True
             )
             why = "undo marker found; read back: " + ("does not agree" if problems else "as built")
             return Applied(target, why, problems)
-        others = sorted(entry.pk for entry in entries if entry.marker != written.marker)
-        changes = [f"history entries {_listed(others)} carry another attempt"] if others else []
-        changes += undo_changes(undone, before, read, history=history)
+        changes = another + undo_changes(undone, before, read, history=history)
         target = RequestState.VERIFY_FAILED if changes else RequestState.UNDO_FAILED
         store.transition(
             key, expected=RequestState.UNDO_UNKNOWN, target=target, actor=Actor.RECOVERY, marker_found=False
