@@ -86,9 +86,13 @@ no marker and no change. The second may still land, so the store also refuses ev
 0015)."""
 
 RECEIPT_STATES: frozenset[RequestState] = frozenset({S.VERIFIED, S.VERIFY_FAILED, S.FAILED})
-"""States in which a request's write has concluded and the receipt reports it: written and read back as planned,
-written or found with a read-back that did not match, or not written. Once every request of a plan is in one, the
-plan is due its receipt (`Store.receipts_due`)."""
+"""States in which a request's write, or its try, has concluded: read back as planned, a check that found a problem,
+or not applied. A plan with a request in one of them that no receipt reported is due a receipt once no request of it
+is `WORKING` (`Store.receipts_due`)."""
+
+WORKING: frozenset[RequestState] = frozenset({S.APPROVED, S.APPLYING, S.APPLIED, S.UNKNOWN, S.UNDOING, S.UNDO_UNKNOWN})
+"""States in which a step of the apply or undo protocol is due or in flight. A receipt waits for every request of its
+plan to leave them, so it never reports a write that is still going on."""
 
 UNSETTLED: frozenset[RequestState] = frozenset({S.APPLYING, S.UNKNOWN, S.UNDOING, S.UNDO_UNKNOWN})
 """States in which a write may be in flight. Nothing else may be sent for the post."""

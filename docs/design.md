@@ -1433,15 +1433,24 @@ connector never has two InvenTree writes in flight and cannot race itself.
    (`test_another_writers_entry_that_leaves_the_totals_right_is_still_seen`).
 6. **Record.** Move to `verified` and post the receipt.
    Built (the receipt's message and its record): `replies.receipt` shows,
-   for every movement of the plan, what was written and whether its
-   read-back matched, links to its locations and stock items in
-   InvenTree's web interface (`/web/stock/location/<pk>`,
-   `/web/stock/item/<pk>`), and the marker its history entries carry. A
-   plan is due its receipt once every request is `verified`,
-   `verify_failed` or `failed` (`Store.receipts_due`), and
-   `Store.receipt_posted` records the reply's ts once (migration 0019). A
-   crash between the post and the record posts it again: a duplicate beats
-   a silent drop. Not posted by the worker yet, and no Undo button yet.
+   for every movement of the plan, its state, what it was to change, links
+   to its locations and stock items in InvenTree's web interface
+   (`/web/stock/location/<pk>`, `/web/stock/item/<pk>`), and its marker.
+   It claims no more than every path to a state guarantees: a
+   `verify_failed` request may have been found by the marker check with
+   nothing sent, and a `failed` one concluded by recovery may still land
+   (ADR 0015). A plan is due a receipt once no request of it has a step
+   due or in flight (`WORKING`) and one of them is `verified`,
+   `verify_failed` or `failed` in a state no receipt reported
+   (`Store.receipts_due`), so a sibling sent back to review does not hold
+   the receipt back, and a write tried again is reported again.
+   `Store.receipt_posted` records the reply's ts and the states it
+   reported, only while they are still the states (migration 0019, which
+   marks every write concluded before it as reported). A crash between the
+   post and the record posts it again: a duplicate beats a silent drop.
+   Not posted by the worker yet, and no Undo button yet. Known gap: a
+   request that ADR 0015 refuses stays `approved`, and holds its plan's
+   receipt back until the plans-with-several-requests item ends it.
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
 It takes the process's writer lock, judges the whole plan again with the

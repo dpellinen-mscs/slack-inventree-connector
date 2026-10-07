@@ -9,8 +9,8 @@ import pytest
 from views import DESTINATION, SOURCE, picked, view
 
 from stockthread.core.model import MovementType
-from stockthread.core.requests import RECEIPT_STATES, RequestState
-from stockthread.slack.replies import MAX_BLOCKS, MAX_MOVEMENTS, RECEIPT_WORDS, receipt
+from stockthread.core.requests import WORKING, RequestState
+from stockthread.slack.replies import MAX_BLOCKS, MAX_MOVEMENTS, MAX_SECTION, RECEIPT_WORDS, receipt
 
 S = RequestState
 PARTS = {1: "Norvane Disc 40 Access Point", 2: "UPS 600 VA"}
@@ -35,8 +35,8 @@ def made(states: tuple[RequestState, ...], *, approved_by: str | None = None, ur
     return receipt(views, states, [MARKER] * len(states), PARTS, LOCATIONS, inventree_url=url, approved_by=approved_by)
 
 
-def test_the_receipt_words_every_state_that_makes_a_plan_due_its_receipt_and_no_other() -> None:
-    assert set(RECEIPT_WORDS) == RECEIPT_STATES
+def test_the_receipt_words_every_state_but_those_a_step_is_due_or_in_flight_for() -> None:
+    assert set(RECEIPT_WORDS) == set(RequestState) - WORKING
 
 
 def test_a_take_out_applied_and_read_back() -> None:
@@ -51,20 +51,44 @@ def test_a_take_out_applied_and_read_back() -> None:
     assert f"<{URL}/web/stock/location/{SOURCE}|Warehouse/Main Stock>" in shown
     assert f"<{URL}/web/stock/location/{DESTINATION}|Vehicles/Truck 1>" in shown
     assert f"<{URL}/web/stock/item/57|stock item #57>" in shown
-    assert f"Marker `{MARKER}` leads the notes of each stock history entry this wrote." in shown
+    assert f"Marker `{MARKER}`: InvenTree's stock history entries of this request carry it in their notes." in shown
 
 
 def test_a_refused_write_says_nothing_changed() -> None:
     body = made((S.FAILED,))
     assert body["text"] == "Not applied: 1 movement."
     shown = text_of(body)
-    assert shown.startswith("*Not applied.* InvenTree shows no change from it.")
-    assert "not applied. InvenTree refused it, or shows no change from it." in shown
-    assert f"Marker `{MARKER}`: no stock history entry carries it." in shown
+    assert shown.startswith("*Not applied.* Approved by the write policy")
+    assert "not applied. InvenTree refused it, or showed no change from it when checked." in shown
 
 
 @pytest.mark.parametrize(
-    "states", [(S.VERIFY_FAILED,), (S.VERIFIED, S.VERIFY_FAILED), (S.VERIFIED, S.FAILED), (S.FAILED, S.VERIFY_FAILED)]
+    ("state", "words"),
+    [
+        (S.PLANNED, "not applied. Stock changed since the plan, so it waits for review."),
+        (S.REJECTED, "not applied. It was rejected."),
+        (S.CANCELLED, "not applied. A newer reading of the post replaced it."),
+        (S.EXPIRED, "not applied. It expired."),
+    ],
+)
+def test_a_request_never_written_is_not_applied(state: RequestState, words: str) -> None:
+    body = made((S.FAILED, state))
+    assert body["text"] == "Not applied: 2 movements."
+    assert f"*2. Take to a vehicle*: {words}" in text_of(body)
+
+
+@pytest.mark.parametrize(
+    "states",
+    [
+        (S.VERIFY_FAILED,),
+        (S.ACCEPTED,),
+        (S.UNDO_FAILED,),
+        (S.UNDONE,),
+        (S.VERIFIED, S.VERIFY_FAILED),
+        (S.VERIFIED, S.FAILED),
+        (S.VERIFIED, S.PLANNED),
+        (S.FAILED, S.VERIFY_FAILED),
+    ],
 )
 def test_anything_but_all_applied_or_none_asks_for_a_check(states: tuple[RequestState, ...]) -> None:
     body = made(states)
@@ -74,7 +98,8 @@ def test_anything_but_all_applied_or_none_asks_for_a_check(states: tuple[Request
 
 def test_a_read_back_that_did_not_match_says_to_check_inventree() -> None:
     shown = text_of(made((S.VERIFY_FAILED,)))
-    assert "written, but reading it back did not match the plan. Check it in InvenTree." in shown
+    assert "the check of this write found a problem. Look at it in InvenTree before relying on it." in shown
+    assert "written," not in shown  # the check may have found the problem before anything was sent
 
 
 def test_the_receipt_names_the_approver_who_clicked() -> None:
@@ -90,8 +115,8 @@ def test_several_movements_are_numbered_with_their_own_state() -> None:
 
 
 def test_a_receipt_reports_only_concluded_writes_one_state_and_marker_per_movement() -> None:
-    for state in set(RequestState) - RECEIPT_STATES:
-        with pytest.raises(ValueError, match="concluded"):
+    for state in WORKING:
+        with pytest.raises(ValueError, match="due or in flight"):
             made((state,))
     with pytest.raises(ValueError, match="one state and one marker"):
         receipt([view()], [S.VERIFIED, S.VERIFIED], [MARKER], PARTS, LOCATIONS, inventree_url=URL, approved_by=None)
@@ -144,3 +169,20 @@ def test_a_receipt_of_many_movements_fits_in_one_message() -> None:
     assert len(body["blocks"]) <= MAX_BLOCKS
     assert body["text"] == f"Applied: {MAX_MOVEMENTS + 3} movements."
     assert "…and 3 more movements, not shown here." in text_of(body)
+
+
+def test_a_movement_too_long_for_its_links_keeps_its_lines_and_drops_the_links() -> None:
+    lines = tuple((f"Part {n} with a rather long description", "1") for n in range(25))
+    long = view(lines=lines, stock=tuple(picked((100 + n, "1")) for n in range(25)))
+    body = receipt([long], [S.VERIFIED], [MARKER], PARTS, LOCATIONS, inventree_url=URL, approved_by=None)
+    section = body["blocks"][1]["text"]["text"]
+    assert len(section) <= MAX_SECTION
+    assert "/web/stock/" not in section
+    assert section.endswith("(“my truck”)")  # whole: nothing was cut
+    assert "<" not in section.replace("&lt;", "")
+
+
+def test_a_url_that_is_not_ascii_gets_no_links() -> None:
+    shown = text_of(made((S.VERIFIED,), url="https://lager.bücher.test"))
+    assert "/web/stock/" not in shown
+    assert "In InvenTree" not in shown

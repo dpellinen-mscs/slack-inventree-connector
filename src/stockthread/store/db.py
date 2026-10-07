@@ -34,6 +34,7 @@ from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import (
     RECEIPT_STATES,
     UNSETTLED,
+    WORKING,
     Actor,
     RequestState,
     check_transition,
@@ -118,6 +119,8 @@ class RequestRow:
     state: RequestState
     marker_id: str
     plan_state: str
+    receipt_state: RequestState | None = None
+    """The state the last receipt of the plan reported for the request; None when no receipt reported it."""
 
 
 @dataclass(frozen=True)
@@ -1358,7 +1361,7 @@ class Store:
     # Requests
 
     _REQUEST_SELECT = """
-        SELECT r.id, r.operation, r.state, r.marker_id, p.state, p.id, p.post_id
+        SELECT r.id, r.operation, r.state, r.marker_id, p.state, p.id, p.post_id, r.receipt_state
         FROM requests r JOIN plans p ON p.id = r.plan_id JOIN posts o ON o.id = p.post_id
         WHERE o.workspace_id = ? AND o.channel_id = ? AND o.ts = ? AND p.revision = ? AND r.sequence = ?
     """
@@ -1370,9 +1373,10 @@ class Store:
         ).fetchone()
         if row is None:
             raise KeyError(f"no request {key}")
-        request_id, operation, state, marker_id, plan_state, plan_id, post_id = row
+        request_id, operation, state, marker_id, plan_state, plan_id, post_id, receipt_state = row
+        reported = None if receipt_state is None else S(receipt_state)
         return (
-            RequestRow(key, request_id, Operation(operation), S(state), marker_id, plan_state),
+            RequestRow(key, request_id, Operation(operation), S(state), marker_id, plan_state, reported),
             plan_id,
             post_id,
         )
@@ -1519,34 +1523,48 @@ class Store:
         return [RequestKey(PostKey(w, c, ts), int(revision), int(sequence)) for w, c, ts, revision, sequence in rows]
 
     def receipts_due(self) -> list[tuple[PostKey, int]]:
-        """Every plan revision, as (post, revision), that is due its receipt (design section 7, step 6): it has no
-        receipt yet, and each of its requests concluded its write: `verified`, `verify_failed` or `failed`. A plan with
-        a request in any other state waits, so its receipt reports every request (ADR 0002). By post and revision."""
+        """Every plan revision, as (post, revision), that is due a receipt (design section 7, step 6): no request of
+        it is `WORKING`, and one of them is in a `RECEIPT_STATES` state that no receipt of the plan reported (none
+        did, or the request was tried again since). The receipt then reports every request (ADR 0002). By post and
+        revision."""
+        return self._receipts_due()
+
+    def _receipts_due(self, plan_id: int | None = None) -> list[tuple[PostKey, int]]:
+        """`receipts_due`, of every plan or of plan `plan_id` only."""
+        working = sorted(state.value for state in WORKING)
         concluded = sorted(state.value for state in RECEIPT_STATES)
         rows = self._db.execute(
             "SELECT o.workspace_id, o.channel_id, o.ts, p.revision FROM plans p JOIN posts o ON o.id = p.post_id"
-            " WHERE p.receipt_ts IS NULL AND EXISTS (SELECT 1 FROM requests r WHERE r.plan_id = p.id)"
-            " AND NOT EXISTS (SELECT 1 FROM requests r WHERE r.plan_id = p.id AND r.state NOT IN (?, ?, ?))"
+            " WHERE (? IS NULL OR p.id = ?)"
+            " AND EXISTS (SELECT 1 FROM requests r WHERE r.plan_id = p.id AND r.state IN (?, ?, ?)"
+            " AND r.receipt_state IS NOT r.state)"
+            " AND NOT EXISTS (SELECT 1 FROM requests r WHERE r.plan_id = p.id AND r.state IN (?, ?, ?, ?, ?, ?))"
             " ORDER BY o.id, p.revision",
-            concluded,
+            [plan_id, plan_id, *concluded, *working],
         ).fetchall()
         return [(PostKey(w, c, ts), int(revision)) for w, c, ts, revision in rows]
 
-    def receipt_posted(self, owner: str, post: PostKey, revision: int, ts: str) -> None:
-        """Record that the receipt of plan revision `revision` of the post was posted as the thread reply `ts`.
-        StateConflict, and nothing changes, when the plan already has a receipt or a request of it left the states
-        `receipts_due` reports (a person acted on it in between); KeyError when there is no such plan. `owner` must
-        hold the instance lock."""
+    def receipt_posted(
+        self, owner: str, post: PostKey, revision: int, ts: str, reported: Sequence[RequestState]
+    ) -> None:
+        """Record that the receipt of plan revision `revision` of the post was posted as the thread reply `ts`,
+        reporting the states `reported`, one per request in order. StateConflict, and nothing changes, unless the plan
+        is still due (`receipts_due`) and its requests are still in exactly those states: a person acted in between,
+        and the next receipt reports what they did. KeyError when there is no such plan. `owner` must hold the
+        instance lock."""
         if not ts:
             raise ValueError("a receipt is a posted message: its ts is not empty")
         with self._transaction():
             self._check_lock(owner)
             plan = self.plan(post, revision)
-            if plan.receipt_ts is not None:
-                raise StateConflict(f"plan revision {revision} already has its receipt")
-            if not plan.requests or any(row.state not in RECEIPT_STATES for row in plan.requests):
-                raise StateConflict(f"plan revision {revision} has a request whose write has not concluded")
+            if [row.state for row in plan.requests] != list(reported):
+                raise StateConflict(f"plan revision {revision} is no longer in the states its receipt reports")
             plan_id, post_id = self._request(plan.requests[0].key)[1:]
+            if not self._receipts_due(plan_id):
+                raise StateConflict(f"plan revision {revision} is not due a receipt")
+            for row in plan.requests:
+                if row.state in RECEIPT_STATES:
+                    self._db.execute("UPDATE requests SET receipt_state = ? WHERE id = ?", (row.state.value, row.id))
             self._db.execute("UPDATE plans SET receipt_ts = ? WHERE id = ?", (ts, plan_id))
             self._audit(Actor.APPLIER, "receipt_posted", post_id=post_id, plan_id=plan_id)
 

@@ -539,11 +539,24 @@ def question_closed(answered_by: str | None, *, expired: bool = False) -> dict[s
 
 RECEIPT_WORDS = {
     RequestState.VERIFIED: "applied, and read back as planned",
-    RequestState.VERIFY_FAILED: "written, but reading it back did not match the plan. Check it in InvenTree",
-    RequestState.FAILED: "not applied. InvenTree refused it, or shows no change from it",
+    RequestState.VERIFY_FAILED: "the check of this write found a problem. Look at it in InvenTree before relying on it",
+    RequestState.FAILED: "not applied. InvenTree refused it, or showed no change from it when checked",
+    RequestState.ACCEPTED: "written. An approver accepted the problem its check found",
+    RequestState.UNDO_FAILED: "an undo of it failed. Look at it in InvenTree",
+    RequestState.UNDONE: "undone",
+    RequestState.PLANNED: "not applied. Stock changed since the plan, so it waits for review",
+    RequestState.REJECTED: "not applied. It was rejected",
+    RequestState.CANCELLED: "not applied. A newer reading of the post replaced it",
+    RequestState.EXPIRED: "not applied. It expired",
 }
-"""What a request's state says in the receipt; the receipt is posted once every request is in one of these. A
-`failed` request is not said to have changed nothing: one recovery concluded may still land (ADR 0015)."""
+"""What a request's state says in the receipt: every state but those in which a step is due or in flight (`WORKING`).
+`verify_failed` and `failed` claim no more than their every path guarantees: a `verify_failed` request may have been
+found by its marker check with nothing sent, and a `failed` one concluded by recovery may still land (ADR 0015)."""
+
+NOT_WRITTEN = frozenset(
+    {RequestState.FAILED, RequestState.PLANNED, RequestState.REJECTED, RequestState.CANCELLED, RequestState.EXPIRED}
+)
+"""States of a request no write of which InvenTree showed."""
 
 _LINK_SAFE = ":/%[]-._~!$'()*+,;="
 """What a link keeps of the configured InvenTree URL as written. Anything else, such as `|`, `<`, `>` or `&`, is
@@ -557,6 +570,10 @@ def _link(inventree_url: str, kind: str, pk: int, label: str) -> str:
 
 
 def _receipt_links(view: MovementView, locations: Mapping[int, str], inventree_url: str) -> str:
+    """The links of a movement's places and stock items; none for a URL that is not ASCII (a host name would be
+    percent-encoded into a wrong link)."""
+    if not inventree_url.isascii():
+        return ""
     places = [match.record for match in (view.source, view.destination) if match is not None]
     items = sorted({take.item for pick in view.stock if pick is not None for take in pick.takes})
     links = [
@@ -577,9 +594,9 @@ def receipt(
     inventree_url: str,
     approved_by: str | None,
 ) -> dict[str, Any]:
-    """The receipt in the post's thread once a plan's writes have concluded (design section 7, step 6): for every
-    movement, what was written and what its read-back found, links to its places and stock items in InvenTree, and the
-    marker its history entries carry in their notes. One state and one marker per movement, in the post's order.
+    """The receipt in the post's thread once no step of its plan's writes is due or in flight (design section 7, step
+    6): for every movement, its state, what it was to change, links to its places and stock items in InvenTree, and
+    the marker its history entries carry in their notes. One state and one marker per movement, in the post's order.
 
     `approved_by`: the approver whose Apply click approved the plan, or None when the write policy approved it."""
     if not views:
@@ -587,11 +604,11 @@ def receipt(
     if len(states) != len(views) or len(markers) != len(views):
         raise ValueError("one state and one marker per movement")
     if any(state not in RECEIPT_WORDS for state in states):
-        raise ValueError("a receipt reports only writes that concluded")
+        raise ValueError("a receipt reports no request whose write is due or in flight")
     if all(state is RequestState.VERIFIED for state in states):
         heading, text = "*Applied.* Inventory was changed as below, and read back to check it.", "Applied"
-    elif all(state is RequestState.FAILED for state in states):
-        heading, text = "*Not applied.* InvenTree shows no change from it.", "Not applied"
+    elif all(state in NOT_WRITTEN for state in states):
+        heading, text = "*Not applied.*", "Not applied"
     else:
         heading, text = "*Check this.* Not everything below went as planned.", "Check this"
     if approved_by is None:
@@ -611,14 +628,12 @@ def receipt(
         destination = _named(
             movement.destination_text, view.destination, locations, "location", view.named.get("destination")
         )
-        shown = [f"*{title}*: {RECEIPT_WORDS[state]}.", *lines, f"From {source} to {destination}"]
+        shown = "\n".join([f"*{title}*: {RECEIPT_WORDS[state]}.", *lines, f"From {source} to {destination}"])
         links = _receipt_links(view, locations, inventree_url)
-        if links:
-            shown.append(links)
-        blocks.append(_section("\n".join(shown)))
-        trail = f"Marker `{escape(marker)}` leads the notes of each stock history entry this wrote."
-        if state is RequestState.FAILED:
-            trail = f"Marker `{escape(marker)}`: no stock history entry carries it."
+        if links and len(shown) + 1 + len(links) <= MAX_SECTION:  # never cut inside a link
+            shown = f"{shown}\n{links}"
+        blocks.append(_section(shown))
+        trail = f"Marker `{escape(marker)}`: InvenTree's stock history entries of this request carry it in their notes."
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": trail}]})
     if len(views) > MAX_MOVEMENTS:
         blocks.append(_section(f"…and {len(views) - MAX_MOVEMENTS} more movements, not shown here."))
