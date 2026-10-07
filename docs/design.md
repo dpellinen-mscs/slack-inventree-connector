@@ -1629,6 +1629,23 @@ For stock that is not serialized, undo restores quantities per part and
 location. It does not promise to restore stock item ids, because a split
 changes them.
 
+Built (the undo request, not its protocol yet): `inverse.reversals` reads
+what each line of the apply did from the entries that carry its marker
+(one entry per line, on the line's item: a location or split entry for a
+transfer, the added, removed or counted entry otherwise; anything else, or
+an item a removal or count deleted, is no undo). `inverse.check_undo`
+checks the conditions in the table on the stock read now, with exact
+quantities (what the apply left), an available item (status OK, nothing
+allocated) wherever the undo takes stock from, no entry of the request's id
+from another attempt, and no history entry since the snapshot on an item
+it touches but the apply's. An add onto an item that held 0, or a count of
+one, has no undo: back at 0 the item may be deleted. `inverse.undo_request` builds the
+request with an undo marker: a transfer back moves the item the apply
+moved, or the new item its split made, with `merge: false`. Tested on
+every pinned server (`tests/integration/test_undo_server.py`: every total
+the movement touched is back). Not built yet: the undo attempt (store,
+send, read-back, recovery), `undo.max_age` and the button.
+
 ## 8. Data model and audit trail
 
 The store is SQLite in a single file, which suits a single-node deployment
