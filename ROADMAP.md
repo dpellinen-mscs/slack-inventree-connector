@@ -119,7 +119,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] A decided plan becomes its requests, one per movement, in the post's order (`plan.py`)
 - [ ] Write gate: switch, policy and deterministic validation must all pass, at approval and again before the write
   - [x] The judgement: blocked, waits for Apply, or allowed with its requests (`gate.py`)
-  - [ ] Judged at approval and again before the write (with the apply protocol)
+  - [x] Judged at approval and again before the write, on the rebuilt views with the settings, vehicles, answers and plan state read then (`applier.approve_by_policy`, `applier.work_request`)
 - [ ] Apply protocol: writer lock, marker check, snapshot, single write, read-back
   - [x] Marker search: every attempt of one request, whole markers only (`InvenTreeReader.marker_entries`)
   - [x] Marker check: the markers found agree with the recorded states of every request of the post (`core/marker_check.py`, `Store.recorded_requests`)
@@ -134,7 +134,8 @@ payloads whose channel or message does not fit the stored id.
   - [x] The views a write acts on, rebuilt from the dry-run record the thread was shown, refused unless the plan was made from it ([0016](docs/decisions/0016-apply-reads-the-dry-run-record.md), `plan_record.views_of`)
   - [x] The plan of a reply that could apply in full is made with the reply, and any other outcome but `unchanged` leaves no plan current (`Store.finish_dry_run`, `plan_record.plan_of`)
   - [x] A message that joins a post, or a noted edit or deletion, stales its plan at once; a revision that reads the same makes it again
-  - [ ] Worker: run `apply_request` for approved requests, and a read-back left undone by a read error (`applied`) run again
+  - [x] The step for one request: write an `approved` one, read back an `applied` one, recover an `unknown` one (`applier.work_request`, `Store.requests_to_work`); a plan is approved whole (`Store.approve_plan`)
+  - [ ] Worker: run the step in the run loop, with the receipt (ADR 0004)
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
   - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`, run by `run.run` at start)

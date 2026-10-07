@@ -1081,7 +1081,7 @@ The gate is evaluated twice: when a plan is approved, and again
 immediately before the write. The switch, the approver list and the server
 version can change in between.
 
-**Where (built: `gate.py`, nothing calls it yet).** `judge` takes the
+**Where (built: `gate.py`, called by `applier.py`).** `judge` takes the
 post's views, their apply markers, the policy as read from the settings
 at that moment, and who clicked Apply. Its verdict is `blocked` (writes
 off, an untested server version, a plan a "no" rejected, or a plan `plan_requests` refuses), `waits`
@@ -1102,6 +1102,16 @@ to a vehicle and for any source or destination that is someone's mapped
 vehicle ("2 Disc 40 from Mike's van to the Smith job"). A vehicle no one
 is mapped to cannot be told from any other location when it is the
 source of a take to a site; map every vehicle in `[vehicles]`.
+
+`applier.approve_by_policy` judges a post's current plan on the views
+rebuilt from its dry-run record (ADR 0016) and, when the policy may
+approve it, approves every request of the plan in one transaction
+(`Store.approve_plan`), or none. `applier.work_request` judges it again
+under the writer lock before the write, reading the settings, the
+vehicles, the answers and the plan's state then; a plan no longer current
+is blocked. A post counts as answered when any of its questions was
+answered or the record applied an answer. Neither is called by the run
+loop yet: the policy's writes ship with the receipt and Undo (ADR 0004).
 
 ### The model cannot authorize a write
 
