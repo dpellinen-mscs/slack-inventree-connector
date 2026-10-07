@@ -1106,10 +1106,12 @@ source of a take to a site; map every vehicle in `[vehicles]`.
 `applier.approve_by_policy` judges a post's current plan on the views
 rebuilt from its dry-run record (ADR 0016) and, when the policy may
 approve it, approves every request of the plan in one transaction
-(`Store.approve_plan`), or none. `applier.work_request` judges it again
-under the writer lock before the write, reading the settings, the
-vehicles, the answers and the plan's state then; a plan no longer current
-is blocked. A post counts as answered when any of its questions was
+(`Store.approve_plan`), or none. A person's approval stores the clicker
+with the plan. `applier.work_request` judges it again under the writer
+lock before the write, reading the settings, the vehicles, the answers,
+the plan's state and its stored approver then; a plan no longer current
+is blocked, and a click whose clicker is no longer an approver counts for
+nothing. A post counts as answered when any of its questions was
 answered or the record applied an answer. Neither is called by the run
 loop yet: the policy's writes ship with the receipt and Undo (ADR 0004).
 
@@ -1614,7 +1616,7 @@ and needs no extra service.
 | `dry_run_revisions` | Revisions 2, 3, ... of a post's dry run: what each read through, its outcome, record and posted reply (migration 0007) |
 | `catch_up` | One row per channel: where its catch-up started, and how far its history has been read (migration 0006) |
 | `dry_runs` | A post's first dry run: the outcome, the extractor, and the result as JSON (candidates, matches, reasons) (migration 0004), and the newest message it read (migration 0007) |
-| `plans` | Plan revisions with the hash of their input messages |
+| `plans` | Plan revisions with the hash of their dry-run record's movements, and the approver whose Apply click approved one (`approved_by`, NULL for the policy) |
 | `extractions` | Extractor name and version, prompt version, raw output |
 | `candidates` | Candidate movements and line items |
 | `matches` | Match results with candidates and the rule that matched |

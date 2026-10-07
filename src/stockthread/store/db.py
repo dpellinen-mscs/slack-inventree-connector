@@ -234,6 +234,8 @@ class PlanRow:
     current: bool
     """False once a newer reading, a joined message or a noted change made it stale."""
     requests: tuple[RequestRow, ...]
+    approved_by: str | None
+    """The approver whose Apply click approved the plan; None when the policy approved it, or nothing did."""
 
 
 @dataclass(frozen=True)
@@ -1454,11 +1456,18 @@ class Store:
             raise WriteBlocked("an earlier revision of this post left a stock change behind")
         self._check_no_unknown_write(row.id, post_id, AttemptKind.APPLY)
 
-    def approve_plan(self, owner: str, post: PostKey, revision: int, *, actor: Actor) -> None:
+    def approve_plan(
+        self, owner: str, post: PostKey, revision: int, *, actor: Actor, approver: str | None = None
+    ) -> None:
         """Approve every request of plan `revision` of the post at once, or raise and change nothing: StateConflict
         unless all of them are `planned`, and WriteBlocked as `transition` raises it for any one of them. A plan is
-        approved whole, never one request of it. `owner` must hold the instance lock."""
+        approved whole, never one request of it. `owner` must hold the instance lock.
+
+        `approver`: the Slack user id of whoever clicked Apply, required for a person's approval and refused for the
+        policy's. It is stored with the plan (`PlanRow.approved_by`); the gate is judged with it before each write."""
         check_transition(S.PLANNED, S.APPROVED, actor)
+        if (actor is Actor.HUMAN) != (approver is not None):
+            raise ValueError("a person's approval names the approver, and only a person's does")
         with self._transaction():
             self._check_lock(owner)
             plan = self.plan(post, revision)
@@ -1468,20 +1477,23 @@ class Store:
                 _, _, post_id = self._request(row.key)
                 self._check_approvable(row, post_id)
                 self._set_state(row.id, S.PLANNED, S.APPROVED, actor)
+            self._db.execute(
+                "UPDATE plans SET approved_by = ? WHERE post_id = ? AND revision = ?", (approver, post_id, revision)
+            )
 
     def plan(self, post: PostKey, revision: int) -> PlanRow:
         """Plan revision `revision` of the post; KeyError when there is none."""
         row = self._db.execute(
-            "SELECT p.id, p.input_hash, p.state FROM plans p JOIN posts o ON o.id = p.post_id"
+            "SELECT p.id, p.input_hash, p.state, p.approved_by FROM plans p JOIN posts o ON o.id = p.post_id"
             " WHERE o.workspace_id = ? AND o.channel_id = ? AND o.ts = ? AND p.revision = ?",
             (post.workspace_id, post.channel_id, post.ts, revision),
         ).fetchone()
         if row is None:
             raise KeyError(f"no plan revision {revision} of post {post}")
-        plan_id, input_hash, state = row
+        plan_id, input_hash, state, approved_by = row
         (count,) = self._db.execute("SELECT count(*) FROM requests WHERE plan_id = ?", (plan_id,)).fetchone()
         requests = tuple(self.request(RequestKey(post, revision, sequence)) for sequence in range(1, count + 1))
-        return PlanRow(post, revision, str(input_hash), state == "current", requests)
+        return PlanRow(post, revision, str(input_hash), state == "current", requests, approved_by)
 
     def current_plan(self, post: PostKey) -> PlanRow | None:
         """The post's current plan revision, or None when it has none."""
