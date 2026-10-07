@@ -75,7 +75,7 @@ TRANSITIONS: dict[tuple[RequestState, RequestState], frozenset[Actor]] = {
     (S.UNDOING, S.VERIFY_FAILED): frozenset({A.APPLIER}),  # InvenTree accepted the undo; its read-back disagrees
     (S.UNDO_FAILED, S.UNDOING): frozenset({A.HUMAN}),  # a new attempt, never automatic
     (S.UNDO_UNKNOWN, S.UNDONE): frozenset({A.RECOVERY}),
-    (S.UNDO_UNKNOWN, S.VERIFIED): frozenset({A.RECOVERY}),
+    (S.UNDO_UNKNOWN, S.UNDO_FAILED): frozenset({A.RECOVERY}),  # no marker, nothing changed; never sent again
     (S.UNDO_UNKNOWN, S.VERIFY_FAILED): frozenset({A.RECOVERY}),
 }
 

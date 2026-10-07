@@ -876,7 +876,7 @@ def test_recovery_of_an_undo_records_it_on_the_undo(store: Store, path: Path) ->
         (S.UNKNOWN, S.APPLIED, False),
         (S.UNKNOWN, S.FAILED, True),
         (S.UNDO_UNKNOWN, S.UNDONE, False),
-        (S.UNDO_UNKNOWN, S.VERIFIED, True),
+        (S.UNDO_UNKNOWN, S.UNDO_FAILED, True),
     ],
 )
 def test_recovery_must_agree_with_the_target(expected: S, target: S, found: bool) -> None:
