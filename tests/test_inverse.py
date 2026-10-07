@@ -1,0 +1,286 @@
+"""The undo of a write, built from what the apply's history entries show (design section 7, "Undo")."""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from views import DESTINATION, SOURCE, item, picked, view
+
+from stockthread.core.marker import AttemptKind, Marker, new_marker_id
+from stockthread.core.model import MovementType, Operation
+from stockthread.core.resolve import StockItem
+from stockthread.inventree import MarkedEntry
+from stockthread.inverse import NoUndo, Reversal, check_undo, reversals, undo_request
+from stockthread.plan import plan_requests
+from stockthread.precondition import Snapshot, check
+from stockthread.slack.replies import MovementView
+
+ID = new_marker_id()
+APPLY = Marker(ID, AttemptKind.APPLY, 1)
+UNDO = Marker(ID, AttemptKind.UNDO, 1)
+NEW = 90
+"""The stock item a partial transfer creates."""
+Read = dict[tuple[int, int], list[StockItem]]
+
+
+class Applied:
+    """A movement planned and checked as the apply protocol does: its request with APPLY, and its snapshot. Each
+    stock item's history before the write is one entry, pk ten times the item's."""
+
+    def __init__(self, planned: MovementView, before: Read) -> None:
+        self.view = planned
+        (self.request,) = plan_requests([planned], [APPLY], user="U0SAM0001")
+        history = {stock.pk: [stock.pk * 10] for items in before.values() for stock in items}
+        snapshot = check(planned, self.request, before, history=history)
+        assert isinstance(snapshot, Snapshot)
+        self.snapshot = snapshot
+
+    def reversals(self, entries: list[MarkedEntry]) -> list[Reversal] | NoUndo:
+        return reversals(self.view, self.request, APPLY, self.snapshot, entries)
+
+    def check(self, found: list[Reversal], now: Read, entries: list[MarkedEntry], **later: list[int]) -> NoUndo | None:
+        """`check_undo` with each reversed item's history: its old entry, the apply's entries on it, and `later`."""
+        history = {
+            r.item: [*([r.item * 10] if r.item != NEW else []), *(e.pk for e in entries if e.item == r.item)]
+            for r in found
+        }
+        for pk, extra in later.items():
+            history[int(pk.removeprefix("on_"))] += extra
+        return check_undo(self.view, found, APPLY, self.snapshot, now, entries=entries, history=history)
+
+
+def entry(pk: int, on: int | None, kind: int, *, marker: Marker = APPLY, **deltas: Any) -> MarkedEntry:
+    return MarkedEntry(pk, on, marker, deltas, kind)
+
+
+def transfer(quantity: str) -> Applied:
+    """Item 57 holds 5 at the source (with item 58, 1); item 80 holds 3 at the destination."""
+    before = {(1, SOURCE): [item(57, "5"), item(58, "1")], (1, DESTINATION): [item(80, "3")]}
+    return Applied(view(lines=(("Disc 40", quantity),), stock=(picked((57, quantity)),)), before)
+
+
+SPLIT = [
+    entry(700, 57, 42, removed=2.0, quantity=3.0, stockitem=NEW),
+    entry(701, NEW, 40, stockitem=57, quantity=2.0),
+]
+AFTER_SPLIT: Read = {(1, DESTINATION): [item(80, "3"), item(NEW, "2")]}
+WHOLE = [entry(700, 57, 20, location=DESTINATION, quantity=5.0)]
+AFTER_WHOLE: Read = {(1, DESTINATION): [item(57, "5"), item(80, "3")]}
+
+
+def test_a_partial_transfer_is_undone_by_moving_the_new_item_back_to_the_source() -> None:
+    applied = transfer("2")
+    found = applied.reversals(SPLIT)
+    assert found == [Reversal(NEW, Decimal(2), Decimal(2))]
+    assert applied.check(found, AFTER_SPLIT, SPLIT) is None
+    request = undo_request(applied.view, found, UNDO, user="U0DAN0001")
+    assert request.operation is Operation.TRANSFER
+    assert request.body == {
+        "items": [{"pk": NEW, "quantity": "2", "merge": False}],
+        "notes": f"{UNDO} U0DAN0001",
+        "location": SOURCE,
+    }
+
+
+def test_a_whole_transfer_is_undone_by_moving_the_item_back() -> None:
+    applied = transfer("5")
+    found = applied.reversals(WHOLE)
+    assert found == [Reversal(57, Decimal(5), Decimal(5))]
+    assert applied.check(found, AFTER_WHOLE, WHOLE) is None
+    assert applied.check(found, {(1, DESTINATION): [item(57, "5", allocated="1")]}, WHOLE) == NoUndo(
+        "stock item 57 is not available (status 10, allocated 1)"
+    )
+    request = undo_request(applied.view, found, UNDO, user="U0DAN0001")
+    assert request.body["items"] == [{"pk": 57, "quantity": "5", "merge": False}]
+    assert request.body["location"] == SOURCE
+
+
+@pytest.mark.parametrize(
+    ("movement_type", "kind", "deltas", "undo", "quantity", "after"),
+    [
+        (MovementType.RECEIVE, 11, {"added": 2.0, "quantity": 7.0}, Operation.REMOVE, "2", "7"),
+        (MovementType.CONSUME, 12, {"removed": 2.0, "quantity": 3.0}, Operation.ADD, "2", "3"),
+        (MovementType.COUNT, 10, {"quantity": 2.0}, Operation.COUNT, "5", "2"),
+    ],
+)
+def test_an_add_a_remove_and_a_count_are_undone_on_their_item(
+    movement_type: MovementType, kind: int, deltas: dict[str, Any], undo: Operation, quantity: str, after: str
+) -> None:
+    """Item 57 held 5: the add is taken out again, the removal added back, the count set back to 5."""
+    place = SOURCE if movement_type is MovementType.CONSUME else DESTINATION
+    applied = Applied(view(movement_type), {(1, place): [item(57, "5")]})
+    entries = [entry(700, 57, kind, **deltas)]
+    found = applied.reversals(entries)
+    assert isinstance(found, list)
+    assert applied.check(found, {(1, place): [item(57, after)]}, entries) is None
+    request = undo_request(applied.view, found, UNDO, user="U0DAN0001")
+    assert request.operation is undo
+    assert request.body == {"items": [{"pk": 57, "quantity": quantity}], "notes": f"{UNDO} U0DAN0001"}
+
+
+def test_an_undo_reverses_what_the_history_shows_not_what_the_plan_said() -> None:
+    """A verify_failed apply that moved 1, not the planned 2: the undo moves back the 1 that moved."""
+    applied = transfer("2")
+    short = [entry(700, 57, 42, removed=1.0, quantity=4.0, stockitem=NEW), entry(701, NEW, 40, stockitem=57)]
+    assert applied.reversals(short) == [Reversal(NEW, Decimal(1), Decimal(1))]
+
+
+@pytest.mark.parametrize(
+    ("entries", "why"),
+    [
+        ([], "stock item 57 has 0 history entries of the apply, not 1"),
+        ([*SPLIT, entry(702, 57, 42, removed=2.0, stockitem=91)], "stock item 57 has 2 history entries"),
+        (
+            [entry(700, 57, 42, removed=2.0, stockitem=NEW, marker=Marker(ID, AttemptKind.APPLY, 2))],
+            "entries 700 carry",
+        ),
+        ([*SPLIT, entry(702, NEW, 20, marker=UNDO)], "history entries 702 carry another attempt"),
+        ([entry(700, 57, 42, removed=0.000001, stockitem=NEW)], "entry 700 (type 42)"),
+        ([entry(700, None, 42, removed=2.0, stockitem=NEW)], "has 0"),
+        ([entry(700, 57, 12, removed=2.0)], "history entry 700 (type 12) is not one the undo reverses"),
+        ([entry(700, 57, 42, removed=2.0, stockitem="90")], "entry 700 (type 42)"),
+        ([entry(700, 57, 42, removed=2.0, stockitem=57)], "entry 700 (type 42)"),
+        ([entry(700, 57, 42, removed=0.0, stockitem=NEW)], "entry 700 (type 42)"),
+        ([entry(700, 57, 42, removed="lots", stockitem=NEW)], "entry 700 (type 42)"),
+        ([entry(700, 57, 20, location=SOURCE, quantity=2.0)], "entry 700 (type 20)"),
+        ([entry(700, 57, 20, location=DESTINATION)], "entry 700 (type 20)"),
+    ],
+)
+def test_a_history_that_does_not_show_what_a_line_did_has_no_undo(entries: list[MarkedEntry], why: str) -> None:
+    found = transfer("2").reversals(entries)
+    assert isinstance(found, NoUndo)
+    assert why in found.why
+
+
+def test_an_item_a_removal_emptied_and_deleted_has_no_undo() -> None:
+    applied = Applied(
+        view(MovementType.CONSUME, stock=(picked((57, "5")),), lines=(("Disc", "5"),)), {(1, SOURCE): [item(57, "5")]}
+    )
+    found = applied.reversals([entry(700, None, 12, removed=5.0, quantity=0.0)])
+    assert isinstance(found, NoUndo)
+    assert "a person recreates it" in found.why
+
+
+@pytest.mark.parametrize(
+    ("movement_type", "kind", "deltas"),
+    [
+        (MovementType.RECEIVE, 11, {"added": 0.0}),
+        (MovementType.RECEIVE, 11, {"added": 2.0}),
+        (MovementType.RECEIVE, 11, {"added": 2.0, "quantity": 1.0}),
+        (MovementType.RECEIVE, 12, {"removed": 2.0}),
+        (MovementType.CONSUME, 12, {"added": 2.0}),
+        (MovementType.COUNT, 10, {"quantity": -1.0}),
+        (MovementType.COUNT, 10, {"quantity": True}),
+        (MovementType.COUNT, 11, {"quantity": 2.0}),
+    ],
+)
+def test_an_entry_of_another_shape_has_no_undo(movement_type: MovementType, kind: int, deltas: dict[str, Any]) -> None:
+    place = SOURCE if movement_type is MovementType.CONSUME else DESTINATION
+    applied = Applied(view(movement_type), {(1, place): [item(57, "5")]})
+    assert isinstance(applied.reversals([entry(700, 57, kind, **deltas)]), NoUndo)
+
+
+def test_another_writers_entry_since_the_apply_refuses_the_undo() -> None:
+    applied = transfer("2")
+    found = applied.reversals(SPLIT)
+    assert isinstance(found, list)
+    refused = applied.check(found, AFTER_SPLIT, SPLIT, on_90=[705])
+    assert refused == NoUndo("stock item 90 has history entries 705 since the apply that are not this request's")
+
+
+def test_an_entry_of_another_attempt_found_now_refuses_the_undo() -> None:
+    """An apply that wrote late, or an undo that wrote: the stock holds what the undo would not account for."""
+    applied = transfer("2")
+    found = applied.reversals(SPLIT)
+    assert isinstance(found, list)
+    for other in (Marker(ID, AttemptKind.APPLY, 2), UNDO):
+        late = [*SPLIT, entry(705, NEW, 20, marker=other)]
+        refused = applied.check(found, AFTER_SPLIT, late, on_90=[705])
+        assert refused == NoUndo("history entries 705 carry another attempt of this request than the apply undone")
+
+
+@pytest.mark.parametrize(
+    ("now", "why"),
+    [
+        ({(1, DESTINATION): [item(80, "3")]}, "stock item 90 is no longer at location"),
+        ({(1, SOURCE): [item(NEW, "2")], (1, DESTINATION): [item(80, "3")]}, "no longer at location"),
+        ({(1, DESTINATION): [item(NEW, "1.5")]}, "stock item 90 holds 1.5, not the 2 the apply left"),
+        ({(1, DESTINATION): [item(NEW, "4")]}, "stock item 90 holds 4, not the 2 the apply left"),
+        ({(1, DESTINATION): [item(NEW, "2", allocated="2")]}, "stock item 90 is not available"),
+        ({(1, DESTINATION): [item(NEW, "2", status=50)]}, "stock item 90 is not available (status 50"),
+        ({(2, DESTINATION): [item(NEW, "2")]}, "no longer at location"),
+    ],
+)
+def test_a_transfer_whose_stock_moved_on_has_no_undo(now: Read, why: str) -> None:
+    applied = transfer("2")
+    found = applied.reversals(SPLIT)
+    assert isinstance(found, list)
+    refused = applied.check(found, now, SPLIT)
+    assert refused is not None
+    assert why in refused.why
+
+
+@pytest.mark.parametrize(
+    ("movement_type", "kind", "deltas", "after", "why"),
+    [
+        (MovementType.RECEIVE, 11, {"added": 2.0, "quantity": 7.0}, "1", "holds 1, not the 7 the apply left"),
+        (MovementType.RECEIVE, 11, {"added": 2.0, "quantity": 7.0}, "9", "holds 9, not the 7 the apply left"),
+        (MovementType.COUNT, 10, {"quantity": 2.0}, "3", "holds 3, not the 2 the apply left"),
+        (MovementType.CONSUME, 12, {"removed": 2.0}, None, "stock item 57 is no longer at location"),
+    ],
+)
+def test_an_add_a_remove_or_a_count_whose_item_moved_on_has_no_undo(
+    movement_type: MovementType, kind: int, deltas: dict[str, Any], after: str | None, why: str
+) -> None:
+    place = SOURCE if movement_type is MovementType.CONSUME else DESTINATION
+    applied = Applied(view(movement_type), {(1, place): [item(57, "5")]})
+    entries = [entry(700, 57, kind, **deltas)]
+    found = applied.reversals(entries)
+    assert isinstance(found, list)
+    now: Read = {(1, place): [] if after is None else [item(57, after)]}
+    refused = applied.check(found, now, entries)
+    assert refused is not None
+    assert why in refused.why
+
+
+def test_a_removal_is_added_back_to_an_item_at_zero() -> None:
+    """An item a removal emptied that was not deleted is still read (`stock_items` reads empty ones)."""
+    applied = Applied(
+        view(MovementType.CONSUME, stock=(picked((57, "5")),), lines=(("Disc", "5"),)), {(1, SOURCE): [item(57, "5")]}
+    )
+    entries = [entry(700, 57, 12, removed=5.0, quantity=0.0)]
+    found = applied.reversals(entries)
+    assert found == [Reversal(57, Decimal(5), None)]
+    assert applied.check(found, {(1, SOURCE): [item(57, "0")]}, entries) is None
+
+
+def test_inputs_that_do_not_belong_together_are_a_caller_error() -> None:
+    applied = transfer("2")
+    with pytest.raises(ValueError, match="movement and marker"):
+        reversals(applied.view, applied.request, Marker(new_marker_id(), AttemptKind.APPLY, 1), applied.snapshot, SPLIT)
+    with pytest.raises(ValueError, match="snapshot"):
+        reversals(applied.view, applied.request, APPLY, Snapshot({}, {}), SPLIT)
+    found = applied.reversals(SPLIT)
+    assert isinstance(found, list)
+    with pytest.raises(ValueError, match="no history read"):
+        check_undo(applied.view, found, APPLY, applied.snapshot, AFTER_SPLIT, entries=SPLIT, history={})
+    with pytest.raises(ValueError, match="apply marker"):
+        reversals(applied.view, applied.request, UNDO, applied.snapshot, SPLIT)
+    with pytest.raises(ValueError, match="undo marker"):
+        undo_request(applied.view, found, APPLY, user="U0DAN0001")
+
+
+@pytest.mark.parametrize(
+    ("movement_type", "kind", "deltas"),
+    [(MovementType.RECEIVE, 11, {"added": 2.0, "quantity": 2.0}), (MovementType.COUNT, 10, {"quantity": 2.0})],
+)
+def test_an_item_that_held_nothing_before_is_not_emptied_by_an_undo(
+    movement_type: MovementType, kind: int, deltas: dict[str, Any]
+) -> None:
+    """Back at 0, an item marked delete_on_deplete is deleted, though it existed before the apply."""
+    applied = Applied(view(movement_type), {(1, DESTINATION): [item(57, "0")]})
+    assert applied.reversals([entry(700, 57, kind, **deltas)]) == NoUndo(
+        "stock item 57 held 0 before the apply: the undo would empty it, which may delete it"
+    )
