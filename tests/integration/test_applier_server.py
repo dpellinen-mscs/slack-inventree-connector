@@ -24,7 +24,7 @@ from stockthread.core.requests import RequestState
 from stockthread.gate import Policy, Verdict
 from stockthread.inventree import InvenTreeReader, check_version
 from stockthread.plan_record import plan_of
-from stockthread.run import inventree_steps
+from stockthread.run import inventree_steps, policy_approver
 from stockthread.slack.replies import MovementView
 from stockthread.store import DryRunOutcome, NewPlan, Store
 from stockthread.worker import _record
@@ -117,8 +117,8 @@ async def test_a_clear_take_out_is_approved_by_the_policy_written_once_and_verif
 
 
 def test_the_run_loops_steps_write_once_read_back_and_undo_on_the_real_server(store: Store, scratch: Scratch) -> None:
-    """`run.inventree_steps`, as `stockthread run` gives them to the worker with writes on: a fresh client and a
-    fresh version check per call, the vehicles from the catalog."""
+    """`run.policy_approver` and `run.inventree_steps`, as `stockthread run` gives them to the worker with writes on: a
+    fresh client and a fresh version check per call, the vehicles from the catalog."""
     item = scratch.stock(5)
     movement = take_to_truck(scratch, item["pk"], "2")
     reply(store, movement)
@@ -134,13 +134,8 @@ def test_the_run_loops_steps_write_once_read_back_and_undo_on_the_real_server(st
     )  # fmt: skip
     vehicles = Catalog((), (), vehicles={SAM: scratch.other})
     step, undo = inventree_steps(settings, lambda: vehicles, store, OWNER, beat=lambda: None)
-
-    async def version() -> Any:
-        async with InvenTreeReader(server(), token()) as reader:
-            return check_version(await reader.server_info())
-
-    now = GateNow(Policy.of(settings, anyio.run(version)), {SAM: scratch.other})
-    judgement = approve_by_policy(store, OWNER, POST, now)
+    approve = policy_approver(settings, lambda: vehicles, store, OWNER, beat=lambda: None)  # the real version check
+    judgement = approve(POST)
     assert judgement is not None
     assert judgement.allowed, judgement.why
     applied = step(KEY)

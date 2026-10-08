@@ -28,15 +28,15 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
-from stockthread.applier import GateNow, work_request
+from stockthread.applier import GateNow, approve_by_policy, work_request
 from stockthread.apply import Applied, ApplyReader, Sender, undo_apply
 from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import Settings
 from stockthread.core.matching import Catalog
-from stockthread.core.model import RequestKey
+from stockthread.core.model import PostKey, RequestKey
 from stockthread.core.requests import RequestState
 from stockthread.core.resolve import StockItem, stock_items
-from stockthread.gate import Policy
+from stockthread.gate import Judgement, Policy
 from stockthread.inventree import InvenTreeError, InvenTreeReader, VersionCheck, check_version
 from stockthread.llm.extract import LLMExtractor, WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
@@ -47,7 +47,7 @@ from stockthread.slack.listener import IdentityError, Listener, ThreadStores, bu
 from stockthread.slack.replies import MovementView
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
 from stockthread.store.db import posters_seen
-from stockthread.worker import PosterBusy, PostStillRunning, Stepper, StockReader, Undoer, Worker
+from stockthread.worker import Approver, PosterBusy, PostStillRunning, Stepper, StockReader, Undoer, Worker
 from stockthread.writer import InvenTreeWriter
 
 log = logging.getLogger(__name__)
@@ -354,6 +354,30 @@ def check_inventree(settings: Settings) -> VersionCheck:
     return asyncio.run(read())
 
 
+def policy_approver(
+    settings: Settings,
+    catalog: Callable[[], Catalog],
+    store: Store,
+    owner: str,
+    *,
+    beat: Callable[[], None],
+    check: Callable[[Settings], VersionCheck] = check_inventree,
+) -> Approver:
+    """The worker's approval by the policy (`applier.approve_by_policy`, ADR 0004), for `writes.enabled`: judged
+    with the settings, the server's version read again (`check`) and the catalog's vehicles (`catalog`, the cache),
+    the lock beaten (`beat`) after each read. Approving writes nothing: the write is judged again before it is sent
+    (`inventree_steps`)."""
+
+    def approve(post: PostKey) -> Judgement | None:
+        vehicles = dict(catalog().vehicles)
+        beat()
+        version = check(settings)
+        beat()
+        return approve_by_policy(store, owner, post, GateNow(Policy.of(settings, version), vehicles))
+
+    return approve
+
+
 def check_setup(settings: Settings) -> list[Finding]:
     """The setup check's findings (setup_check.py). Raises InvenTreeError when the server cannot be read."""
 
@@ -434,9 +458,11 @@ def run(
     connect: Callable[[Any, Settings], Connection] = serve,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     steps: Callable[..., tuple[Stepper, Undoer]] = inventree_steps,
+    approver: Callable[..., Approver] = policy_approver,
 ) -> int:
-    """Serve until `stop` is set. Returns the process exit code. The worker gets its apply step and undo (`steps`)
-    only when `writes.enabled` is set and the server's version is tested for writes."""
+    """Serve until `stop` is set. Returns the process exit code. The worker gets its apply step and undo (`steps`),
+    and approval by the policy (`approver`), only when `writes.enabled` is set and the server's version is tested for
+    writes."""
     http = settings.slack.transport == "http"
     signing_secret = settings.secrets.slack_signing_secret
     if (signing_secret if http else settings.secrets.slack_app_token) is None:  # the settings refuse this already
@@ -527,7 +553,12 @@ def run(
         if settings.writes.enabled and version.writes_allowed:
             beat = functools.partial(worker.beat, now=True)
             worker.apply, worker.undo = steps(settings, cache, store, owner, beat=beat)
-            log.warning("stock writes are ON: approved movements are written, read back and can be undone")
+            worker.approve = approver(settings, cache, store, owner, beat=beat, check=check)
+            auto = ", ".join(settings.policy.auto_apply) or "none"
+            log.warning(
+                "stock writes are ON: movements the policy approves (%s) are written, read back and can be undone",
+                auto,
+            )
         else:
             why = "writes.enabled = false" if not settings.writes.enabled else "this InvenTree is not tested for writes"
             log.info("stock writes are off (%s): only dry runs are posted", why)

@@ -1479,8 +1479,11 @@ connector never has two InvenTree writes in flight and cannot race itself.
    instance lock could go stale. No write is begun with less than two
    InvenTree timeouts left, so a cut-off ends a read; a write cut off all
    the same is `unknown`. With writes off, requests left from a run with
-   writes on wait, and the log says how many. Nothing in the run loop
-   approves a plan yet, so nothing new is written.
+   writes on wait, and the log says how many. The policy approves a plan
+   in the run loop (`Worker.approve_due`, `run.policy_approver`, ADR 0019):
+   once, right after the reply that made it is recorded, and only a post's
+   first plan; an outage puts the judgement off for at most 10 minutes. A
+   plan it does not approve waits for Apply, which is not built yet.
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
 It takes the process's writer lock, and waits, nothing read and still

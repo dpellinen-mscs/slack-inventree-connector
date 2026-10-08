@@ -178,6 +178,24 @@ def test_a_post_with_an_answered_question_waits_even_if_the_record_lists_no_answ
     assert store.request(RequestKey(POST, 1, 1)).state is S.PLANNED
 
 
+def test_only_a_posts_first_plan_is_approved_by_the_policy(store: Store) -> None:
+    reply(store, record(TAKE))
+    store.stale_plan(OWNER, POST)  # say an edit took it back, or an undo was followed by an edit
+    reply(store, record(TAKE), revision=2)
+    plan = store.current_plan(POST)
+    assert plan is not None
+    assert plan.revision == 2
+    assert judge_plan(plan_views(store, plan), ON).allowed  # the gate alone would allow it
+    judgement = approve_by_policy(store, OWNER, POST, ON)
+    assert judgement is not None
+    assert (judgement.verdict, judgement.why) == (
+        Verdict.WAITS,
+        "plan revision 2: only a post's first plan applies with no click",
+    )
+    assert store.request(RequestKey(POST, 2, 1)).state is S.PLANNED
+    assert approve_by_policy(store, OWNER, POST, OFF).verdict is Verdict.BLOCKED  # type: ignore[union-attr]
+
+
 def test_no_current_plan_approves_nothing(store: Store) -> None:
     assert approve_by_policy(store, OWNER, POST, ON) is None
     reply(store, record(TAKE))
