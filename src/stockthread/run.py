@@ -11,24 +11,32 @@ worker processes from the queue here. Over HTTP, waitress serves Bolt on a threa
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import ssl
 import threading
 import time
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Protocol, TypeVar
 
+import anyio
 import certifi
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
+from stockthread.applier import GateNow, work_request
+from stockthread.apply import Applied, ApplyReader, Sender, undo_apply
 from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import Settings
 from stockthread.core.matching import Catalog
+from stockthread.core.model import RequestKey
+from stockthread.core.requests import RequestState
 from stockthread.core.resolve import StockItem, stock_items
+from stockthread.gate import Policy
 from stockthread.inventree import InvenTreeError, InvenTreeReader, VersionCheck, check_version
 from stockthread.llm.extract import LLMExtractor, WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
@@ -36,9 +44,11 @@ from stockthread.setup_check import Finding, Level, check_posters, check_roles, 
 from stockthread.slack.catchup import SWEEP_SECONDS, CatchUp, HistoryClient
 from stockthread.slack.http_server import HttpServer, ServeError
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
+from stockthread.slack.replies import MovementView
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
 from stockthread.store.db import posters_seen
-from stockthread.worker import PosterBusy, PostStillRunning, StockReader, Worker
+from stockthread.worker import PosterBusy, PostStillRunning, Stepper, StockReader, Undoer, Worker
+from stockthread.writer import InvenTreeWriter
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +75,8 @@ LLM_MARGIN_SECONDS = 30
 """The lock goes stale this long after a call to the LLM provider is cut off, at the earliest."""
 SWEEP_JOIN_SECONDS = 5.0
 """How long a stop waits for a catch-up sweep to end."""
+SEND_MARGIN_TIMEOUTS = 2
+"""An apply step or undo begins no write with less than this many InvenTree timeouts left before it is cut off."""
 CATALOG_UNSET = Catalog(parts=(), locations=())
 """Placeholder until startup has read the catalog; the worker does not run before that."""
 
@@ -217,6 +229,84 @@ def inventree_stock(settings: Settings) -> StockReader:
     return read
 
 
+Connect = Callable[[], AbstractAsyncContextManager[tuple[ApplyReader, Sender]]]
+"""Opens an InvenTree reader and writer for one apply step or undo, and closes them after it."""
+
+
+@asynccontextmanager
+async def _clients(settings: Settings) -> AsyncIterator[tuple[ApplyReader, Sender]]:
+    token = settings.secrets.inventree_token
+    async with (
+        InvenTreeReader(settings.inventree, token) as reader,
+        InvenTreeWriter(settings.inventree, token) as writer,
+    ):
+        yield reader, writer
+
+
+def inventree_steps(
+    settings: Settings,
+    catalog: Callable[[], Catalog],
+    store: Store,
+    owner: str,
+    *,
+    beat: Callable[[], None],
+    connect: Connect | None = None,
+    limit: float | None = None,
+) -> tuple[Stepper, Undoer]:
+    """The worker's apply step (`applier.work_request`) and undo (`apply.undo_apply`) against InvenTree, for
+    `writes.enabled`. Each call opens its own reader and writer (`connect`) and reads the server's version again: a
+    server that is no longer tested for writes blocks the apply at the gate (ADR 0016) and refuses the undo. The
+    vehicles are the catalog's (`catalog`, the cache), read before the step of an `approved` request only, and the
+    lock is beaten (`beat`) after that read.
+
+    Each call is cut off after `limit` seconds (by default before the instance lock could go stale), and begins no
+    write once less than SEND_MARGIN_TIMEOUTS times `inventree.timeout_seconds` is left: a cut-off then ends a read,
+    and the request stays as it was. A write cut off all the same is `unknown`, which recovery concludes (ADR 0015).
+    Every call holds one lock for the whole process, so there is never more than one write in flight, whatever
+    thread asks."""
+    if limit is None:
+        limit = (lock_stale_after(settings) - timedelta(seconds=CATALOG_MARGIN_SECONDS)).total_seconds()
+    margin = SEND_MARGIN_TIMEOUTS * settings.inventree.timeout_seconds
+    settle = timedelta(seconds=settings.apply.settle_seconds)
+    opened = connect or (lambda: _clients(settings))
+    writing = threading.Lock()
+
+    def step(key: RequestKey) -> Applied:
+        vehicles: dict[str, int] = {}
+        if store.request(key).state is RequestState.APPROVED:
+            vehicles = dict(catalog().vehicles)  # outside the step's loop: a refresh of the cache runs one of its own
+            beat()
+
+        async def run() -> Applied:
+            send_by = anyio.current_time() + limit - margin
+            async with opened() as (reader, writer):
+                now = GateNow(Policy.of(settings, check_version(await reader.server_info())), vehicles)
+                return await work_request(
+                    key, store=store, reader=reader, writer=writer, lock=anyio.Lock(), lock_owner=owner,
+                    gate_now=lambda: now, settle=settle, send_by=send_by,
+                )  # fmt: skip
+
+        with writing:
+            return read_within(run, limit, "apply step's")
+
+    def undo(key: RequestKey, movement: MovementView, user: str) -> Applied:
+        async def run() -> Applied:
+            send_by = anyio.current_time() + limit - margin
+            async with opened() as (reader, writer):
+                version = check_version(await reader.server_info())
+                if not version.writes_allowed:
+                    return Applied(store.request(key).state, f"no undo: {version.message}")
+                return await undo_apply(
+                    key, movement, store=store, reader=reader, writer=writer, lock=anyio.Lock(), lock_owner=owner,
+                    user=user, send_by=send_by,
+                )  # fmt: skip
+
+        with writing:
+            return read_within(run, limit, "undo's")
+
+    return step, undo
+
+
 def with_vehicles(load: Callable[[], Catalog], settings: Settings) -> Callable[[], Catalog]:
     """Every snapshot gets the vehicles from the `[vehicles]` settings. A person whose vehicle is not a stock
     location in the snapshot is named in the log, once until the list changes."""
@@ -343,8 +433,10 @@ def run(
     check: Callable[[Settings], VersionCheck] = check_inventree,
     connect: Callable[[Any, Settings], Connection] = serve,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    steps: Callable[..., tuple[Stepper, Undoer]] = inventree_steps,
 ) -> int:
-    """Serve until `stop` is set. Returns the process exit code."""
+    """Serve until `stop` is set. Returns the process exit code. The worker gets its apply step and undo (`steps`)
+    only when `writes.enabled` is set and the server's version is tested for writes."""
     http = settings.slack.transport == "http"
     signing_secret = settings.secrets.slack_signing_secret
     if (signing_secret if http else settings.secrets.slack_app_token) is None:  # the settings refuse this already
@@ -373,9 +465,6 @@ def run(
                 key.revision,
                 key.sequence,
             )
-        if settings.writes.enabled:
-            log.warning("writes.enabled has no effect in this version: it has no apply step yet")
-        log.info("This version only posts dry runs: no stock is ever written.")
         log.info(settings.llm_line())
         bot_token = settings.secrets.slack_bot_token.get_secret_value()
         client = slack_client or WebClient(token=bot_token, ssl=slack_tls())
@@ -435,6 +524,16 @@ def run(
             return 2
         worker.slack, worker.catalog = DeadlinePoster(client), cache
         worker.stock = stock or inventree_stock(settings)
+        if settings.writes.enabled and version.writes_allowed:
+            beat = functools.partial(worker.beat, now=True)
+            worker.apply, worker.undo = steps(settings, cache, store, owner, beat=beat)
+            log.warning("stock writes are ON: approved movements are written, read back and can be undone")
+        else:
+            why = "writes.enabled = false" if not settings.writes.enabled else "this InvenTree is not tested for writes"
+            log.info("stock writes are off (%s): only dry runs are posted", why)
+            if left := store.requests_to_work():
+                # Read-only steps too: they wait for writes to be on again, and their posts with them.
+                log.warning("%d requests from a run with writes on wait for writes to be on again", len(left))
         provider = llm_provider(settings)
         alive: Callable[[], bool] = getattr(connection, "alive", lambda: True)
         if provider is None or settings.llm is None:

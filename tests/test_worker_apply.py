@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -26,8 +27,15 @@ from stockthread.core.matching import Catalog
 from stockthread.core.model import Extraction, MovementType, PostKey, RequestKey
 from stockthread.core.requests import RequestState
 from stockthread.gate import Policy
-from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, ServerInfo, VersionCheck
+from stockthread.inventree import (
+    DEPLETING_MARKER_FOUND_FROM,
+    InvenTreeError,
+    ServerInfo,
+    VersionCheck,
+    check_version,
+)
 from stockthread.plan_record import NotRebuilt, plan_of
+from stockthread.run import inventree_steps
 from stockthread.slack.replies import UNDO_ACTION, MovementView, receipt_replaced
 from stockthread.store import DryRunOutcome, LockLost, NewPlan, Store
 from stockthread.worker import (
@@ -60,11 +68,12 @@ ENV = {"SLACK_BOT_TOKEN": "xoxb-synthetic", "SLACK_APP_TOKEN": "xapp-synthetic",
 START = 1700000300
 
 
-def settings(max_age_hours: int = 168) -> Settings:
+def settings(max_age_hours: int = 168, *, writes: bool = False) -> Settings:
     data = {
         "slack": {"workspace_id": WORKSPACE, "app_id": APP, "channels": [CHANNEL], "approvers": [LUIS]},
-        "inventree": {"url": "http://inventree.local:8000"},
+        "inventree": {"url": "http://inventree.local:8000", "timeout_seconds": 1},
         "undo": {"max_age_hours": max_age_hours},
+        "writes": {"enabled": writes},
     }
     return parse_settings(data, ENV)
 
@@ -692,3 +701,121 @@ def test_a_plan_whose_record_cannot_be_rebuilt_gets_no_receipt_and_an_error(
     assert slack(running).posted == []
     assert running.post_receipts() == 0
     assert len(caplog.records) == 1  # not logged again every step
+
+
+# --- the run loop's steps (`run.inventree_steps`) ---
+
+UNTESTED = ServerInfo("9.9.9", 10**6)
+
+
+class Connected(FakeInvenTree):
+    """The fake as `inventree_steps` opens it: its own version, and a send that can take `delay` seconds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.version = ServerInfo("1.5.6", DEPLETING_MARKER_FOUND_FROM)
+        self.delay = 0.0
+        self.opened = 0
+
+    async def server_info(self) -> ServerInfo:
+        self._read()
+        return self.version
+
+    async def send(self, request: Any) -> Any:
+        await anyio.sleep(self.delay)
+        self.lock = anyio.Lock()  # the step's own lock is not the fake's to see
+        async with self.lock:
+            return await super().send(request)
+
+
+def steps(store: Store, fake: Connected, catalog: Any = None, limit: float | None = None) -> tuple[Stepper, Undoer]:
+    @asynccontextmanager
+    async def connect() -> AsyncIterator[tuple[Any, Any]]:
+        fake.opened += 1
+        yield fake, fake
+
+    beats.clear()
+    vehicles = catalog or (lambda: Catalog(parts=(), locations=(), vehicles={SAM: DESTINATION}))
+    return inventree_steps(
+        settings(writes=True), vehicles, store, OWNER, beat=lambda: beats.append(1), connect=connect, limit=limit
+    )
+
+
+beats: list[int] = []
+
+
+def test_the_run_loops_step_writes_once_and_reads_back_with_a_client_of_its_own(store: Store) -> None:
+    approved(store)
+    fake = Connected()
+    step, _ = steps(store, fake)
+    assert step(KEY).state is S.VERIFIED
+    assert len(fake.sent) == 1
+    assert fake.opened == 1
+    assert beats == [1]  # after the catalog read, before the step
+
+
+def test_a_server_no_longer_tested_blocks_the_run_loops_apply_and_undo(store: Store) -> None:
+    assert not check_version(UNTESTED).writes_allowed
+    approved(store)
+    fake = Connected()
+    fake.version = UNTESTED
+    step, undo = steps(store, fake)
+    applied = step(KEY)
+    assert applied.state is S.APPROVED
+    assert "not tested" in applied.why
+    assert fake.sent == []
+    fake.version = ServerInfo("1.5.6", DEPLETING_MARKER_FOUND_FROM)
+    assert step(KEY).state is S.VERIFIED
+    fake.version = UNTESTED
+    refused = undo(KEY, TAKE, SAM)
+    assert refused.state is S.VERIFIED
+    assert refused.why.startswith("no undo: ")
+    assert len(fake.sent) == 1
+
+
+def test_a_catalog_outage_stops_only_the_write_and_never_the_recovery(store: Store) -> None:
+    approved(store)
+    fake = Connected()
+
+    def down() -> Catalog:
+        raise InvenTreeError("synthetic catalog outage")
+
+    step, _ = steps(store, fake, catalog=down)
+    with pytest.raises(InvenTreeError):
+        step(KEY)
+    assert store.request(KEY).state is S.APPROVED
+    assert fake.sent == []
+    fake.answer, fake.lands = Outcome.UNKNOWN, True
+    assert steps(store, fake)[0](KEY).state is S.UNKNOWN
+    fake.answer, fake.lands = Outcome.ACCEPTED, False
+    step, _ = steps(store, fake, catalog=down)
+    recovered = step(KEY)  # recovery runs without the catalog: here it waits for the write to settle
+    assert recovered.state is S.UNKNOWN
+    assert recovered.why.startswith("still settling")
+
+
+def test_a_step_with_too_little_time_left_begins_no_write(store: Store) -> None:
+    approved(store)
+    fake = Connected()
+    step, _ = steps(store, fake, limit=1.5)  # less than SEND_MARGIN_TIMEOUTS timeouts of 1 s: no time to send
+    applied = step(KEY)
+    assert applied.state is S.APPROVED
+    assert "too long" in applied.why
+    assert fake.sent == []
+    assert steps(store, fake)[0](KEY).state is S.VERIFIED
+    _, undo = steps(store, fake, limit=1.5)
+    refused = undo(KEY, TAKE, SAM)
+    assert refused.state is S.VERIFIED
+    assert refused.why == "no undo: InvenTree answered too slowly, ask again in a minute"
+    assert len(fake.sent) == 1
+
+
+def test_a_write_the_time_limit_cuts_off_is_unknown_and_never_sent_again(store: Store) -> None:
+    approved(store)
+    fake = Connected()
+    fake.delay = 5
+    step, _ = steps(store, fake, limit=2.2)  # 0.2 s to begin the write, which then hangs
+    with pytest.raises(InvenTreeError, match="took longer"):
+        step(KEY)
+    assert store.request(KEY).state is S.UNKNOWN
+    assert len(fake.sent) == 0  # cut off inside the send, before the fake recorded it

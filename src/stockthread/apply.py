@@ -171,13 +171,15 @@ async def apply_request(
     lock: anyio.Lock,
     lock_owner: str,
     chosen: Collection[int] = (),
+    send_by: float | None = None,
 ) -> Applied:
     """Run the apply protocol (design section 7) once for the `approved` request `key`, whose movement is `view`.
 
     `rejudge(marker)` judges the request's whole plan again now (`gate.judge`), with `marker` as this request's;
     the request sent is its `requests[key.sequence - 1]`. `chosen`: the lines (from 0) a person named the stock items
     for (`precondition.check`). `lock` is the process's one writer lock: steps 2 to 6 run under it, so the connector
-    never has two writes in flight.
+    never has two writes in flight. `send_by` (`anyio.current_time()`): no attempt is begun after it, so a caller that
+    cuts the step off cuts a read off, not a write; the request then stays `approved`.
 
     Each outcome is a state of the request: still `approved` when it waits for another request of the post
     (`Store.apply_waits_for`) or the gate blocks it now (nothing read or written), `planned` when the store refuses
@@ -230,6 +232,8 @@ async def apply_request(
         if isinstance(snapshot, Stale):
             store.transition(key, expected=RequestState.APPROVED, target=RequestState.PLANNED, actor=Actor.APPLIER)
             return Applied(RequestState.PLANNED, f"back to review: {snapshot.why}")
+        if send_by is not None and anyio.current_time() > send_by:
+            return Applied(RequestState.APPROVED, "not written yet: the reads took too long to send it in this step")
         try:
             attempt = store.begin_attempt(
                 key,
@@ -356,6 +360,7 @@ async def undo_apply(
     lock_owner: str,
     user: str,
     link: str | None = None,
+    send_by: float | None = None,
 ) -> Applied:
     """Undo the apply of request `key` (design section 7, "Undo") once, as the person `user` asked: `key` is
     `verified`, `verify_failed` or `undo_failed`, and `view` is the movement its request was built from.
@@ -371,7 +376,7 @@ async def undo_apply(
     any other exception) in the read-back moves it to `undo_unknown` and raises: there is no state for an undo
     accepted but not read back, and recovery of an unknown undo finds its marker and reads it back (ADR 0017).
     Whether the undo is still allowed (`undo.max_age_hours`, who may ask) is the caller's to decide:
-    `applier.undo_refusal`."""
+    `applier.undo_refusal`. `send_by`: as `apply_request`'s; past it the state stays as it was."""
     async with lock:
         row = store.request(key)
         if row.state not in UNDOABLE:
@@ -401,6 +406,8 @@ async def undo_apply(
             return Applied(row.state, f"no undo: {refused.why}")
         before = undo_snapshot(view, found, read, history)
         undo = undo_request(view, found, marker, user=user, link=link)
+        if send_by is not None and anyio.current_time() > send_by:  # as for `apply_request`
+            return Applied(row.state, "no undo: InvenTree answered too slowly, ask again in a minute")
         try:
             attempt = store.begin_attempt(
                 key,

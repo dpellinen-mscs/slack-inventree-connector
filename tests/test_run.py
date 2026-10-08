@@ -30,6 +30,7 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 from stockthread import run as run_module
 from stockthread.__main__ import install_stop_handlers
+from stockthread.apply import Applied
 from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import InvenTreeSettings, Settings, parse_settings
 from stockthread.core.marker import AttemptKind
@@ -61,6 +62,7 @@ def settings(
     vehicles: dict[str, str] | None = None,
     catch_up_hours: int = 72,
     http_port: int = 3000,
+    writes: bool = False,
 ) -> Settings:
     data: dict[str, Any] = {
         "slack": {
@@ -73,6 +75,7 @@ def settings(
         },
         "inventree": {"url": "http://inventree.local:8000"},
         "storage": {"database": str(database)},
+        "writes": {"enabled": writes},
     }
     if llm:
         data["llm"] = llm
@@ -419,7 +422,9 @@ def _raise(error: Exception) -> Any:
     raise error
 
 
-def run_with(database: Path, stop: threading.Event, connection: FakeConnection, **overrides: Any) -> int:
+def run_with(
+    database: Path, stop: threading.Event, connection: FakeConnection, *, writes: bool = False, **overrides: Any
+) -> int:
     arguments: dict[str, Any] = {
         "slack_client": FakeClient(stop),
         "catalog": lambda: CATALOG,
@@ -428,7 +433,7 @@ def run_with(database: Path, stop: threading.Event, connection: FakeConnection, 
         "connect": lambda app, token: connection,
         "clock": lambda: datetime.fromtimestamp(1790000030, UTC),
     }
-    return run(settings(database), stop, **{**arguments, **overrides})
+    return run(settings(database, writes=writes), stop, **{**arguments, **overrides})
 
 
 def test_a_stop_during_startup_ends_before_connecting(tmp_path: Path, stop: threading.Event) -> None:
@@ -1207,3 +1212,80 @@ def test_the_version_check_is_logged_as_a_warning_when_untested(
         assert run_with(tmp_path / "stockthread.db", stop, FakeConnection(), check=lambda _: version) == 0
     (record,) = [record for record in caplog.records if record.getMessage() == version.message]
     assert record.levelno == (logging.INFO if version.writes_allowed else logging.WARNING)
+
+
+def approved_request(database: Path) -> RequestKey:
+    key = RequestKey(PostKey(WORKSPACE, CHANNEL, "1790000000.000100"), 1, 1)
+    store = Store.open(database)
+    store.create_post(key.post)
+    store.create_plan(key.post, "0" * 64, (Operation.TRANSFER,))
+    store.transition(key, expected=RequestState.PLANNED, target=RequestState.APPROVED, actor=Actor.HUMAN)
+    store.close()
+    return key
+
+
+@pytest.mark.parametrize(
+    ("writes", "version", "line"),
+    [
+        (False, TESTED, "stock writes are off (writes.enabled = false): only dry runs are posted"),
+        (True, check_version(ServerInfo("1.x", 531)), "stock writes are off (this InvenTree is not tested for writes)"),
+    ],
+)
+def test_without_writes_on_and_a_tested_server_the_worker_gets_no_apply_step(
+    tmp_path: Path,
+    stop: threading.Event,
+    caplog: pytest.LogCaptureFixture,
+    writes: bool,
+    version: VersionCheck,
+    line: str,
+) -> None:
+    database = tmp_path / "stockthread.db"
+    key = approved_request(database)
+    built: list[str] = []
+
+    def steps(*_: Any) -> Any:
+        built.append("steps")
+        raise AssertionError("no apply step without writes on and a tested server")
+
+    def check(_: Settings) -> VersionCheck:
+        threading.Timer(0.3, stop.set).start()  # a few worker steps, then stop
+        return version
+
+    with caplog.at_level(logging.INFO, logger="stockthread.run"):
+        assert run_with(database, stop, FakeConnection(), writes=writes, check=check, steps=steps) == 0
+    assert built == []
+    assert line in caplog.text
+    store = Store.open_read_only(database)
+    assert store.request(key).state is RequestState.APPROVED  # nothing ran its step
+    store.close()
+
+
+def test_with_writes_on_and_a_tested_server_the_worker_runs_the_apply_step(
+    tmp_path: Path, stop: threading.Event, caplog: pytest.LogCaptureFixture
+) -> None:
+    database = tmp_path / "stockthread.db"
+    key = approved_request(database)
+    built: list[tuple[Settings, Any, str]] = []
+    stepped: list[RequestKey] = []
+
+    def steps(settings: Settings, catalog: Any, store: Store, owner: str, *, beat: Any) -> Any:
+        built.append((settings, catalog, owner))
+        beat()  # the worker's own beat
+        assert catalog().parts == CATALOG.parts  # the worker's catalog cache
+
+        def step(asked: RequestKey) -> Applied:
+            stepped.append(asked)
+            stop.set()
+            return Applied(RequestState.APPROVED, "synthetic")
+
+        def undo(*_: Any) -> Applied:
+            raise AssertionError("no click in this test")
+
+        return step, undo
+
+    with caplog.at_level(logging.WARNING, logger="stockthread.run"):
+        assert run_with(database, stop, FakeConnection(), writes=True, steps=steps) == 0
+    assert len(built) == 1
+    assert built[0][0].writes.enabled
+    assert stepped == [key]
+    assert "stock writes are ON: approved movements are written, read back and can be undone" in caplog.text
