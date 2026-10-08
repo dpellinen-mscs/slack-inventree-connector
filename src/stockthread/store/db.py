@@ -1842,7 +1842,7 @@ class Store:
         """Why no undo of request `key` may be asked for now, or None: what an Undo button checks, as offered and as
         clicked, before `apply.undo_apply` (design section 7, "Undo"). An undo starts only from a `verified`,
         `verify_failed` or `undo_failed` request whose apply wrote less than `max_age` ago (by the store clock, from
-        when the apply's outcome was recorded), and only when every earlier undo of it was refused by InvenTree: one
+        when its intent was stored: the write ran after that, and a crash or a recovery cannot stretch the time), and only when every earlier undo of it was refused by InvenTree: one
         that wrote, or whose outcome was unknown (even one recovery concluded `undo_failed`, ADR 0018), would reverse
         the apply twice. It reads the store only. Whatever passes here is checked again by `undo_apply` under the
         writer lock, with the stock, and a block that passes (another write of the post in flight) is its to report."""
@@ -1850,7 +1850,7 @@ class Store:
         if row.state not in UNDOABLE:
             return f"the request is {row.state}: only a movement that was written and read back can be undone"
         written = self._db.execute(
-            "SELECT finished_at FROM request_attempts WHERE request_id = ? AND kind = ?"
+            "SELECT started_at FROM request_attempts WHERE request_id = ? AND kind = ?"
             " AND (outcome = 'accepted' OR (outcome = 'unknown' AND marker_found = 1))",
             (row.id, AttemptKind.APPLY.value),
         ).fetchall()
@@ -1869,10 +1869,8 @@ class Store:
             return "an earlier undo was not refused by InvenTree: it wrote, or it may still land"
         if len(undos) >= MAX_ATTEMPT:
             return f"{MAX_ATTEMPT} attempts is the limit"
-        ((finished_at,),) = written
-        if finished_at is None:
-            raise AssertionError(f"the apply of request {key} that wrote has no time its outcome was recorded")
-        if self._clock_now() - datetime.fromisoformat(finished_at) >= max_age:
+        ((started_at,),) = written
+        if self._clock_now() - datetime.fromisoformat(started_at) >= max_age:
             return (
                 f"the movement was written more than {max_age.total_seconds() / 3600:g} hours ago: undo it in InvenTree"
             )

@@ -1620,7 +1620,7 @@ Undo is allowed only if the stock the apply touched has no later history
 entries except the connector's own, and the condition in the table holds.
 Otherwise undo is refused with an explanation and becomes a review item.
 Undo expires after `undo.max_age_hours` (default 168, 7 days) from when the
-apply wrote. The poster or an approver may ask for it.
+apply that wrote started. The poster or an approver may ask for it.
 
 | Operation | Undo | Condition |
 | --- | --- | --- |

@@ -15,7 +15,14 @@ from fake_inventree import ITEM, FakeInvenTree
 from views import DESTINATION, SOURCE, picked, view
 
 from stockthread.applier import undo_refusal
-from stockthread.apply import Applied, _check_stored_undo, apply_request, recover_undo, undo_apply
+from stockthread.apply import (
+    Applied,
+    _check_stored_undo,
+    apply_request,
+    recover_request,
+    recover_undo,
+    undo_apply,
+)
 from stockthread.core.marker import AttemptKind, Marker, new_marker_id
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import UNDOABLE, Actor, RequestState, next_states
@@ -587,3 +594,22 @@ async def test_an_apply_refused_then_tried_again_is_undone_from_the_one_that_wro
     )
     assert again.state is S.VERIFIED
     assert store.undo_refusal(KEY, max_age=WEEK) is None
+
+
+@pytest.mark.anyio
+async def test_an_apply_recovery_found_may_be_undone(store: Store) -> None:
+    fake = FakeInvenTree()
+    fake.lock = anyio.Lock()
+    fake.answer, fake.lands = Outcome.UNKNOWN, True
+    done = await apply_request(
+        KEY, MOVE, allowed, store=store, reader=fake, writer=fake, lock=fake.lock, lock_owner=OWNER
+    )
+    assert done.state is S.UNKNOWN
+    assert store.undo_refusal(KEY, max_age=WEEK) == (
+        "the request is unknown: only a movement that was written and read back can be undone"
+    )
+    fake.answer, fake.lands = Outcome.ACCEPTED, False
+    recovered = await recover_request(KEY, MOVE, store=store, reader=fake, lock=fake.lock, settle=timedelta(0))
+    assert recovered.state is S.VERIFIED
+    assert store.undo_refusal(KEY, max_age=WEEK) is None
+    assert (await undo(store, fake)).state is S.UNDONE
