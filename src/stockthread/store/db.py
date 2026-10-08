@@ -1386,6 +1386,18 @@ class Store:
     def request(self, key: RequestKey) -> RequestRow:
         return self._request(key)[0]
 
+    def request_with_marker(self, marker_id: str) -> RequestKey | None:
+        """The request whose marker id is `marker_id` (the value of an Undo button), or None when there is none."""
+        row = self._db.execute(
+            "SELECT o.workspace_id, o.channel_id, o.ts, p.revision, r.sequence FROM requests r"
+            " JOIN plans p ON p.id = r.plan_id JOIN posts o ON o.id = p.post_id WHERE r.marker_id = ?",
+            (marker_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        workspace_id, channel_id, ts, revision, sequence = row
+        return RequestKey(PostKey(workspace_id, channel_id, ts), int(revision), int(sequence))
+
     def _set_state(self, request_id: int, expected: RequestState, target: RequestState, actor: Actor) -> None:
         """The compare-and-set. Call inside a transaction, after every check. An approval starts a new try, so it
         forgets the state a receipt reported: the try's outcome is reported even when it is that state again."""

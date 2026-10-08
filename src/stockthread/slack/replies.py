@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from stockthread.core.marker import is_marker_id
 from stockthread.core.model import (
     CandidateMovement,
     Match,
@@ -26,7 +27,7 @@ from stockthread.core.model import (
     operation_for,
 )
 from stockthread.core.questions import Ask, Choice, Question, choices
-from stockthread.core.requests import RequestState
+from stockthread.core.requests import UNDOABLE, RequestState
 from stockthread.core.resolve import SourcePick, StockItem
 
 MAX_SECTION = 2900
@@ -584,6 +585,30 @@ def _receipt_links(view: MovementView, locations: Mapping[int, str], inventree_u
     return f"In InvenTree: {' · '.join(links)}" if links else ""
 
 
+UNDO_ACTION = "undo"
+"""The action id of the Undo button on a receipt. Its value is the marker id of the request it undoes."""
+UNDO_CONFIRM = {
+    "title": {"type": "plain_text", "text": "Undo this movement?"},
+    "text": {
+        "type": "plain_text",
+        "text": "The stock goes back to where it was before this movement, if nothing else changed it since.",
+    },
+    "confirm": {"type": "plain_text", "text": "Undo"},
+    "deny": {"type": "plain_text", "text": "Keep it"},
+}
+"""Slack asks the clicker to confirm before an Undo click is sent: a stray tap writes nothing."""
+
+
+def _undo_button(marker_id: str) -> dict[str, Any]:
+    return {
+        "type": "button",
+        "action_id": UNDO_ACTION,
+        "text": {"type": "plain_text", "text": "Undo", "emoji": False},
+        "value": marker_id,
+        "confirm": UNDO_CONFIRM,
+    }
+
+
 def receipt(
     views: Sequence[MovementView],
     states: Sequence[RequestState],
@@ -593,16 +618,27 @@ def receipt(
     *,
     inventree_url: str,
     approved_by: str | None,
+    undo: Sequence[str | None] | None = None,
 ) -> dict[str, Any]:
     """The receipt in the post's thread once no step of its plan's writes is due or in flight (design section 7, step
     6): for every movement, its state, what it was to change, links to its places and stock items in InvenTree, and
     the marker its history entries carry in their notes. One state and one marker per movement, in the post's order.
 
-    `approved_by`: the approver whose Apply click approved the plan, or None when the write policy approved it."""
+    `approved_by`: the approver whose Apply click approved the plan, or None when the write policy approved it.
+    `undo`: per movement, the marker id of its request when an undo of it may be asked for now (`applier.undo_refusal`
+    with no user), or None; such a movement's section carries an Undo button with that value. A movement beyond
+    MAX_MOVEMENTS is not shown, so it gets no button."""
     if not views:
         raise ValueError("a receipt shows at least one movement")
     if len(states) != len(views) or len(markers) != len(views):
         raise ValueError("one state and one marker per movement")
+    offered = list(undo) if undo is not None else [None] * len(views)
+    if len(offered) != len(views):
+        raise ValueError("one undo value or None per movement")
+    if any(value is not None and not is_marker_id(value) for value in offered):
+        raise ValueError("an Undo button's value is a marker id")
+    if any(value is not None and state not in UNDOABLE for value, state in zip(offered, states, strict=True)):
+        raise ValueError("an Undo button is offered only on a movement an undo may start from")
     if any(state not in RECEIPT_WORDS for state in states):
         raise ValueError("a receipt reports no request whose write is due or in flight")
     if all(state is RequestState.VERIFIED for state in states):
@@ -618,7 +654,8 @@ def receipt(
     else:
         who = "Approved by a click."
     blocks: list[dict[str, Any]] = [_section(f"{heading} {who}")]
-    for number, (view, state, marker) in enumerate(zip(views[:MAX_MOVEMENTS], states, markers, strict=False), 1):
+    shown_views = zip(views[:MAX_MOVEMENTS], states, markers, offered, strict=False)
+    for number, (view, state, marker, undo_value) in enumerate(shown_views, 1):
         movement = view.movement
         title = TYPE_LABELS[movement.movement_type]
         if len(views) > 1:
@@ -632,7 +669,10 @@ def receipt(
         links = _receipt_links(view, locations, inventree_url)
         if links and len(shown) + 1 + len(links) <= MAX_SECTION:  # never cut inside a link
             shown = f"{shown}\n{links}"
-        blocks.append(_section(shown))
+        section = _section(shown)
+        if undo_value is not None:
+            section["accessory"] = _undo_button(undo_value)
+        blocks.append(section)
         trail = f"Marker `{escape(marker)}`: InvenTree's stock history entries of this request carry it in their notes."
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": trail}]})
     if len(views) > MAX_MOVEMENTS:
