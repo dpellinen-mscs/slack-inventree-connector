@@ -100,6 +100,7 @@ from stockthread.core.requests import UNDOABLE, RequestState
 from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
 from stockthread.core.validate import photo_not_read, validate
+from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.plan_record import NotRebuilt, plan_of
 from stockthread.slack.catchup import is_catch_up
@@ -196,6 +197,8 @@ this time."""
 STUCK_RETRY_SECONDS = 60 * 60
 """A request or receipt the connector cannot act on (its record cannot be rebuilt, or is not what it should be) is
 logged as an error, and tried again only after this long."""
+RECEIPT_TRIES = 5
+"""Failed tries in a row of one receipt after which each further failure is logged as an error for an operator."""
 RECEIPT_CHECK_SECONDS = 5
 """A receipt whose Slack call has not returned is looked at again after this long."""
 
@@ -366,11 +369,10 @@ class Worker:
     """Runs the step of the apply protocol a request is due for (`work_due`). None while writes are off: no request
     is written, read back or recovered."""
     _work_quiet_until: Decimal = Decimal(0)
-    _stuck: dict[RequestKey | tuple[PostKey, int], Decimal] = field(default_factory=dict)
-    """Requests, and plans (post, revision) due a receipt, that the connector cannot act on: not tried before then."""
+    _held: dict[RequestKey | tuple[PostKey, int], tuple[int, Decimal]] = field(default_factory=dict)
+    """Requests, and plans (post, revision) due a receipt, whose last try failed: the failures in a row, and the time
+    before which they are not tried again. One that keeps failing never holds the others back."""
     _receipts_quiet_until: Decimal = Decimal(0)
-    _receipt_failures: int = 0
-    """Receipts in a row that failed, whatever the post: the backoff grows with it."""
     _receipts_running: dict[tuple[PostKey, int], tuple[tuple[RequestState, ...], Mapping[str, Any]]] = field(
         default_factory=dict
     )
@@ -584,10 +586,12 @@ class Worker:
         through `apply`: the write of an `approved` request, the read-back of an `applied` one, the recovery of an
         `unknown` apply or undo once settled. Returns how many requests changed state.
 
-        A step that raises and leaves its request as it was (an outage) pauses every step for WORK_RETRY_SECONDS: it
-        changed nothing, so it is safe to try again, and an unknown write is only ever recovered, never sent again
-        (ADR 0015). A request whose record cannot be acted on (NotRebuilt, ValueError) is an error an operator must
-        see: it is logged as one, and not tried again for STUCK_RETRY_SECONDS."""
+        A step that raises and leaves its request as it was changed nothing, so it is safe to try again: an unknown
+        write is only ever recovered, never sent again (ADR 0015). That request is held back, for WORK_RETRY_SECONDS
+        doubled with each failure in a row up to STUCK_RETRY_SECONDS, so it never holds the others back. An outage
+        (InvenTree, the network, the disk) also pauses every step for WORK_RETRY_SECONDS. Any other error is one an
+        operator must see, and is logged as one. A step that raises after its request moved on is not held back: the
+        next step goes on from the new state."""
         now = self._now()
         if self.apply is None or self.stopping() or now < self._work_quiet_until:
             return 0
@@ -595,7 +599,7 @@ class Worker:
         for key in self.store.requests_to_work():
             if self.stopping():
                 break
-            if now < self._stuck.get(key, now):
+            if now < self._held.get(key, (0, now))[1]:
                 continue
             before = self.store.request(key).state
             self.beat(now=True)  # the step reads and writes InvenTree under its own deadlines
@@ -603,18 +607,28 @@ class Worker:
                 applied = self.apply(key)
             except LockLost:
                 raise
-            except (NotRebuilt, ValueError) as error:
-                self._stuck[key] = now + STUCK_RETRY_SECONDS
-                log.error("request %s cannot be acted on, an operator must look at it: %s", key, error)
-                continue
             except Exception as error:
-                _log_failure("request", key, error)
-                self._work_quiet_until = now + WORK_RETRY_SECONDS
-                break
-            self._stuck.pop(key, None)
+                if self.store.request(key).state is not before:
+                    _log_failure("request", key, error)
+                    self._held.pop(key, None)
+                    done += 1
+                    continue
+                failures = self._hold(key, now, WORK_RETRY_SECONDS)
+                if _outage(error):
+                    log.warning("request %s: the step failed (%s), tried again later", key, type(error).__name__)
+                    self._work_quiet_until = now + WORK_RETRY_SECONDS
+                    break
+                log.error(
+                    "request %s: the step failed %d times in a row (%s), an operator must look at it",
+                    key,
+                    failures,
+                    _described(error),
+                )
+                continue
+            self._held.pop(key, None)
             if applied.state is not before:
                 done += 1
-            log.info("request %s: %s (%s)", key, applied.state, applied.why)
+                log.info("request %s: %s (%s)", key, applied.state, applied.why)
         return done
 
     def post_receipts(self) -> int:
@@ -623,25 +637,40 @@ class Worker:
         A movement gets an Undo button when `undo` is set and an undo of it may be asked for now (`Store.undo_refusal`;
         whether the clicker may is checked at the click). Returns how many were posted.
 
-        A failed call pauses every receipt, with a backoff that grows with each failure in a row; a receipt is never
-        given up on. A call that has not returned is tried again with the same message, which takes its result. A
-        receipt whose movements changed while it was on its way is not recorded but edited to say a newer one
-        follows; the plan is then due again. A plan whose record cannot be rebuilt is logged as an error, and not
-        tried again for STUCK_RETRY_SECONDS."""
+        A receipt that fails is held back, with a backoff that grows with its failures in a row, and is never given
+        up on: after RECEIPT_TRIES each failure is logged as an error. One that keeps failing never holds the others
+        back. A rate limit pauses every post for as long as Slack asks, and an outage (the network, InvenTree's
+        catalog) every receipt. A call that has not returned is tried again with the same message, which takes its
+        result. A receipt whose movements changed while it was on its way is not recorded but edited to say a newer
+        one follows; the plan is then due again. A receipt Slack gave no ts for is not posted again by this process.
+        """
         now = self._now()
-        if self.stopping() or now < max(self._quiet_until, self._receipts_quiet_until):
-            return 0
+        if self.stopping() or self._running or now < max(self._quiet_until, self._receipts_quiet_until):
+            return 0  # a dry-run reply on its way holds receipts back, as a receipt holds replies (`reply_due`)
         due = [*self._receipts_running]
         due += [plan for plan in self.store.receipts_due() if plan not in self._receipts_running]
         done = 0
         for plan in due:
             if self.stopping():
                 break
-            if now < self._stuck.get(plan, now):
+            if now < self._held.get(plan, (0, now))[1]:
                 continue
             post, revision = plan
-            made = self._receipts_running.get(plan) or self._receipt(post, revision, now)
-            if made is None:
+            try:
+                made = self._receipts_running.get(plan) or self._receipt(post, revision)
+            except Exception as error:
+                if _outage(error):
+                    log.warning("post %s: no receipt now (%s), tried again later", post.ts, type(error).__name__)
+                    self._receipts_quiet_until = now + WORK_RETRY_SECONDS
+                    return done
+                failures = self._hold(plan, now, WORK_RETRY_SECONDS)
+                log.error(
+                    "post %s: no receipt for plan revision %d (%d times in a row: %s), an operator must look at it",
+                    post.ts,
+                    revision,
+                    failures,
+                    _described(error),
+                )
                 continue
             states, body = made
             self.beat(now=True)
@@ -663,22 +692,23 @@ class Worker:
                 return done
             except Exception as error:
                 self._receipts_running.pop(plan, None)
-                self._receipt_failures += 1
+                failures = self._hold(plan, now, 2)
                 asked = _retry_after(error)
+                level = logging.ERROR if failures > RECEIPT_TRIES else logging.WARNING
+                log.log(level, "post %s: receipt failed (%s), %d in a row", post.ts, _slack_code(error), failures)
                 if asked:
                     self._quiet_until = now + asked  # for every post, not only this one
-                wait = max(min(2 ** min(self._receipt_failures, 16), MAX_BACKOFF_SECONDS), asked)
-                self._receipts_quiet_until = now + wait
-                log.warning(
-                    "post %s: receipt failed (%s), %d in a row", post.ts, type(error).__name__, self._receipt_failures
-                )
-                return done
+                    return done
+                if _outage(error):
+                    self._receipts_quiet_until = self._held[plan][1]
+                    return done
+                continue  # Slack refused this one (an archived channel, say): the others go on
             self._receipts_running.pop(plan, None)
-            self._receipt_failures = 0
+            self._held.pop(plan, None)
             ts = response.get("ts")
             if not (isinstance(ts, str) and _SLACK_TS.fullmatch(ts)):
                 # Posted, but nothing to check a click against, and posting again could repeat it: an operator looks.
-                self._stuck[plan] = now + STUCK_RETRY_SECONDS
+                self._held[plan] = (0, Decimal("Infinity"))
                 log.error(
                     "post %s: Slack returned no message ts for the receipt of plan revision %d", post.ts, revision
                 )
@@ -693,19 +723,18 @@ class Worker:
             log.info("post %s: receipt of plan revision %d posted", post.ts, revision)
         return done
 
-    def _receipt(
-        self, post: PostKey, revision: int, now: Decimal
-    ) -> tuple[tuple[RequestState, ...], Mapping[str, Any]] | None:
-        """The states the plan's receipt reports, and the receipt; None when its record cannot be rebuilt."""
+    def _hold(self, which: RequestKey | tuple[PostKey, int], now: Decimal, first: int) -> int:
+        """Hold `which` back after a failure: `first` seconds, doubled with each failure in a row, at most
+        STUCK_RETRY_SECONDS. Returns its failures in a row."""
+        failures = self._held.get(which, (0, now))[0] + 1
+        self._held[which] = (failures, now + min(first * 2 ** min(failures - 1, 16), STUCK_RETRY_SECONDS))
+        return failures
+
+    def _receipt(self, post: PostKey, revision: int) -> tuple[tuple[RequestState, ...], Mapping[str, Any]]:
+        """The states the plan's receipt reports, and the receipt. Raises NotRebuilt when its record cannot be
+        rebuilt, and what reading the catalog raises."""
         plan = self.store.plan(post, revision)
-        try:
-            rebuilt = plan_views(self.store, plan)
-        except NotRebuilt as error:
-            self._stuck[(post, revision)] = now + STUCK_RETRY_SECONDS
-            log.error(
-                "post %s: no receipt for plan revision %d, an operator must look at it: %s", post.ts, revision, error
-            )
-            return None
+        rebuilt = plan_views(self.store, plan)
         catalog = self.catalog()
         max_age = timedelta(hours=self.settings.undo.max_age_hours)
         undo = [
@@ -1988,6 +2017,19 @@ def _retry_after(error: Exception) -> int:
         return 0
 
 
+def _outage(error: Exception) -> bool:
+    """A failure of what the worker reads or writes through, not of the request or receipt itself: InvenTree, the
+    network, the disk. It is likely to fail every other one too, so they all wait."""
+    return isinstance(error, InvenTreeError | TimeoutError) or _transient(error)
+
+
+def _described(error: Exception) -> str:
+    """The class, and for the connector's own errors their message (keys, states and fixed text only)."""
+    if isinstance(error, NotRebuilt | ValueError | AssertionError | StateConflict):
+        return f"{type(error).__name__}: {error}"
+    return type(error).__name__
+
+
 def _transient(error: Exception) -> bool:
     """A failure that may pass by itself: the database busy or locked, a full disk, an I/O or network error. Any
     other error is a bug or a payload that will fail the same way again."""
@@ -1998,6 +2040,16 @@ def _code(error: Exception) -> str:
     """A short outcome code for an error: its class name only, never its message."""
     name = re.sub(r"(?<!^)(?=[A-Z])", "_", type(error).__name__).lower()
     return "error_" + re.sub(r"[^a-z0-9_]", "", name)[:58]
+
+
+def _slack_code(error: Exception) -> str:
+    """Slack's error code when Slack answered with one (`is_archived`, `channel_not_found`), else `_code`."""
+    response: Any = getattr(error, "response", None)
+    try:
+        code = response.get("error") if response is not None else None
+    except (AttributeError, TypeError):
+        code = None
+    return code if isinstance(code, str) and re.fullmatch(r"[a-z0-9_]{1,64}", code) else _code(error)
 
 
 def _log_failure(what: str, which: object, error: Exception) -> None:

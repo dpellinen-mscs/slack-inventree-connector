@@ -1452,20 +1452,23 @@ connector never has two InvenTree writes in flight and cannot race itself.
    Posted by the worker (`Worker.post_receipts`) in the post's thread,
    with an Undo button on each movement an undo may be asked for now
    (`Store.undo_refusal`; none while writes are off), see "Undo" below. A
-   failed call pauses every receipt with a growing backoff, and a receipt
-   is never given up on. A call that has not returned is tried again with
+   receipt that fails is held back with a backoff that grows with its own
+   failures, so one Slack refuses (an archived channel) never holds the
+   others back; it is never given up on, and after 5 failures in a row
+   each one is an error in the log. A rate limit pauses every post, and an
+   outage every receipt. A call that has not returned is tried again with
    the same message, which takes its result, and no dry-run reply is posted
-   meanwhile. A receipt whose movements changed while it was on its way is
-   not recorded: it is edited to say a newer one follows, and the plan is
-   due again. A plan whose record cannot be rebuilt gets no receipt and an
-   error in the log for an operator.
+   meanwhile (nor a receipt while a reply is on its way). A receipt whose
+   movements changed while it was on its way is not recorded: it is edited
+   to say a newer one follows, and the plan is due again.
 
    The worker also runs the step of the apply protocol each request is due
    for (`Worker.work_due`: `applier.work_request` for `approved`,
    `applied`, `unknown` and `undo_unknown` requests). A step that raises
-   and leaves its request as it was pauses every step for 30 s; a request
-   whose record cannot be acted on is logged as an error and not tried
-   again for an hour. Nothing in the run loop approves a plan yet, and
+   and leaves its request as it was holds that request back, 30 s doubled
+   with each failure in a row up to an hour, so it never holds the others
+   back; an outage also pauses every step for 30 s, and any other error is
+   logged as an error for an operator. Nothing in the run loop approves a plan yet, and
    `run.py` gives the worker no apply step, so writes stay off.
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
