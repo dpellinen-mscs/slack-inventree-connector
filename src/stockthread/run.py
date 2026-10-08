@@ -118,8 +118,9 @@ class DeadlinePoster:
 
     The worker then keeps the instance lock's heartbeat going, so no other instance takes over while a call
     hangs, and no reply is posted twice by two instances. A call that ran out of time is left running: the
-    next try for the same thread takes its result (or its error) and does not post again, and until it has
-    ended nothing else is posted.
+    next try of the same message (thread and text) takes its result (or its error) and does not post again, and
+    until it has ended nothing else is posted. A receipt and a dry-run reply in one thread have different texts, so
+    neither takes the other's result.
     """
 
     def __init__(
@@ -129,10 +130,10 @@ class DeadlinePoster:
         self._deadline = deadline
         self._note_deadline = note_deadline
         self._side: _Call | None = None
-        self._calls: dict[tuple[Any, Any], _Call] = {}
+        self._calls: dict[tuple[Any, Any, Any], _Call] = {}
 
     def chat_postMessage(self, **kwargs: Any) -> Any:  # slack_sdk's name
-        key = (kwargs.get("channel"), kwargs.get("thread_ts"))
+        key = (kwargs.get("channel"), kwargs.get("thread_ts"), kwargs.get("text"))
         call = self._calls.get(key)
         if call is None:
             if any(not other.done.is_set() for other in self._calls.values()):

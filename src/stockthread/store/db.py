@@ -1533,11 +1533,12 @@ class Store:
 
     def requests_to_work(self) -> list[RequestKey]:
         """Every request a step of the apply protocol is due for: `approved` (the write), `applied` (the read-back a
-        read error left undone) and `unknown` (recovery, once settled), by post, revision and sequence."""
+        read error left undone), `unknown` and `undo_unknown` (recovery, once settled), by post, revision and
+        sequence."""
         rows = self._db.execute(
             "SELECT o.workspace_id, o.channel_id, o.ts, p.revision, r.sequence FROM requests r"
             " JOIN plans p ON p.id = r.plan_id JOIN posts o ON o.id = p.post_id"
-            " WHERE r.state IN ('approved', 'applied', 'unknown') ORDER BY o.id, p.revision, r.sequence"
+            " WHERE r.state IN ('approved', 'applied', 'unknown', 'undo_unknown') ORDER BY o.id, p.revision, r.sequence"
         ).fetchall()
         return [RequestKey(PostKey(w, c, ts), int(revision), int(sequence)) for w, c, ts, revision, sequence in rows]
 
