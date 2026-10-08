@@ -1449,8 +1449,24 @@ connector never has two InvenTree writes in flight and cannot race itself.
    reported, only while they are still the states (migration 0019, which
    marks every write concluded before it as reported). A crash between the
    post and the record posts it again: a duplicate beats a silent drop.
-   Not posted by the worker yet. Its Undo button is built (`replies.receipt`'s
-   `undo`, see "Undo" below).
+   Posted by the worker (`Worker.post_receipts`) in the post's thread,
+   with an Undo button on each movement an undo may be asked for now
+   (`Store.undo_refusal`; none while writes are off), see "Undo" below. A
+   failed call pauses every receipt with a growing backoff, and a receipt
+   is never given up on. A call that has not returned is tried again with
+   the same message, which takes its result, and no dry-run reply is posted
+   meanwhile. A receipt whose movements changed while it was on its way is
+   not recorded: it is edited to say a newer one follows, and the plan is
+   due again. A plan whose record cannot be rebuilt gets no receipt and an
+   error in the log for an operator.
+
+   The worker also runs the step of the apply protocol each request is due
+   for (`Worker.work_due`: `applier.work_request` for `approved`,
+   `applied`, `unknown` and `undo_unknown` requests). A step that raises
+   and leaves its request as it was pauses every step for 30 s; a request
+   whose record cannot be acted on is logged as an error and not tried
+   again for an hour. Nothing in the run loop approves a plan yet, and
+   `run.py` gives the worker no apply step, so writes stay off.
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
 It takes the process's writer lock, and waits, nothing read and still

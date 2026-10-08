@@ -20,7 +20,10 @@ the waiting post asked least recently, so neither one slow call nor one post who
 others back. The reading is kept and its reply is posted in the next step, after the queue has been drained:
 an edit that came during the call makes the post read again.
 
-Nothing here writes to InvenTree but an Undo click on a receipt, through `undo` (None while writes are off). Message
+3. `work_due` runs the step of the apply protocol each request is due for, through `apply`, and `post_receipts`
+   posts the receipt each plan is due in its thread, with an Undo button where an undo may be asked for.
+Nothing here writes to InvenTree but `apply` and an Undo click on a receipt, through `undo` (both None while writes
+are off). Message
 text is read from the stored raw events and never logged. Clicks are M2 (review). Every edit and deletion is noted
 by message key, in whatever order Slack delivers it, and a post is read as its messages are now: each one as its
 newest edit shows it (by the edit's own timestamp, not by arrival), and a deleted one left out. A post with a change
@@ -93,7 +96,7 @@ from stockthread.core.questions import (
     question_json,
     reason_line,
 )
-from stockthread.core.requests import RequestState
+from stockthread.core.requests import UNDOABLE, RequestState
 from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
 from stockthread.core.validate import photo_not_read, validate
@@ -123,6 +126,8 @@ from stockthread.slack.replies import (
     gate_reasons,
     question_closed,
     question_message,
+    receipt,
+    receipt_replaced,
     rejection_notice,
     retraction_notice,
     with_question,
@@ -139,6 +144,7 @@ from stockthread.store import (
     NewQuestion,
     QuestionStatus,
     ReviewItem,
+    StateConflict,
     Store,
     WaitingPost,
     new_button_id,
@@ -183,6 +189,15 @@ MAX_EVENT_ATTEMPTS and MAX_EVENT_RETRY_DELAY."""
 MAX_DRAIN_BATCHES = 20
 """A step drains at most this many batches. While events are still pending no post is due, so a backlog
 never splits siblings."""
+
+WORK_RETRY_SECONDS = 30
+"""After a step of the apply protocol failed and left its request as it was (an outage), no step is tried before
+this time."""
+STUCK_RETRY_SECONDS = 60 * 60
+"""A request or receipt the connector cannot act on (its record cannot be rebuilt, or is not what it should be) is
+logged as an error, and tried again only after this long."""
+RECEIPT_CHECK_SECONDS = 5
+"""A receipt whose Slack call has not returned is looked at again after this long."""
 
 _SLACK_TS = re.compile(r"\d{1,10}\.\d{6}")
 _UNAVAILABLE = "unavailable"
@@ -293,6 +308,10 @@ Undoer = Callable[[RequestKey, MovementView, str], Applied]
 """(request, the movement its request was built from, the Slack user who asked) -> where `apply.undo_apply` left the
 request, run to the end (run.py gives it the InvenTree client, the writer lock and the instance lock's owner)."""
 
+Stepper = Callable[[RequestKey], Applied]
+"""request -> where `applier.work_request` left it (run.py gives it the InvenTree client, the writer lock, the
+instance lock's owner, what the gate reads now and the settle time)."""
+
 UNDO_FEEDBACK = {
     RequestState.UNDONE: "Undone: the stock is back as it was before this movement, and was read back to check it.",
     RequestState.UNDO_FAILED: "Not undone: InvenTree refused the undo, or the connector would not send it. Look at the "
@@ -341,7 +360,22 @@ class Worker:
     llm: PostExtractor | None = None
     """Reads the posts the rule-based extractor declines. None: those posts get no reply."""
     undo: Undoer | None = None
-    """Runs the undo an Undo click asks for, once every check passed. None while writes are off: no click writes."""
+    """Runs the undo an Undo click asks for, once every check passed. None while writes are off: no click writes, and
+    no receipt offers an Undo button."""
+    apply: Stepper | None = None
+    """Runs the step of the apply protocol a request is due for (`work_due`). None while writes are off: no request
+    is written, read back or recovered."""
+    _work_quiet_until: Decimal = Decimal(0)
+    _stuck: dict[RequestKey | tuple[PostKey, int], Decimal] = field(default_factory=dict)
+    """Requests, and plans (post, revision) due a receipt, that the connector cannot act on: not tried before then."""
+    _receipts_quiet_until: Decimal = Decimal(0)
+    _receipt_failures: int = 0
+    """Receipts in a row that failed, whatever the post: the backoff grows with it."""
+    _receipts_running: dict[tuple[PostKey, int], tuple[tuple[RequestState, ...], Mapping[str, Any]]] = field(
+        default_factory=dict
+    )
+    """Receipts whose Slack call has not returned, with the states they report and the message: the next try sends
+    the same message, so it takes that call's result (run.DeadlinePoster) instead of posting again."""
     _llm_read: dict[PostKey, dict[tuple[MessageInput, ...], Extraction]] = field(default_factory=dict)
     """What the model read, and the messages as it read them, kept until the post is finished: a reply that is
     tried again is not read again. A post that has gained, lost or changed a message since is. A post is read with
@@ -375,7 +409,9 @@ class Worker:
     def step(self) -> int:
         """Drain the queue and, once it is empty, reply to the posts that are due. Returns how much was done."""
         done, empty = self.drain()
-        return done + self.reply_due() + self.take_down_buttons() if empty else done
+        if not empty:
+            return done
+        return done + self.reply_due() + self.work_due() + self.post_receipts() + self.take_down_buttons()
 
     def drain(self) -> tuple[int, bool]:
         """Handle pending events: how many, and whether the queue is empty now. An event put off after a transient
@@ -543,6 +579,164 @@ class Worker:
         text = UNDO_FEEDBACK.get(applied.state, f"The undo ended as {applied.state}. Look at it in InvenTree.")
         return self._undo_told(click, EventStatus.DONE, applied.state.value, text)
 
+    def work_due(self) -> int:
+        """Run the step of the apply protocol each request is due for (`Store.requests_to_work`; design section 7)
+        through `apply`: the write of an `approved` request, the read-back of an `applied` one, the recovery of an
+        `unknown` apply or undo once settled. Returns how many requests changed state.
+
+        A step that raises and leaves its request as it was (an outage) pauses every step for WORK_RETRY_SECONDS: it
+        changed nothing, so it is safe to try again, and an unknown write is only ever recovered, never sent again
+        (ADR 0015). A request whose record cannot be acted on (NotRebuilt, ValueError) is an error an operator must
+        see: it is logged as one, and not tried again for STUCK_RETRY_SECONDS."""
+        now = self._now()
+        if self.apply is None or self.stopping() or now < self._work_quiet_until:
+            return 0
+        done = 0
+        for key in self.store.requests_to_work():
+            if self.stopping():
+                break
+            if now < self._stuck.get(key, now):
+                continue
+            before = self.store.request(key).state
+            self.beat(now=True)  # the step reads and writes InvenTree under its own deadlines
+            try:
+                applied = self.apply(key)
+            except LockLost:
+                raise
+            except (NotRebuilt, ValueError) as error:
+                self._stuck[key] = now + STUCK_RETRY_SECONDS
+                log.error("request %s cannot be acted on, an operator must look at it: %s", key, error)
+                continue
+            except Exception as error:
+                _log_failure("request", key, error)
+                self._work_quiet_until = now + WORK_RETRY_SECONDS
+                break
+            self._stuck.pop(key, None)
+            if applied.state is not before:
+                done += 1
+            log.info("request %s: %s (%s)", key, applied.state, applied.why)
+        return done
+
+    def post_receipts(self) -> int:
+        """Post the receipt each plan is due (`Store.receipts_due`; design section 7, step 6) in its post's thread, and
+        record it with the states it reports (`Store.receipt_posted`): from then on only an Undo click on it counts.
+        A movement gets an Undo button when `undo` is set and an undo of it may be asked for now (`Store.undo_refusal`;
+        whether the clicker may is checked at the click). Returns how many were posted.
+
+        A failed call pauses every receipt, with a backoff that grows with each failure in a row; a receipt is never
+        given up on. A call that has not returned is tried again with the same message, which takes its result. A
+        receipt whose movements changed while it was on its way is not recorded but edited to say a newer one
+        follows; the plan is then due again. A plan whose record cannot be rebuilt is logged as an error, and not
+        tried again for STUCK_RETRY_SECONDS."""
+        now = self._now()
+        if self.stopping() or now < max(self._quiet_until, self._receipts_quiet_until):
+            return 0
+        due = [*self._receipts_running]
+        due += [plan for plan in self.store.receipts_due() if plan not in self._receipts_running]
+        done = 0
+        for plan in due:
+            if self.stopping():
+                break
+            if now < self._stuck.get(plan, now):
+                continue
+            post, revision = plan
+            made = self._receipts_running.get(plan) or self._receipt(post, revision, now)
+            if made is None:
+                continue
+            states, body = made
+            self.beat(now=True)
+            try:
+                response = self.slack.chat_postMessage(
+                    channel=post.channel_id,
+                    thread_ts=post.ts,
+                    text=body["text"],
+                    blocks=body["blocks"],
+                    unfurl_links=False,
+                    unfurl_media=False,
+                )
+            except PosterBusy:
+                return done  # another call is still on its way: nothing was tried
+            except PostStillRunning:
+                self._receipts_running[plan] = made
+                self._receipts_quiet_until = now + RECEIPT_CHECK_SECONDS
+                log.warning("post %s: receipt still on its way to Slack", post.ts)
+                return done
+            except Exception as error:
+                self._receipts_running.pop(plan, None)
+                self._receipt_failures += 1
+                asked = _retry_after(error)
+                if asked:
+                    self._quiet_until = now + asked  # for every post, not only this one
+                wait = max(min(2 ** min(self._receipt_failures, 16), MAX_BACKOFF_SECONDS), asked)
+                self._receipts_quiet_until = now + wait
+                log.warning(
+                    "post %s: receipt failed (%s), %d in a row", post.ts, type(error).__name__, self._receipt_failures
+                )
+                return done
+            self._receipts_running.pop(plan, None)
+            self._receipt_failures = 0
+            ts = response.get("ts")
+            if not (isinstance(ts, str) and _SLACK_TS.fullmatch(ts)):
+                # Posted, but nothing to check a click against, and posting again could repeat it: an operator looks.
+                self._stuck[plan] = now + STUCK_RETRY_SECONDS
+                log.error(
+                    "post %s: Slack returned no message ts for the receipt of plan revision %d", post.ts, revision
+                )
+                continue
+            try:
+                self.store.receipt_posted(self.owner, post, revision, ts, states)
+            except StateConflict:
+                log.info("post %s: receipt of plan revision %d is out of date: replaced", post.ts, revision)
+                self._replace_receipt(post, ts)
+                continue
+            done += 1
+            log.info("post %s: receipt of plan revision %d posted", post.ts, revision)
+        return done
+
+    def _receipt(
+        self, post: PostKey, revision: int, now: Decimal
+    ) -> tuple[tuple[RequestState, ...], Mapping[str, Any]] | None:
+        """The states the plan's receipt reports, and the receipt; None when its record cannot be rebuilt."""
+        plan = self.store.plan(post, revision)
+        try:
+            rebuilt = plan_views(self.store, plan)
+        except NotRebuilt as error:
+            self._stuck[(post, revision)] = now + STUCK_RETRY_SECONDS
+            log.error(
+                "post %s: no receipt for plan revision %d, an operator must look at it: %s", post.ts, revision, error
+            )
+            return None
+        catalog = self.catalog()
+        max_age = timedelta(hours=self.settings.undo.max_age_hours)
+        undo = [
+            row.marker_id
+            if self.undo is not None
+            and row.state in UNDOABLE
+            and self.store.undo_refusal(row.key, max_age=max_age) is None
+            else None
+            for row in plan.requests
+        ]
+        states = tuple(row.state for row in plan.requests)
+        body = receipt(
+            rebuilt.views,
+            states,
+            [row.marker_id for row in plan.requests],
+            {part.pk: part.name for part in catalog.parts},
+            {location.pk: location.path for location in catalog.locations},
+            inventree_url=self.settings.inventree.url,
+            approved_by=plan.approved_by,
+            undo=undo,
+        )
+        return states, body
+
+    def _replace_receipt(self, post: PostKey, ts: str) -> None:
+        """Best effort: a click on the old receipt is refused whatever it shows (`_handle_undo`)."""
+        body = receipt_replaced()
+        try:
+            self.slack.chat_update(channel=post.channel_id, ts=ts, text=body["text"], blocks=body["blocks"])
+        except Exception as error:
+            _log_failure("replaced receipt of post", post.ts, error)
+
     def _undo_told(self, click: Click, status: EventStatus, outcome: str, text: str) -> tuple[EventStatus, str]:
         self._feedback = _Feedback(click.channel, click.user, click.thread_ts or click.message_ts, text)
         return status, outcome
@@ -679,8 +873,8 @@ class Worker:
                     self._post(post.key, now, sent)
                     done += 1
                 continue
-            if self._running:
-                continue  # one call at a time: a reply is still on its way
+            if self._running or self._receipts_running:
+                continue  # one call at a time: a reply or a receipt is still on its way
             if seconds(post.newest_ts) + window + GRACE_SECONDS >= now:
                 continue  # a sibling may still come
             if post.revision == 1 and not post.has_key_message and seconds(post.key.ts) + ROOT_WAIT_SECONDS >= now:

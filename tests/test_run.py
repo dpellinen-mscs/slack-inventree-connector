@@ -652,6 +652,22 @@ def test_a_hung_post_gives_control_back_and_is_never_sent_twice() -> None:
     assert [call["text"] for call in client.calls] == ["one", "two"]
 
 
+def test_a_hung_post_is_not_the_result_of_another_message_in_its_thread() -> None:
+    """A receipt and a dry-run reply in one thread: the one whose call hung keeps its result for itself."""
+    client = SlowClient()
+    poster = run_module.DeadlinePoster(client, deadline=0.05)
+    reply = {"channel": CHANNEL, "thread_ts": "1790000000.000100", "text": "Dry run: 1 movement."}
+    receipt = {"channel": CHANNEL, "thread_ts": "1790000000.000100", "text": "Applied: 1 movement."}
+    with pytest.raises(PostStillRunning):
+        poster.chat_postMessage(**reply)
+    client.release.set()
+    wait_until_idle()
+    assert poster.chat_postMessage(**receipt)["ok"]  # sent itself: not the reply's result
+    assert [call["text"] for call in client.calls] == ["Dry run: 1 movement.", "Applied: 1 movement."]
+    assert poster.chat_postMessage(**reply)["ok"]  # the reply's result is still there for the reply
+    assert len(client.calls) == 2
+
+
 def test_a_hung_post_that_ends_in_an_error_reports_it_once_and_is_then_tried_again() -> None:
     client = SlowClient()
     client.error = ConnectionError("synthetic")

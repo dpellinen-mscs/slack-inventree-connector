@@ -687,3 +687,11 @@ def receipt(
         blocks.append(_section(f"…and {len(views) - MAX_MOVEMENTS} more movements, not shown here."))
     count = f"{len(views)} movements" if len(views) > 1 else "1 movement"
     return {"text": f"{text}: {count}.", "blocks": blocks}
+
+
+def receipt_replaced() -> dict[str, Any]:
+    """What a receipt is edited to when the movements changed while it was on its way to Slack: the newer receipt
+    below reports them. Its Undo button goes with it (a click on it is refused anyway: it is not the plan's newest
+    receipt)."""
+    text = "This receipt was replaced by a newer one below."
+    return {"text": text, "blocks": [_section(f"_{text}_")]}

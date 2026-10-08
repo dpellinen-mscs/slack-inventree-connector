@@ -129,30 +129,31 @@ payloads whose channel or message does not fit the stored id.
   - [x] Single write: one request sent once, its outcome accepted, refused or unknown (`InvenTreeWriter.send`)
   - [x] Read-back, checks 1 and 2: the marker's entries carry the plan's deltas, and the totals are the snapshot plus the plan (`readback.verify`)
   - [x] Read-back, check 3: no entry without the marker on the named or created stock items since the snapshot (`InvenTreeReader.item_entries`, `Snapshot.history`)
-  - [x] Apply orchestrator: writer lock, judge again, marker check, precondition, intent, send, read-back, state (`apply.apply_request`; not called by the worker yet)
-  - [x] Read back a request a read error left `applied` (`apply.readback_request`; not called by the worker yet)
+  - [x] Apply orchestrator: writer lock, judge again, marker check, precondition, intent, send, read-back, state (`apply.apply_request`)
+  - [x] Read back a request a read error left `applied` (`apply.readback_request`)
   - [x] The views a write acts on, rebuilt from the dry-run record the thread was shown, refused unless the plan was made from it ([0016](docs/decisions/0016-apply-reads-the-dry-run-record.md), `plan_record.views_of`)
   - [x] The plan of a reply that could apply in full is made with the reply, and any other outcome but `unchanged` leaves no plan current (`Store.finish_dry_run`, `plan_record.plan_of`)
   - [x] A message that joins a post, or a noted edit or deletion, stales its plan at once; a revision that reads the same makes it again
-  - [x] The step for one request: write an `approved` one, read back an `applied` one, recover an `unknown` one (`applier.work_request`, `Store.requests_to_work`); a plan is approved whole (`Store.approve_plan`)
+  - [x] The step for one request: write an `approved` one, read back an `applied` one, recover an `unknown` apply or undo (`applier.work_request`, `Store.requests_to_work`); a plan is approved whole (`Store.approve_plan`)
   - [x] A request waits, keeping its approval, while a sibling is due or in flight, and goes back to review when its plan stopped at an earlier request or the store refuses it for good (`Store.apply_waits_for`, `Store.plan_stopped_before`)
-  - [ ] Worker: run the step in the run loop, with the receipt (ADR 0004)
+  - [x] Worker: run the step each request is due for, an outage pausing every step, a broken record an operator error (`Worker.work_due`; `Worker.apply` not given by `run.py` yet)
+  - [ ] The run loop approves by policy and gives the worker its apply step (ADR 0004), with the Apply button
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
   - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`, run by `run.run` at start)
   - [x] Recovery of an unknown undo (`apply.recover_undo`, ADR 0018)
-  - [ ] The worker runs recovery
+  - [x] The worker runs recovery (`Worker.work_due`)
 - [ ] Plans with several requests, and the `partially_applied` state
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
   - [x] The message: each movement's state, its exact changes, links to InvenTree and its marker (`replies.receipt`); due once no write of the plan is due or in flight and one concluded unreported, recorded with the states it reported (`Store.receipts_due`, `Store.receipt_posted`, migration 0019)
-  - [ ] Posted by the worker, with the Undo button
+  - [x] Posted by the worker, with the Undo button; a receipt out of date by the time Slack returned is replaced (`Worker.post_receipts`)
 - [ ] Undo by button, authorized and idempotent, built from the observed history
   - [x] The undo request, built from the apply's history entries and refused when the stock moved on since (`inverse.reversals`, `check_undo`, `undo_request`)
   - [x] The undo attempt: store, send, read-back (`apply.undo_apply`, ADR 0017)
   - [x] Whether a person may ask for an undo now: state, `undo.max_age_hours`, earlier undos, poster or approver (`Store.undo_refusal`, `applier.undo_refusal`)
   - [x] The Undo button: on the receipt with a confirm dialog, checked against the newest receipt, the clicker and the store, then `undo_apply` (`replies.receipt`'s `undo`, `Worker._handle_undo`)
   - [x] A new receipt in the thread that reports an undo: due once the undo concluded, headed "Undone" or "Partly undone" (migration 0020: `receipt_state` takes `undone` and `undo_failed`; an undo forgets the reported state)
-  - [ ] Recovery of an unknown undo run by the worker: under "Unknown outcomes"
+  - [x] Recovery of an unknown undo run by the worker (`Worker.work_due`)
 - [ ] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
 - [x] Instance lock: one connector per database (`Store.acquire_lock`, heartbeat, `run.run`; `test_run.py`)
 - [ ] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word matches, fuzzy matches and picked candidates as aliases, for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo offers to forget the alias
