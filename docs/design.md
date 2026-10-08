@@ -1464,7 +1464,9 @@ connector never has two InvenTree writes in flight and cannot race itself.
 
    The worker also runs the step of the apply protocol each request is due
    for (`Worker.work_due`: `applier.work_request` for `approved`,
-   `applied`, `unknown` and `undo_unknown` requests). A step that raises
+   `applied`, `unknown` and `undo_unknown` requests). No step starts while
+   an event waits in the queue: an edit or deletion that came meanwhile is
+   handled first, since it may take an approval back. A step that raises
    and leaves its request as it was holds that request back, 30 s doubled
    with each failure in a row up to an hour, so it never holds the others
    back; an outage also pauses every step for 30 s, and any other error is

@@ -584,7 +584,9 @@ class Worker:
     def work_due(self) -> int:
         """Run the step of the apply protocol each request is due for (`Store.requests_to_work`; design section 7)
         through `apply`: the write of an `approved` request, the read-back of an `applied` one, the recovery of an
-        `unknown` apply or undo once settled. Returns how many requests changed state.
+        `unknown` apply or undo once settled. Returns how many requests changed state. No step starts while an
+        event waits in the queue (one put off after a failure too): an edit or deletion that came while the worker was
+        busy may take an approval back, so `drain` handles it first.
 
         A step that raises and leaves its request as it was changed nothing, so it is safe to try again: an unknown
         write is only ever recovered, never sent again (ADR 0015). That request is held back, for WORK_RETRY_SECONDS
@@ -601,6 +603,8 @@ class Worker:
                 break
             if now < self._held.get(key, (0, now))[1]:
                 continue
+            if self.store.events_pending():
+                break  # an edit or a deletion that came meanwhile is handled first: it may take the approval back
             before = self.store.request(key).state
             self.beat(now=True)  # the step reads and writes InvenTree under its own deadlines
             try:
@@ -613,10 +617,11 @@ class Worker:
                     self._held.pop(key, None)
                     done += 1
                     continue
-                failures = self._hold(key, now, WORK_RETRY_SECONDS)
+                failed_at = self._now()  # a step can take long: its backoff counts from when it failed
+                failures = self._hold(key, failed_at, WORK_RETRY_SECONDS)
                 if _outage(error):
                     log.warning("request %s: the step failed (%s), tried again later", key, type(error).__name__)
-                    self._work_quiet_until = now + WORK_RETRY_SECONDS
+                    self._work_quiet_until = failed_at + WORK_RETRY_SECONDS
                     break
                 log.error(
                     "request %s: the step failed %d times in a row (%s), an operator must look at it",
@@ -661,9 +666,9 @@ class Worker:
             except Exception as error:
                 if _outage(error):
                     log.warning("post %s: no receipt now (%s), tried again later", post.ts, type(error).__name__)
-                    self._receipts_quiet_until = now + WORK_RETRY_SECONDS
+                    self._receipts_quiet_until = self._now() + WORK_RETRY_SECONDS
                     return done
-                failures = self._hold(plan, now, WORK_RETRY_SECONDS)
+                failures = self._hold(plan, self._now(), WORK_RETRY_SECONDS)
                 log.error(
                     "post %s: no receipt for plan revision %d (%d times in a row: %s), an operator must look at it",
                     post.ts,
@@ -687,17 +692,18 @@ class Worker:
                 return done  # another call is still on its way: nothing was tried
             except PostStillRunning:
                 self._receipts_running[plan] = made
-                self._receipts_quiet_until = now + RECEIPT_CHECK_SECONDS
+                self._receipts_quiet_until = self._now() + RECEIPT_CHECK_SECONDS
                 log.warning("post %s: receipt still on its way to Slack", post.ts)
                 return done
             except Exception as error:
                 self._receipts_running.pop(plan, None)
-                failures = self._hold(plan, now, 2)
+                failed_at = self._now()  # Retry-After counts from Slack's answer, not from when the batch began
+                failures = self._hold(plan, failed_at, 2)
                 asked = _retry_after(error)
                 level = logging.ERROR if failures > RECEIPT_TRIES else logging.WARNING
                 log.log(level, "post %s: receipt failed (%s), %d in a row", post.ts, _slack_code(error), failures)
                 if asked:
-                    self._quiet_until = now + asked  # for every post, not only this one
+                    self._quiet_until = failed_at + asked  # for every post, not only this one
                     return done
                 if _outage(error):
                     self._receipts_quiet_until = self._held[plan][1]

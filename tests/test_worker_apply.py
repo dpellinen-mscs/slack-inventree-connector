@@ -243,6 +243,50 @@ def test_an_unknown_undo_is_recovered_by_the_worker(store: Store) -> None:
     assert store.requests_to_work() == []
 
 
+def deletion(store: Store, post: PostKey) -> None:
+    """Sam deletes `post`'s message: the event waits in the queue."""
+    event = {"type": "message", "subtype": "message_deleted", "channel": post.channel_id, "ts": "1700000500.000100"}
+    event["deleted_ts"] = post.ts
+    payload = {"type": "event_callback", "team_id": WORKSPACE, "api_app_id": APP, "event_id": "EvDel", "event": event}
+    assert store.enqueue_event(f"EvDel:{post.ts}", "event", json.dumps(payload))
+
+
+def test_no_stock_is_written_while_an_edit_or_deletion_waits_in_the_queue(store: Store) -> None:
+    """Review #135 finding 1: a deletion that came while the step was busy (a slow Slack reply, say) is handled
+    before any approval is acted on, and takes it back."""
+    approved(store)
+    inventree = FakeInvenTree()
+    running = worker(store, stepper(store, inventree))
+    deletion(store, POST)
+    assert running.work_due() == 0
+    assert inventree.sent == []
+    assert store.request(KEY).state is S.APPROVED
+    running.step()  # drains the deletion first
+    assert inventree.sent == []
+    assert store.request(KEY).state is not S.APPROVED
+    assert running.work_due() == 0
+    assert inventree.sent == []
+
+
+def test_a_deletion_that_comes_during_one_apply_is_handled_before_the_next(store: Store) -> None:
+    other = PostKey(WORKSPACE, CHANNEL, "1700001000.000100")  # not grouped with POST
+    approved(store)
+    approved(store, other)
+    inventree = FakeInvenTree()
+    step = stepper(store, inventree)
+    seen: list[RequestKey] = []
+
+    def slow(key: RequestKey) -> Applied:
+        seen.append(key)
+        deletion(store, other if key.post == POST else POST)
+        return step(key)
+
+    running = worker(store, slow)
+    assert running.work_due() == 1
+    assert len(seen) == 1  # the other request waits for the next step, which drains the deletion first
+    assert len(inventree.sent) == 1
+
+
 def test_an_outage_changes_nothing_and_pauses_every_step(store: Store) -> None:
     approved(store)
     inventree = FakeInvenTree()
@@ -458,6 +502,26 @@ def test_a_rate_limited_receipt_waits_as_long_as_slack_asks_for_every_post(store
     clock.now += 29
     assert running.post_receipts() == 0
     clock.now += 1
+    assert running.post_receipts() == 1
+
+
+def test_retry_after_counts_from_when_slack_answered(store: Store) -> None:
+    """Review #135 finding 2: a call that took 20 s and was asked to wait 30 s waits 30 s more, not 10."""
+    written(store)
+    clock = Clock()
+    running = worker(store, None, clock=clock)
+
+    def slow(**kwargs: Any) -> dict[str, Any]:
+        clock.now += 20
+        raise rate_limited(30)
+
+    slack(running).chat_postMessage = slow  # type: ignore[method-assign]
+    assert running.post_receipts() == 0
+    del slack(running).chat_postMessage
+    assert running._quiet_until == START + 50
+    clock.now = START + 49
+    assert running.post_receipts() == 0
+    clock.now = START + 50
     assert running.post_receipts() == 1
 
 
