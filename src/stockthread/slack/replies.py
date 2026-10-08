@@ -621,8 +621,9 @@ def receipt(
     undo: Sequence[str | None] | None = None,
 ) -> dict[str, Any]:
     """The receipt in the post's thread once no step of its plan's writes is due or in flight (design section 7, step
-    6): for every movement, its state, what it was to change, links to its places and stock items in InvenTree, and
-    the marker its history entries carry in their notes. One state and one marker per movement, in the post's order.
+    6), and again once an undo of one of them concluded: for every movement, its state, what it was to change, links
+    to its places and stock items in InvenTree, and the marker its history entries carry in their notes. One state
+    and one marker per movement, in the post's order.
 
     `approved_by`: the approver whose Apply click approved the plan, or None when the write policy approved it.
     `undo`: per movement, the marker id of its request when an undo of it may be asked for now (`applier.undo_refusal`
@@ -645,6 +646,13 @@ def receipt(
         heading, text = "*Applied.* Inventory was changed as below, and read back to check it.", "Applied"
     elif all(state in NOT_WRITTEN for state in states):
         heading, text = "*Not applied.*", "Not applied"
+    elif all(state in NOT_WRITTEN - {RequestState.PLANNED} | {RequestState.UNDONE} for state in states):
+        heading, text = "*Undone.* What was applied below was put back, and read back to check it.", "Undone"
+    elif all(state in {RequestState.VERIFIED, RequestState.UNDONE} for state in states):
+        heading, text = (
+            "*Partly undone.* What is marked undone below was put back; the rest stays applied.",
+            "Partly undone",
+        )
     else:
         heading, text = "*Check this.* Not everything below went as planned.", "Check this"
     if approved_by is None:
