@@ -563,7 +563,173 @@ def test_writes_concluded_before_receipts_existed_are_not_reported(store: Store,
     db.execute("PRAGMA user_version = 18")
     db.close()
     reopened = Store.open(tmp_path / "stockthread.db")
-    assert reopened.schema_version == 19
+    assert reopened.schema_version == 20
     assert reopened.request(KEY).receipt_state is S.VERIFIED
     assert reopened.receipts_due() == []
+    reopened.close()
+
+
+def undo(store: Store, key: RequestKey, expected: RequestState, outcome: RequestState | None) -> None:
+    """Start an undo of request `key` from `expected` the way the undo protocol does, with no InvenTree, and conclude
+    it in `outcome` (None: leave it `undoing`)."""
+    marker = store.next_marker(key, AttemptKind.UNDO)
+    store.begin_attempt(
+        key,
+        marker.kind,
+        expected=expected,
+        actor=Actor.HUMAN,
+        snapshot={},
+        request_body={"notes": str(marker)},
+        lock_owner=OWNER,
+    )
+    if outcome is not None:
+        store.transition(key, expected=S.UNDOING, target=outcome, actor=Actor.APPLIER)
+
+
+@pytest.mark.parametrize("outcome", [S.UNDONE, S.UNDO_FAILED, S.VERIFY_FAILED])
+@pytest.mark.parametrize("applied", [S.VERIFIED, S.VERIFY_FAILED])
+def test_an_undo_is_reported_by_a_new_receipt_once_it_concluded(
+    store: Store, applied: RequestState, outcome: RequestState
+) -> None:
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, applied)
+    store.receipt_posted(OWNER, POST, 1, "1700000200.000100", [applied])
+    undo(store, KEY, applied, None)
+    assert store.request(KEY).receipt_state is None  # the undo is a new try: its outcome is reported, whatever it is
+    assert store.receipts_due() == []  # not while it is in flight
+    store.transition(KEY, expected=S.UNDOING, target=outcome, actor=Actor.APPLIER)
+    assert store.receipts_due() == [(POST, 1)]  # verify_failed after verify_failed included
+    store.receipt_posted(OWNER, POST, 1, "1700000300.000100", [outcome])
+    assert store.plan(POST, 1).receipt_ts == "1700000300.000100"  # the old receipt's Undo button is out of date
+    assert store.request(KEY).receipt_state is outcome
+    assert store.receipts_due() == []
+
+
+def test_an_undo_tried_again_is_reported_again(store: Store) -> None:
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, S.VERIFIED)
+    store.receipt_posted(OWNER, POST, 1, "1700000200.000100", [S.VERIFIED])
+    undo(store, KEY, S.VERIFIED, S.UNDO_FAILED)
+    store.receipt_posted(OWNER, POST, 1, "1700000300.000100", [S.UNDO_FAILED])
+    undo(store, KEY, S.UNDO_FAILED, S.UNDO_FAILED)  # refused again: the same state is a new outcome
+    assert store.receipts_due() == [(POST, 1)]
+    store.receipt_posted(OWNER, POST, 1, "1700000400.000100", [S.UNDO_FAILED])
+    assert store.receipts_due() == []
+
+
+def test_an_undo_of_one_movement_reports_the_whole_plan(store: Store) -> None:
+    reply(store, record(TAKE, TWO))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, S.VERIFIED)
+    write(store, SECOND, S.VERIFIED)
+    store.receipt_posted(OWNER, POST, 1, "1700000200.000100", [S.VERIFIED, S.VERIFIED])
+    undo(store, SECOND, S.VERIFIED, S.UNDONE)
+    assert store.receipts_due() == [(POST, 1)]
+    with pytest.raises(StateConflict, match="no longer in the states"):
+        store.receipt_posted(OWNER, POST, 1, "1700000300.000100", [S.VERIFIED, S.VERIFIED])
+    store.receipt_posted(OWNER, POST, 1, "1700000300.000100", [S.VERIFIED, S.UNDONE])
+    assert [store.request(key).receipt_state for key in (KEY, SECOND)] == [S.VERIFIED, S.UNDONE]
+    assert store.receipts_due() == []
+
+
+def downgrade_to_19(path: Path, reported: dict[int, str | None]) -> None:
+    """Put the database back to schema 19, as 0019 left it: `receipt_state` takes the 3 apply outcomes only."""
+    db = sqlite3.connect(path, isolation_level=None)
+    db.execute("ALTER TABLE requests DROP COLUMN receipt_state")
+    db.execute(
+        "ALTER TABLE requests ADD COLUMN receipt_state TEXT CHECK ("
+        " receipt_state IS NULL OR receipt_state IN ('verified', 'verify_failed', 'failed'))"
+    )
+    for request_id, state in reported.items():
+        db.execute("UPDATE requests SET receipt_state = ? WHERE id = ?", (state, request_id))
+    db.execute("PRAGMA user_version = 19")
+    db.close()
+
+
+def test_undos_concluded_before_receipts_reported_them_are_not_reported(store: Store, tmp_path: Path) -> None:
+    reply(store, record(TAKE, TWO))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, S.VERIFIED)
+    write(store, SECOND, S.VERIFIED)
+    undo(store, SECOND, S.VERIFIED, S.UNDONE)
+    first, second = store.request(KEY).id, store.request(SECOND).id
+    store.close()
+    downgrade_to_19(tmp_path / "stockthread.db", {first: "verified", second: "verified"})  # schema 19 kept these
+    reopened = Store.open(tmp_path / "stockthread.db")
+    assert reopened.schema_version == 20
+    assert [reopened.request(key).receipt_state for key in (KEY, SECOND)] == [S.VERIFIED, S.UNDONE]
+    assert reopened.receipts_due() == []
+    reopened.close()
+
+
+def test_a_reported_state_not_yet_reported_survives_the_migration_and_its_check(store: Store, tmp_path: Path) -> None:
+    reply(store, record(TAKE, TWO))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, S.VERIFIED)
+    write(store, SECOND, S.FAILED)
+    first, second = store.request(KEY).id, store.request(SECOND).id
+    store.close()
+    downgrade_to_19(tmp_path / "stockthread.db", {first: "verified", second: None})
+    reopened = Store.open(tmp_path / "stockthread.db")
+    assert [reopened.request(key).receipt_state for key in (KEY, SECOND)] == [S.VERIFIED, None]
+    assert reopened.receipts_due() == [(POST, 1)]  # the unreported write is still due its receipt
+    reopened.close()
+    db = sqlite3.connect(tmp_path / "stockthread.db", isolation_level=None)
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        db.execute("UPDATE requests SET receipt_state = 'planned' WHERE id = ?", (first,))
+    db.execute("UPDATE requests SET receipt_state = 'undone' WHERE id = ?", (first,))
+    db.close()
+
+
+@pytest.mark.parametrize(("outcome", "found"), [(S.UNDONE, True), (S.VERIFY_FAILED, True), (S.UNDO_FAILED, False)])
+def test_an_undo_a_crash_left_unknown_is_reported_once_recovery_concluded_it(
+    store: Store, outcome: RequestState, found: bool
+) -> None:
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, S.VERIFY_FAILED)
+    store.receipt_posted(OWNER, POST, 1, "1700000200.000100", [S.VERIFY_FAILED])
+    undo(store, KEY, S.VERIFY_FAILED, None)
+    assert store.conclude_crashed_writes(OWNER) == [KEY]
+    assert store.request(KEY).state is S.UNDO_UNKNOWN
+    assert store.receipts_due() == []
+    store.transition(KEY, expected=S.UNDO_UNKNOWN, target=outcome, actor=Actor.RECOVERY, marker_found=found)
+    assert store.receipts_due() == [(POST, 1)]
+    store.receipt_posted(OWNER, POST, 1, "1700000300.000100", [outcome])
+    assert store.receipts_due() == []
+
+
+def test_one_undo_of_a_plan_at_a_time_each_reported(store: Store) -> None:
+    reply(store, record(TAKE, TWO))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, S.VERIFIED)
+    write(store, SECOND, S.VERIFIED)
+    store.receipt_posted(OWNER, POST, 1, "1700000200.000100", [S.VERIFIED, S.VERIFIED])
+    undo(store, KEY, S.VERIFIED, None)
+    with pytest.raises(WriteBlocked, match="in flight"):  # so no receipt can report one undo while another runs
+        undo(store, SECOND, S.VERIFIED, None)
+    assert store.receipts_due() == []
+    store.transition(KEY, expected=S.UNDOING, target=S.UNDONE, actor=Actor.APPLIER)
+    store.receipt_posted(OWNER, POST, 1, "1700000300.000100", [S.UNDONE, S.VERIFIED])
+    undo(store, SECOND, S.VERIFIED, S.UNDO_FAILED)
+    assert store.receipts_due() == [(POST, 1)]
+    store.receipt_posted(OWNER, POST, 1, "1700000400.000100", [S.UNDONE, S.UNDO_FAILED])
+    assert store.receipts_due() == []
+
+
+def test_an_undo_in_flight_at_the_migration_is_reported_once_it_concluded(store: Store, tmp_path: Path) -> None:
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, S.VERIFY_FAILED)
+    undo(store, KEY, S.VERIFY_FAILED, None)
+    request_id = store.request(KEY).id
+    store.close()
+    downgrade_to_19(tmp_path / "stockthread.db", {request_id: "verify_failed"})  # 19 kept it when the undo started
+    reopened = Store.open(tmp_path / "stockthread.db")
+    assert reopened.request(KEY).receipt_state is None
+    reopened.acquire_lock(OWNER, stale_after=timedelta(seconds=60))
+    reopened.transition(KEY, expected=S.UNDOING, target=S.VERIFY_FAILED, actor=Actor.APPLIER)
+    assert reopened.receipts_due() == [(POST, 1)]
     reopened.close()

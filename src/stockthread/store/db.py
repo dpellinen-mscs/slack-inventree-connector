@@ -32,6 +32,7 @@ from stockthread.core.marker import MAX_ATTEMPT, AttemptKind, Marker, marked, ne
 from stockthread.core.marker_check import Outcome, RecordedAttempt, RecordedRequest
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import (
+    NEW_TRY,
     RECEIPT_STATES,
     UNDOABLE,
     UNSETTLED,
@@ -1399,14 +1400,15 @@ class Store:
         return RequestKey(PostKey(workspace_id, channel_id, ts), int(revision), int(sequence))
 
     def _set_state(self, request_id: int, expected: RequestState, target: RequestState, actor: Actor) -> None:
-        """The compare-and-set. Call inside a transaction, after every check. An approval starts a new try, so it
-        forgets the state a receipt reported: the try's outcome is reported even when it is that state again."""
+        """The compare-and-set. Call inside a transaction, after every check. An approval or an undo starts a new try
+        (`NEW_TRY`), so it forgets the state a receipt reported: the try's outcome is reported even when it is that
+        state again (an undo whose read-back disagrees ends `verify_failed`, as its apply may have)."""
         check_transition(expected, target, actor)
         cursor = self._db.execute(
             "UPDATE requests SET state = ?, updated_at = ?,"
-            " receipt_state = CASE WHEN ? = 'approved' THEN NULL ELSE receipt_state END"
+            " receipt_state = CASE WHEN ? THEN NULL ELSE receipt_state END"
             " WHERE id = ? AND state = ?",
-            (target.value, self._now(), target.value, request_id, expected.value),
+            (target.value, self._now(), target in NEW_TRY, request_id, expected.value),
         )
         if cursor.rowcount != 1:
             raise StateConflict(f"request {request_id} is no longer {expected}")
@@ -1550,12 +1552,13 @@ class Store:
         """`receipts_due`, of every plan or of plan `plan_id` only."""
         working = sorted(state.value for state in WORKING)
         concluded = sorted(state.value for state in RECEIPT_STATES)
+        working_marks, concluded_marks = (", ".join("?" for _ in states) for states in (working, concluded))
         rows = self._db.execute(
-            "SELECT o.workspace_id, o.channel_id, o.ts, p.revision FROM plans p JOIN posts o ON o.id = p.post_id"
+            "SELECT o.workspace_id, o.channel_id, o.ts, p.revision FROM plans p JOIN posts o ON o.id = p.post_id"  # noqa: S608
             " WHERE (? IS NULL OR p.id = ?)"
-            " AND EXISTS (SELECT 1 FROM requests r WHERE r.plan_id = p.id AND r.state IN (?, ?, ?)"
+            f" AND EXISTS (SELECT 1 FROM requests r WHERE r.plan_id = p.id AND r.state IN ({concluded_marks})"
             " AND r.receipt_state IS NOT r.state)"
-            " AND NOT EXISTS (SELECT 1 FROM requests r WHERE r.plan_id = p.id AND r.state IN (?, ?, ?, ?, ?, ?))"
+            f" AND NOT EXISTS (SELECT 1 FROM requests r WHERE r.plan_id = p.id AND r.state IN ({working_marks}))"
             " ORDER BY o.id, p.revision",
             [plan_id, plan_id, *concluded, *working],
         ).fetchall()

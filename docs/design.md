@@ -1663,9 +1663,17 @@ button is out of date), and `applier.undo_refusal` allows it for the clicker;
 then the worker's `undo` runs `apply.undo_apply`, and the clicker alone is
 told the outcome. A click handled again (Slack's retry, or a crash after the
 undo started) is refused by the store: two clicks move stock once. With
-writes off the worker has no `undo`, and no click writes. Not built yet: the
-worker posting the receipt, and a new receipt in the thread that reports an
-undo (`requests.receipt_state` holds only the three apply outcomes).
+writes off the worker has no `undo`, and no click writes. Also built: a new
+receipt reports an undo. `undone` and `undo_failed` are receipt states
+(migration 0020), and starting an undo forgets the state the last receipt
+reported, as an approval does, so the plan is due a new receipt once the
+undo concludes, whatever its outcome: `verify_failed` after an apply that
+was already `verify_failed` included. It reports the whole plan, headed
+"Undone" when nothing applied is left and nothing waits for review, or
+"Partly undone" when the rest is still applied and read back as planned
+(migration 0020 also forgets the reported state of an undo in flight); its ts becomes the plan's newest
+receipt, so the older receipt's Undo button is out of date. Not built yet:
+the worker posting the receipt.
 
 ## 8. Data model and audit trail
 

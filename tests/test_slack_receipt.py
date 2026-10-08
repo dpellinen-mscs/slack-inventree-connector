@@ -91,7 +91,11 @@ def test_a_request_never_written_is_not_applied(state: RequestState, words: str)
         (S.VERIFY_FAILED,),
         (S.ACCEPTED,),
         (S.UNDO_FAILED,),
-        (S.UNDONE,),
+        (S.UNDONE, S.UNDO_FAILED),
+        (S.UNDONE, S.VERIFY_FAILED),
+        (S.VERIFIED, S.UNDO_FAILED),
+        (S.VERIFIED, S.UNDONE, S.FAILED),
+        (S.UNDONE, S.PLANNED),  # one still waits for review: not finished
         (S.VERIFIED, S.VERIFY_FAILED),
         (S.VERIFIED, S.FAILED),
         (S.VERIFIED, S.PLANNED),
@@ -102,6 +106,35 @@ def test_anything_but_all_applied_or_none_asks_for_a_check(states: tuple[Request
     body = made(states)
     assert body["text"].startswith("Check this: ")
     assert text_of(body).startswith("*Check this.* Not everything below went as planned.")
+
+
+@pytest.mark.parametrize(
+    "states",
+    [
+        (S.UNDONE,),
+        (S.UNDONE, S.UNDONE),
+        (S.UNDONE, S.FAILED),
+        (S.CANCELLED, S.UNDONE),
+        (S.UNDONE, S.REJECTED),
+        (S.EXPIRED, S.UNDONE),
+    ],
+)
+def test_an_undo_of_everything_applied_says_undone(states: tuple[RequestState, ...]) -> None:
+    body = made(states)
+    assert body["text"].startswith("Undone: ")
+    shown = text_of(body)
+    assert shown.startswith("*Undone.* What was applied below was put back, and read back to check it.")
+    assert "*: undone." in shown
+
+
+@pytest.mark.parametrize("states", [(S.VERIFIED, S.UNDONE), (S.UNDONE, S.VERIFIED, S.VERIFIED)])
+def test_an_undo_of_some_movements_says_the_rest_stays_applied(states: tuple[RequestState, ...]) -> None:
+    body = made(states)
+    assert body["text"].startswith("Partly undone: ")
+    shown = text_of(body)
+    assert shown.startswith("*Partly undone.* What is marked undone below was put back; the rest stays applied.")
+    assert "*: undone." in shown
+    assert "*: applied, and read back as planned." in shown
 
 
 def test_a_read_back_that_did_not_match_says_to_check_inventree() -> None:

@@ -86,10 +86,14 @@ LEFT_NO_CHANGE: frozenset[RequestState] = frozenset({S.UNDONE, S.REJECTED, S.CAN
 no marker and no change. The second may still land, so the store also refuses every apply of such a post (ADR
 0015)."""
 
-RECEIPT_STATES: frozenset[RequestState] = frozenset({S.VERIFIED, S.VERIFY_FAILED, S.FAILED})
-"""States in which a request's write, or its try, has concluded: read back as planned, a check that found a problem,
-or not applied. A plan with a request in one of them that no receipt reported is due a receipt once no request of it
-is `WORKING` (`Store.receipts_due`)."""
+RECEIPT_STATES: frozenset[RequestState] = frozenset({S.VERIFIED, S.VERIFY_FAILED, S.FAILED, S.UNDONE, S.UNDO_FAILED})
+"""States in which a request's write or undo, or its try, has concluded: read back as planned, a check that found a
+problem, not applied, undone, or not undone. A plan with a request in one of them that no receipt reported is due a
+receipt once no request of it is `WORKING` (`Store.receipts_due`)."""
+
+NEW_TRY: frozenset[RequestState] = frozenset({S.APPROVED, S.UNDOING})
+"""States that start a new try of a write or an undo. Moving into one forgets the state a receipt reported, so the
+try's outcome is reported even when it is that state again (`Store._set_state`)."""
 
 WORKING: frozenset[RequestState] = frozenset({S.APPROVED, S.APPLYING, S.APPLIED, S.UNKNOWN, S.UNDOING, S.UNDO_UNKNOWN})
 """States in which a step of the apply or undo protocol is due or in flight. A receipt waits for every request of its
