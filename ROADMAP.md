@@ -150,7 +150,9 @@ payloads whose channel or message does not fit the stored id.
   - [x] The undo request, built from the apply's history entries and refused when the stock moved on since (`inverse.reversals`, `check_undo`, `undo_request`)
   - [x] The undo attempt: store, send, read-back (`apply.undo_apply`, ADR 0017)
   - [x] Whether a person may ask for an undo now: state, `undo.max_age_hours`, earlier undos, poster or approver (`Store.undo_refusal`, `applier.undo_refusal`)
-  - [ ] The Undo button (recovery of an unknown undo: under "Unknown outcomes")
+  - [x] The Undo button: on the receipt with a confirm dialog, checked against the newest receipt, the clicker and the store, then `undo_apply` (`replies.receipt`'s `undo`, `Worker._handle_undo`)
+  - [ ] A new receipt in the thread that reports an undo (migration: `receipt_state` takes `undone` and `undo_failed`)
+  - [ ] Recovery of an unknown undo run by the worker: under "Unknown outcomes"
 - [ ] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
 - [x] Instance lock: one connector per database (`Store.acquire_lock`, heartbeat, `run.run`; `test_run.py`)
 - [ ] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word matches, fuzzy matches and picked candidates as aliases, for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo offers to forget the alias

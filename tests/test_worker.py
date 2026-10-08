@@ -2805,10 +2805,11 @@ def test_a_question_is_answered_once(store: Store, clock: Clock, path: Path) -> 
         ({"value": "x" * 22}, "unknown_button"),
         ({"message_ts": "1790009999.000002"}, "other_message"),
         ({"channel": "C0ACME002"}, "other_message"),
-        ({"action_id": "undo"}, "action_not_handled_yet"),
+        ({"action_id": "undo"}, "unknown_button"),  # a question's button id is no request's marker id
+        ({"action_id": "reject"}, "action_not_handled_yet"),
         ({"team": "T0OTHER01"}, "wrong_workspace"),
     ],
-)  # the out-of-date note for the first three; nothing is said about a button that does nothing or a payload
+)  # the out-of-date note for the first four; nothing is said about a button that does nothing or a payload
 # the ingest checks drop
 def test_a_click_that_does_not_fit_its_stored_button_answers_nothing(
     store: Store, clock: Clock, path: Path, change: dict[str, str], outcome: str

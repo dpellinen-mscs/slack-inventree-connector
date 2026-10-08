@@ -1449,7 +1449,8 @@ connector never has two InvenTree writes in flight and cannot race itself.
    reported, only while they are still the states (migration 0019, which
    marks every write concluded before it as reported). A crash between the
    post and the record posts it again: a duplicate beats a silent drop.
-   Not posted by the worker yet, and no Undo button yet.
+   Not posted by the worker yet. Its Undo button is built (`replies.receipt`'s
+   `undo`, see "Undo" below).
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
 It takes the process's writer lock, and waits, nothing read and still
@@ -1633,7 +1634,7 @@ For stock that is not serialized, undo restores quantities per part and
 location. It does not promise to restore stock item ids, because a split
 changes them.
 
-Built: `apply.undo_apply` runs one undo by the protocol (ADR 0017: its read-back compares with the stock the undo was built on, `inverse.verify_undo`), not wired to a button yet, and `apply.recover_undo` concludes an unknown one (ADR 0018). Also built: `inverse.reversals` reads
+Built: `apply.undo_apply` runs one undo by the protocol (ADR 0017: its read-back compares with the stock the undo was built on, `inverse.verify_undo`), and `apply.recover_undo` concludes an unknown one (ADR 0018). Also built: `inverse.reversals` reads
 what each line of the apply did from the entries that carry its marker
 (one entry per line, on the line's item: a location or split entry for a
 transfer, the added, removed or counted entry otherwise; anything else, or
@@ -1651,7 +1652,20 @@ the movement touched is back). Also built: `Store.undo_refusal` and
 `applier.undo_refusal` say whether a person may ask for an undo now: an
 undoable state, an apply that wrote less than `undo.max_age_hours` ago, no
 earlier undo that InvenTree did not refuse, and the poster or an approver
-asking. Not built yet: the button.
+asking. Also built: the Undo button. `replies.receipt` puts one on each
+movement shown whose request an undo may start from (as the section's
+accessory, so a receipt of 20 movements still fits Slack's 50 blocks), with
+the request's marker id as its value and a confirm dialog, so a stray tap
+writes nothing. A click (`Worker._handle_undo`) undoes only when the value is
+a request's marker id, the click came from the newest receipt of that
+request's plan in the plan's channel (`plans.receipt_ts`: an older receipt's
+button is out of date), and `applier.undo_refusal` allows it for the clicker;
+then the worker's `undo` runs `apply.undo_apply`, and the clicker alone is
+told the outcome. A click handled again (Slack's retry, or a crash after the
+undo started) is refused by the store: two clicks move stock once. With
+writes off the worker has no `undo`, and no click writes. Not built yet: the
+worker posting the receipt, and a new receipt in the thread that reports an
+undo (`requests.receipt_state` holds only the three apply outcomes).
 
 ## 8. Data model and audit trail
 

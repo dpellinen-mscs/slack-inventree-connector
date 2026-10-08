@@ -20,11 +20,12 @@ the waiting post asked least recently, so neither one slow call nor one post who
 others back. The reading is kept and its reply is posted in the next step, after the queue has been drained:
 an edit that came during the call makes the post read again.
 
-Nothing here writes to InvenTree. Message text is read from the stored raw events and never logged. Clicks
-are M2 (review). Every edit and deletion is noted by message key, in whatever order Slack delivers it, and a
-post is read as its messages are now: each one as its newest edit shows it (by the edit's own timestamp, not
-by arrival), and a deleted one left out. A post with a change that cannot be read (a tombstone, an edit
-without a stamp, a body that expired) is never read from its original text: it is withheld as `changed`.
+Nothing here writes to InvenTree but an Undo click on a receipt, through `undo` (None while writes are off). Message
+text is read from the stored raw events and never logged. Clicks are M2 (review). Every edit and deletion is noted
+by message key, in whatever order Slack delivers it, and a post is read as its messages are now: each one as its
+newest edit shows it (by the edit's own timestamp, not by arrival), and a deleted one left out. A post with a change
+that cannot be read (a tombstone, an edit without a stamp, a body that expired) is never read from its original
+text: it is withheld as `changed`.
 
 A message that joins a post after its dry run (a thread reply, or a root that catch-up found later), or an
 edit or deletion of one of its messages noted after it was decided, makes the post due again, as revision 2,
@@ -57,10 +58,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
 
+from stockthread.applier import plan_views, undo_refusal
+from stockthread.apply import Applied
 from stockthread.config import Settings
 from stockthread.core import extract_rules
 from stockthread.core.answers import Effects, Given, Typed, replay
 from stockthread.core.grouping import seconds
+from stockthread.core.marker import is_marker_id
 from stockthread.core.matching import Catalog, match_location, match_part
 from stockthread.core.model import (
     CandidateMovement,
@@ -76,6 +80,7 @@ from stockthread.core.model import (
     PostKey,
     ReasonCode,
     ReasonSource,
+    RequestKey,
     ReviewReason,
     operation_for,
 )
@@ -88,11 +93,12 @@ from stockthread.core.questions import (
     question_json,
     reason_line,
 )
+from stockthread.core.requests import RequestState
 from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
 from stockthread.core.validate import photo_not_read, validate
 from stockthread.llm.extract import NoReading, ProviderError
-from stockthread.plan_record import plan_of
+from stockthread.plan_record import NotRebuilt, plan_of
 from stockthread.slack.catchup import is_catch_up
 from stockthread.slack.ingest import (
     Click,
@@ -109,6 +115,8 @@ from stockthread.slack.ingest import (
 )
 from stockthread.slack.replies import (
     ANSWER_ACTION,
+    CLICK_FEEDBACK,
+    UNDO_ACTION,
     MovementView,
     click_feedback,
     dry_run_reply,
@@ -281,6 +289,25 @@ class _Sent:
     """The plan the reply makes when it could apply in full, stored with it (ADR 0016)."""
 
 
+Undoer = Callable[[RequestKey, MovementView, str], Applied]
+"""(request, the movement its request was built from, the Slack user who asked) -> where `apply.undo_apply` left the
+request, run to the end (run.py gives it the InvenTree client, the writer lock and the instance lock's owner)."""
+
+UNDO_FEEDBACK = {
+    RequestState.UNDONE: "Undone: the stock is back as it was before this movement, and was read back to check it.",
+    RequestState.UNDO_FAILED: "Not undone: InvenTree refused the undo, or the connector would not send it. Look at the "
+    "movement in InvenTree.",
+    RequestState.UNDO_UNKNOWN: "The undo was sent, but whether it went through is not known yet. Please do not undo it "
+    "by hand until it has been checked.",
+    RequestState.VERIFY_FAILED: "The undo was sent, but its check found a problem. Look at the movement in InvenTree "
+    "before relying on it.",
+}
+"""What the clicker alone is told about each state an undo that started ends in."""
+UNDO_WRITES_OFF = "Not undone: writes are turned off in the connector's settings. Undo it in InvenTree instead."
+UNDO_ALREADY = "This movement was undone already."
+UNDO_ERROR = "Not undone: something went wrong before anything was changed. Please try again in a few minutes."
+UNDO_NOT_REBUILT = "Not undone: the connector cannot rebuild this movement from its records. Undo it in InvenTree."
+
 StockReader = Callable[[Sequence[tuple[int, int]]], Mapping[tuple[int, int], Sequence[StockItem]]]
 """(part, location) pairs -> the stock items of that part in that location itself, in stock (`stock_items`)."""
 
@@ -313,6 +340,8 @@ class Worker:
     """Checked between posts, so a stop request does not wait for a whole backlog."""
     llm: PostExtractor | None = None
     """Reads the posts the rule-based extractor declines. None: those posts get no reply."""
+    undo: Undoer | None = None
+    """Runs the undo an Undo click asks for, once every check passed. None while writes are off: no click writes."""
     _llm_read: dict[PostKey, dict[tuple[MessageInput, ...], Extraction]] = field(default_factory=dict)
     """What the model read, and the messages as it read them, kept until the post is finished: a reply that is
     tried again is not read again. A post that has gained, lost or changed a message since is. A post is read with
@@ -433,6 +462,8 @@ class Worker:
             return EventStatus.DROPPED, click.reason.value
         if not isinstance(click, Click):
             return EventStatus.DROPPED, "not_a_click"
+        if click.action_id == UNDO_ACTION:
+            return self._handle_undo(click)
         if click.action_id != ANSWER_ACTION:
             return EventStatus.DROPPED, "action_not_handled_yet"
         button = self.store.button(click.value)
@@ -452,6 +483,68 @@ class Worker:
         )
         if text is not None:
             self._feedback = _Feedback(click.channel, click.user, click.thread_ts or click.message_ts, text)
+        return status, outcome
+
+    def _handle_undo(self, click: Click) -> tuple[EventStatus, str]:
+        """Run the undo an Undo click on a receipt asks for (design section 7, "Undo"), after the checks against the
+        stored request: the button's value is a request's marker id, the click came from the newest receipt of that
+        request's plan (`PlanRow.receipt_ts`) in its channel, the clicker is the poster or an approver, and the store
+        allows an undo now (`applier.undo_refusal`). `apply.undo_apply` checks the stock again under the writer lock.
+        A click handled again (Slack's retry, or a crash after the undo started) is refused by the store: an earlier
+        undo that was not refused blocks every later one, so two clicks move stock once. The clicker alone is told
+        what came of it."""
+        key = self.store.request_with_marker(click.value) if is_marker_id(click.value) else None
+        if key is None:
+            return self._undo_told(click, EventStatus.DROPPED, "unknown_button", CLICK_FEEDBACK["unknown_button"])
+        plan = self.store.plan(key.post, key.revision)
+        if (
+            key.post.workspace_id != self.settings.slack.workspace_id
+            or key.post.channel_id != click.channel
+            or plan.receipt_ts is None
+            or plan.receipt_ts != click.message_ts
+        ):
+            return self._undo_told(click, EventStatus.DROPPED, "other_message", CLICK_FEEDBACK["other_message"])
+        try:
+            rebuilt = plan_views(self.store, plan)
+        except NotRebuilt as error:
+            log.warning("undo of request %s: %s", key, error)
+            return self._undo_told(click, EventStatus.DROPPED, "not_rebuilt", UNDO_NOT_REBUILT)
+        refused = undo_refusal(
+            self.store,
+            key,
+            user=click.user,
+            poster=rebuilt.poster,
+            approvers=self.settings.slack.approvers,
+            max_age=timedelta(hours=self.settings.undo.max_age_hours),
+        )
+        if refused is not None:
+            # A second click, or this click handled again after its undo (a crash before the event was finished).
+            text = UNDO_ALREADY if self.store.request(key).state is RequestState.UNDONE else f"Not undone: {refused}."
+            return self._undo_told(click, EventStatus.DROPPED, "undo_refused", text)
+        if self.undo is None:
+            return self._undo_told(click, EventStatus.DROPPED, "writes_off", UNDO_WRITES_OFF)
+        before = self.store.request(key).state
+        self.beat(now=True)  # the undo reads and writes InvenTree under its own deadlines
+        try:
+            applied = self.undo(key, rebuilt.views[key.sequence - 1], click.user)
+        except LockLost:
+            raise
+        except Exception as error:
+            if self.store.request(key).state is before:
+                # Nothing was stored: the click may be handled again. Told only if it is not (`drain`).
+                self._undo_told(click, EventStatus.FAILED, "", UNDO_ERROR)
+                raise
+            _log_failure("undo of request", key, error)
+            applied = Applied(self.store.request(key).state, f"failed: {_code(error)}")
+        log.info("undo of request %s: %s (%s)", key, applied.state, applied.why)
+        if applied.state is before and applied.why.startswith("no undo: "):  # refused before its intent was stored
+            why = applied.why.removeprefix("no undo: ")
+            return self._undo_told(click, EventStatus.DROPPED, "undo_refused", f"Not undone: {why}.")
+        text = UNDO_FEEDBACK.get(applied.state, f"The undo ended as {applied.state}. Look at it in InvenTree.")
+        return self._undo_told(click, EventStatus.DONE, applied.state.value, text)
+
+    def _undo_told(self, click: Click, status: EventStatus, outcome: str, text: str) -> tuple[EventStatus, str]:
+        self._feedback = _Feedback(click.channel, click.user, click.thread_ts or click.message_ts, text)
         return status, outcome
 
     def _tell(self, event_id: int | str, feedback: _Feedback, what: str = "click feedback") -> None:

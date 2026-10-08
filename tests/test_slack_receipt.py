@@ -9,8 +9,16 @@ import pytest
 from views import DESTINATION, SOURCE, picked, view
 
 from stockthread.core.model import MovementType
-from stockthread.core.requests import WORKING, RequestState
-from stockthread.slack.replies import MAX_BLOCKS, MAX_MOVEMENTS, MAX_SECTION, RECEIPT_WORDS, receipt
+from stockthread.core.requests import UNDOABLE, WORKING, RequestState
+from stockthread.slack.replies import (
+    MAX_BLOCKS,
+    MAX_MOVEMENTS,
+    MAX_SECTION,
+    RECEIPT_WORDS,
+    UNDO_ACTION,
+    UNDO_CONFIRM,
+    receipt,
+)
 
 S = RequestState
 PARTS = {1: "Norvane Disc 40 Access Point", 2: "UPS 600 VA"}
@@ -186,3 +194,48 @@ def test_a_url_that_is_not_ascii_gets_no_links() -> None:
     shown = text_of(made((S.VERIFIED,), url="https://lager.bücher.test"))
     assert "/web/stock/" not in shown
     assert "In InvenTree" not in shown
+
+
+def test_an_undoable_movement_carries_an_undo_button_that_asks_to_confirm() -> None:
+    views = [view(stock=(picked((57, "2")),)), view(stock=(picked((58, "1")),))]
+    body = receipt(
+        views, [S.VERIFIED, S.FAILED], [MARKER, MARKER], PARTS, LOCATIONS, inventree_url=URL, approved_by=None,
+        undo=[MARKER, None],
+    )  # fmt: skip
+    buttons = [block["accessory"] for block in body["blocks"] if "accessory" in block]
+    assert len(buttons) == 1
+    assert body["blocks"][1]["accessory"] is buttons[0]  # on the first movement's section
+    assert buttons[0]["action_id"] == UNDO_ACTION
+    assert buttons[0]["value"] == MARKER
+    assert buttons[0]["text"]["text"] == "Undo"
+    assert buttons[0]["confirm"] == UNDO_CONFIRM
+    assert len(body["blocks"]) == len(made((S.VERIFIED, S.FAILED))["blocks"])  # no block of its own
+
+
+def test_no_undo_button_unless_asked_for() -> None:
+    assert not [block for block in made((S.VERIFIED,))["blocks"] if "accessory" in block]
+
+
+def test_an_undo_button_needs_a_marker_id_and_a_state_an_undo_may_start_from() -> None:
+    def with_undo(state: RequestState, value: str | None) -> dict[str, Any]:
+        return receipt([view()], [state], [MARKER], PARTS, LOCATIONS, inventree_url=URL, approved_by=None, undo=[value])
+
+    for state in UNDOABLE:
+        assert "accessory" in with_undo(state, MARKER)["blocks"][1]
+    for state in set(RECEIPT_WORDS) - UNDOABLE:
+        with pytest.raises(ValueError, match="undo may start from"):
+            with_undo(state, MARKER)
+    with pytest.raises(ValueError, match="marker id"):
+        with_undo(S.VERIFIED, "<!channel>")
+    with pytest.raises(ValueError, match="one undo value"):
+        receipt([view()], [S.VERIFIED], [MARKER], PARTS, LOCATIONS, inventree_url=URL, approved_by=None, undo=[])
+
+
+def test_a_receipt_of_many_undoable_movements_still_fits_in_one_message() -> None:
+    count = MAX_MOVEMENTS + 3
+    body = receipt(
+        [view(stock=(picked((57, "2")),))] * count, [S.VERIFIED] * count, [MARKER] * count, PARTS, LOCATIONS,
+        inventree_url=URL, approved_by=None, undo=[MARKER] * count,
+    )  # fmt: skip
+    assert len(body["blocks"]) <= MAX_BLOCKS
+    assert len([block for block in body["blocks"] if "accessory" in block]) == MAX_MOVEMENTS
