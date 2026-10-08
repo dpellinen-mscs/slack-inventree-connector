@@ -1262,8 +1262,8 @@ A plan has its own state: `current`, `stale`, `expired`, `applied`,
 | `verify_failed` | Read-back or recovery found something unexpected | `accepted` or `undoing`, by the operator |
 | `accepted` | The operator accepted the observed state. Final | |
 | `undoing` | Undo intent stored | `undone`, `undo_failed`, `undo_unknown` (also by recovery at start, after a crash, and after a read error in the undo's read-back), `verify_failed` (accepted, but the read-back disagrees; ADR 0017) |
-| `undo_failed` | InvenTree refused the undo. Nothing was written | `undoing`, by a human, as a new attempt (only after refused undos) |
-| `undo_unknown` | The outcome of the undo is not known | `undone`, `verified` or `verify_failed`, by recovery |
+| `undo_failed` | InvenTree refused the undo, or recovery found no undo marker and no change (ADR 0018) | `undoing`, by a human, as a new attempt (only after refused undos) |
+| `undo_unknown` | The outcome of the undo is not known | `undone`, `undo_failed` (no marker and nothing changed; ADR 0018) or `verify_failed`, by recovery |
 | `undone` | The undo is verified. Final | |
 | `rejected`, `cancelled`, `expired` | Never applied. Final | |
 
@@ -1576,8 +1576,11 @@ process could send anything). It moves the request to `unknown`
 (or `undo_unknown`) as recovery, and the settle time starts then. A crash
 before the write left looks the same: recovery finds no marker and no
 change, so the request becomes `failed` with an unknown attempt, which is
-never retried and blocks applies of the post (ADR 0015). `undo_unknown`
-has no recovery yet.
+never retried and blocks applies of the post (ADR 0015). An `undo_unknown`
+undo is concluded by `apply.recover_undo` (ADR 0018), after the same settle
+time: its marker found, it is read back like any undo (`undone` or
+`verify_failed`); not found, the stock is compared with the undo's own
+snapshot, and only no change at all is `undo_failed`, never undone again.
 
 Recovery records its conclusion about the marker on the attempt. A marker
 found later for an attempt that recovery did not find is a late write:
@@ -1629,7 +1632,7 @@ For stock that is not serialized, undo restores quantities per part and
 location. It does not promise to restore stock item ids, because a split
 changes them.
 
-Built: `apply.undo_apply` runs one undo by the protocol (ADR 0017: its read-back compares with the stock the undo was built on, `inverse.verify_undo`), not wired to a button yet, without recovery of an unknown undo. Also built: `inverse.reversals` reads
+Built: `apply.undo_apply` runs one undo by the protocol (ADR 0017: its read-back compares with the stock the undo was built on, `inverse.verify_undo`), not wired to a button yet, and `apply.recover_undo` concludes an unknown one (ADR 0018). Also built: `inverse.reversals` reads
 what each line of the apply did from the entries that carry its marker
 (one entry per line, on the line's item: a location or split entry for a
 transfer, the added, removed or counted entry otherwise; anything else, or
@@ -1643,8 +1646,7 @@ one, has no undo: back at 0 the item may be deleted. `inverse.undo_request` buil
 request with an undo marker: a transfer back moves the item the apply
 moved, or the new item its split made, with `merge: false`. Tested on
 every pinned server (`tests/integration/test_undo_server.py`: every total
-the movement touched is back). Not built yet: the undo attempt (store,
-send, read-back, recovery), `undo.max_age` and the button.
+the movement touched is back). Not built yet: `undo.max_age` and the button.
 
 ## 8. Data model and audit trail
 

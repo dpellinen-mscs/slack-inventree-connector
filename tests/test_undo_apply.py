@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import anyio
@@ -13,12 +14,13 @@ import pytest
 from fake_inventree import ITEM, FakeInvenTree
 from views import DESTINATION, SOURCE, picked, view
 
-from stockthread.apply import Applied, apply_request, undo_apply
-from stockthread.core.marker import AttemptKind, Marker
+from stockthread.apply import Applied, _check_stored_undo, apply_request, recover_undo, undo_apply
+from stockthread.core.marker import AttemptKind, Marker, new_marker_id
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
 from stockthread.gate import Judgement, Verdict
 from stockthread.inventree import InvenTreeError
+from stockthread.inverse import Reversal, undo_request
 from stockthread.plan import plan_requests
 from stockthread.store import Store
 from stockthread.writer import Outcome, WriteRefused
@@ -205,6 +207,33 @@ async def test_a_read_error_in_the_undo_read_back_leaves_it_unknown(store: Store
 
 
 @pytest.mark.anyio
+async def test_a_reversed_item_deleted_before_the_undo_refuses_it_and_changes_nothing(store: Store) -> None:
+    fake = await applied(store)
+    del fake.items[ITEM]  # used up at the destination; InvenTree deleted it and keeps its history
+    refused = await undo(store, fake)
+    assert refused == Applied(S.VERIFIED, "no undo: stock item 57 no longer exists")
+    assert store.markers(KEY) == [Marker(store.request(KEY).marker_id, AttemptKind.APPLY, 1)]
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.anyio
+async def test_a_reversed_item_deleted_right_after_the_undo_is_verify_failed_not_unknown(store: Store) -> None:
+    fake = await applied(store)
+
+    def used_up() -> None:
+        del fake.items[ITEM]
+
+    fake.after_write = used_up
+    done = await undo(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.problems == (
+        f"stock item 57 is not at location {SOURCE}",
+        f"part 1 at location {SOURCE} holds 0, the undo should leave 2",
+        "stock item 57 is gone",
+    )
+
+
+@pytest.mark.anyio
 async def test_a_read_error_before_the_undo_changes_nothing(store: Store) -> None:
     fake = await applied(store)
     fake.fail_stock_reads = True
@@ -212,3 +241,200 @@ async def test_a_read_error_before_the_undo_changes_nothing(store: Store) -> Non
         await undo(store, fake)
     assert store.request(KEY).state is S.VERIFIED
     assert store.markers(KEY) == [Marker(store.request(KEY).marker_id, AttemptKind.APPLY, 1)]
+
+
+async def unknown_undo(store: Store, *, lands: bool) -> FakeInvenTree:
+    """The fake after a verified apply of MOVE and an undo whose answer was lost: `lands`, the undo ran all the
+    same."""
+    fake = await applied(store)
+    fake.answer, fake.lands = Outcome.UNKNOWN, lands
+    assert (await undo(store, fake)).state is S.UNDO_UNKNOWN
+    fake.answer, fake.lands = Outcome.ACCEPTED, False
+    return fake
+
+
+async def recover(store: Store, fake: FakeInvenTree, settle: timedelta = timedelta(0)) -> Applied:
+    assert fake.lock is not None
+    return await recover_undo(KEY, MOVE, store=store, reader=fake, lock=fake.lock, settle=settle)
+
+
+def undo_found(store: Store) -> bool | None:
+    (request,) = store.recorded_requests(POST)
+    return request.attempts[-1].marker_found
+
+
+@pytest.mark.anyio
+async def test_recovery_of_an_undo_waits_for_the_settle_time_and_reads_nothing(store: Store) -> None:
+    fake = await unknown_undo(store, lands=True)
+    fake.fail_reads = True
+    waiting = await recover(store, fake, settle=timedelta(hours=1))
+    assert waiting == Applied(S.UNDO_UNKNOWN, "still settling: the undo may be running on the server")
+    assert store.request(KEY).state is S.UNDO_UNKNOWN
+
+
+@pytest.mark.anyio
+async def test_an_undo_that_landed_is_found_and_read_back_as_undone(store: Store) -> None:
+    fake = await unknown_undo(store, lands=True)
+    assert await recover(store, fake) == Applied(S.UNDONE, "undo marker found; read back: as built")
+    assert undo_found(store) is True
+    assert len(fake.sent) == 2
+
+
+@pytest.mark.anyio
+async def test_an_undo_that_landed_but_reads_back_wrong_is_verify_failed(store: Store) -> None:
+    fake = await unknown_undo(store, lands=True)
+    fake.write_entry(ITEM, "someone else", {}, 1)
+    done = await recover(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.problems == ("stock item 57 has history entries 1003 that are not this request's",)
+    assert undo_found(store) is True
+
+
+@pytest.mark.anyio
+async def test_an_undo_that_never_ran_is_undo_failed_and_never_sent_again(store: Store) -> None:
+    fake = await unknown_undo(store, lands=False)
+    recovered = await recover(store, fake)
+    assert recovered == Applied(S.UNDO_FAILED, "undo marker not found; nothing changed, so it never ran")
+    assert undo_found(store) is False
+    assert fake.items[ITEM][1] == DESTINATION
+    refused = await undo(store, fake)  # it may still land: a second undo would reverse the apply twice
+    assert refused.state is S.UNDO_FAILED
+    assert refused.why.startswith("no undo: an earlier undo of this request was not refused by InvenTree")
+    assert len(fake.sent) == 2
+
+
+@pytest.mark.anyio
+async def test_an_undo_not_found_whose_stock_changed_is_verify_failed(store: Store) -> None:
+    """The undo's entry is missing (1.5.6 with PostgreSQL drops an entry whose notes are too long), but the item moved
+    back all the same: never concluded as not run."""
+    fake = await unknown_undo(store, lands=False)
+    fake.items[ITEM][1] = SOURCE
+    fake.write_entry(ITEM, "", {"location": SOURCE}, 20)
+    done = await recover(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.why == "undo marker not found; the stock changed"
+    assert done.problems == (
+        f"stock item 57 is no longer at location {DESTINATION}",
+        f"part 1 at location {SOURCE} holds 2, the undo's snapshot says 0",
+        f"part 1 at location {DESTINATION} holds 0, the undo's snapshot says 2",
+        "stock item 57 has history entries 1002 the undo's snapshot lacks",
+    )
+    assert undo_found(store) is False
+
+
+@pytest.mark.anyio
+async def test_an_undo_not_found_with_another_attempt_in_the_history_is_verify_failed(store: Store) -> None:
+    fake = await unknown_undo(store, lands=False)
+    fake.write_entry(ITEM, f"{undo_marker(store, 2)} U0DAN0001", {}, 1)  # an attempt nobody recorded
+    done = await recover(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.problems[0] == "history entries 1002 carry another attempt"
+
+
+@pytest.mark.anyio
+async def test_a_read_error_in_undo_recovery_changes_nothing(store: Store) -> None:
+    fake = await unknown_undo(store, lands=True)
+    fake.fail_stock_reads = True
+    with pytest.raises(InvenTreeError):
+        await recover(store, fake)
+    assert store.request(KEY).state is S.UNDO_UNKNOWN
+    assert undo_found(store) is None
+    fake.fail_stock_reads = False
+    assert (await recover(store, fake)).state is S.UNDONE
+
+
+@pytest.mark.anyio
+async def test_recovery_concludes_an_undo_whose_read_back_could_not_read(store: Store) -> None:
+    fake = await applied(store)
+    fake.fail_reads_after_write = True
+    fake.sent.clear()
+    with pytest.raises(InvenTreeError):
+        await undo(store, fake)
+    fake.fail_reads_after_write = False
+    assert (await recover(store, fake)).state is S.UNDONE
+
+
+@pytest.mark.anyio
+async def test_only_an_unknown_undo_is_recovered(store: Store) -> None:
+    fake = await applied(store)
+    with pytest.raises(ValueError, match="verified, not undo_unknown"):
+        await recover(store, fake)
+
+
+def test_a_stored_undo_the_apply_history_does_not_make_is_refused() -> None:
+    found = [Reversal(ITEM, Decimal(2), Decimal(2))]
+    marker = Marker(new_marker_id(), AttemptKind.UNDO, 1)
+    body = dict(undo_request(MOVE, found, marker, user="U0DAN0001").body)
+    _check_stored_undo(MOVE, found, marker, body)
+    with pytest.raises(ValueError, match="not the one the apply's history makes"):
+        _check_stored_undo(MOVE, found, marker, {**body, "items": [{"pk": ITEM, "quantity": "1", "merge": False}]})
+    with pytest.raises(ValueError, match="does not lead its notes with its marker"):
+        _check_stored_undo(MOVE, found, Marker(marker.marker_id, AttemptKind.UNDO, 2), body)
+
+
+@pytest.mark.anyio
+async def test_an_undo_found_with_another_attempt_in_the_history_is_verify_failed(store: Store) -> None:
+    fake = await unknown_undo(store, lands=True)
+    fake.write_entry(ITEM, f"{undo_marker(store, 2)} U0DAN0001", {}, 1)  # an attempt nobody recorded
+    done = await recover(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.problems[0] == "history entries 1003 carry another attempt"
+    assert undo_found(store) is True
+
+
+@pytest.mark.parametrize("lands", [True, False])
+@pytest.mark.anyio
+async def test_an_apply_history_that_no_longer_shows_what_the_undo_reversed_is_verify_failed(
+    store: Store, lands: bool
+) -> None:
+    fake = await unknown_undo(store, lands=lands)
+    fake.entries = [entry for entry in fake.entries if entry[0] != 1001]  # the apply's entry, deleted by an admin
+    done = await recover(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.why == "the apply's history no longer shows what the undo reversed"
+    (problem,) = done.problems
+    assert problem.startswith("stock item 57 has 0 history entries of the apply, not 1: ")
+    assert undo_found(store) is lands
+
+
+@pytest.mark.parametrize("lands", [True, False])
+@pytest.mark.anyio
+async def test_a_reversed_item_deleted_before_recovery_is_verify_failed(store: Store, lands: bool) -> None:
+    """InvenTree refuses the history of an item it deleted (`test_char_deplete_deletes_item_keeps_history`):
+    recovery reports the item gone instead of failing on every run, the undo found or not."""
+    fake = await unknown_undo(store, lands=lands)
+    del fake.items[ITEM]
+    done = await recover(store, fake)
+    assert done.state is S.VERIFY_FAILED
+    assert done.problems[-1] == "stock item 57 is gone"
+    assert undo_found(store) is lands
+
+
+@pytest.mark.anyio
+async def test_a_history_read_error_on_an_item_that_exists_still_raises_in_recovery(store: Store) -> None:
+    fake = await unknown_undo(store, lands=True)
+    fake.history_fails = {ITEM}
+    with pytest.raises(InvenTreeError):
+        await recover(store, fake)
+    assert store.request(KEY).state is S.UNDO_UNKNOWN
+
+
+@pytest.mark.anyio
+async def test_a_history_read_error_on_an_item_that_exists_raises_around_the_undo(store: Store) -> None:
+    """Only an item InvenTree says is gone is reported gone: before the undo the error raises and nothing is sent;
+    in the undo's read-back it leaves the undo unknown."""
+    fake = await applied(store)
+    fake.history_fails = {ITEM}
+    with pytest.raises(InvenTreeError):
+        await undo(store, fake)
+    assert store.request(KEY).state is S.VERIFIED
+    assert len(fake.sent) == 1
+
+    def fail_history() -> None:
+        fake.history_fails = {ITEM}
+
+    fake.history_fails = set()
+    fake.after_write = fail_history
+    with pytest.raises(InvenTreeError):
+        await undo(store, fake)
+    assert store.request(KEY).state is S.UNDO_UNKNOWN

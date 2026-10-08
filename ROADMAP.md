@@ -140,7 +140,8 @@ payloads whose channel or message does not fit the stored id.
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
   - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`, run by `run.run` at start)
-  - [ ] Recovery of an unknown undo; the worker runs recovery
+  - [x] Recovery of an unknown undo (`apply.recover_undo`, ADR 0018)
+  - [ ] The worker runs recovery
 - [ ] Plans with several requests, and the `partially_applied` state
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
   - [x] The message: each movement's state, its exact changes, links to InvenTree and its marker (`replies.receipt`); due once no write of the plan is due or in flight and one concluded unreported, recorded with the states it reported (`Store.receipts_due`, `Store.receipt_posted`, migration 0019)
@@ -150,7 +151,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] The undo attempt: store, send, read-back (`apply.undo_apply`, ADR 0017)
   - [ ] `undo.max_age` and the Undo button (recovery of an unknown undo: under "Unknown outcomes")
 - [ ] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
-- [ ] Instance lock: one connector per database
+- [x] Instance lock: one connector per database (`Store.acquire_lock`, heartbeat, `run.run`; `test_run.py`)
 - [ ] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word matches, fuzzy matches and picked candidates as aliases, for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo offers to forget the alias
 
 **DoD:** integration tests against every pinned InvenTree version, with one

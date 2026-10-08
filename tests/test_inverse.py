@@ -12,7 +12,17 @@ from stockthread.core.marker import AttemptKind, Marker, new_marker_id
 from stockthread.core.model import MovementType, Operation
 from stockthread.core.resolve import StockItem
 from stockthread.inventree import MarkedEntry
-from stockthread.inverse import NoUndo, Reversal, check_undo, reversals, undo_request, undo_snapshot, verify_undo
+from stockthread.inverse import (
+    NoUndo,
+    Reversal,
+    UndoSnapshot,
+    check_undo,
+    reversals,
+    undo_changes,
+    undo_request,
+    undo_snapshot,
+    verify_undo,
+)
 from stockthread.plan import plan_requests
 from stockthread.precondition import Snapshot, check
 from stockthread.slack.replies import MovementView
@@ -370,3 +380,62 @@ def test_the_undo_of_a_count_reads_back_the_count_it_set_back() -> None:
     wrong = [*entries, entry(800, 57, 10, marker=UNDO, quantity=4.0)]
     problems = verify_undo(applied.view, found, UNDO, before, wrong, now, history={57: [570, 700, 800]})
     assert problems == ["the undo's entry 800 on stock item 57 does not show quantity 5"]
+
+
+def split_snapshot() -> tuple[list[Reversal], UndoSnapshot]:
+    applied = transfer("2")
+    found = applied.reversals(SPLIT)
+    assert isinstance(found, list)
+    return found, undo_snapshot(applied.view, found, BEFORE_UNDO, {57: [570, 700], NEW: [701]})
+
+
+def test_an_undo_snapshot_is_stored_and_read_back_unchanged() -> None:
+    _, before = split_snapshot()
+    assert UndoSnapshot.from_json(before.as_json()) == before
+
+
+@pytest.mark.parametrize(
+    ("stored", "why"),
+    [
+        (None, "has totals, where and history"),
+        ({"totals": {}, "where": {}}, "has totals, where and history"),
+        ({"totals": {}, "where": {}, "history": {}, "stock_items": {}}, "has totals, where and history"),
+        ({"totals": [], "where": {}, "history": {}}, "parts are objects"),
+        ({"totals": {"1": "2"}, "where": {}, "history": {}}, "not of a part at a location"),
+        ({"totals": {"1@10": 2}, "where": {}, "history": {}}, "a decimal string"),
+        ({"totals": {"1@10": "-1"}, "where": {}, "history": {}}, "not a quantity"),
+        ({"totals": {}, "where": {"57": 11}, "history": {}}, "a stored pair is a string"),
+        ({"totals": {}, "where": {"x": "1@11"}, "history": {}}, "not a pk"),
+        ({"totals": {}, "where": {}, "history": {"57": ["570"]}}, "a list of entry pks"),
+    ],
+)
+def test_an_undo_snapshot_that_is_not_one_is_refused(stored: Any, why: str) -> None:
+    with pytest.raises(ValueError, match=why):
+        UndoSnapshot.from_json(stored)
+
+
+def test_an_undo_that_never_ran_leaves_the_stock_as_its_snapshot() -> None:
+    found, before = split_snapshot()
+    assert undo_changes(found, before, BEFORE_UNDO, history={NEW: [701]}) == []
+
+
+def test_any_change_since_the_undo_snapshot_is_reported() -> None:
+    found, before = split_snapshot()
+    moved: Read = {(1, SOURCE): [item(57, "3"), item(58, "1"), item(NEW, "2")], (1, DESTINATION): [item(80, "3")]}
+    assert undo_changes(found, before, moved, history={NEW: [701, 800]}) == [
+        f"stock item 90 is no longer at location {DESTINATION}",
+        f"part 1 at location {SOURCE} holds 6, the undo's snapshot says 4",
+        f"part 1 at location {DESTINATION} holds 3, the undo's snapshot says 5",
+        "stock item 90 has history entries 800 the undo's snapshot lacks",
+    ]
+    short: Read = {(1, SOURCE): [item(57, "3"), item(58, "1")], (1, DESTINATION): [item(80, "3"), item(NEW, "1")]}
+    assert undo_changes(found, before, short, history={NEW: [701]}) == [
+        "stock item 90 holds 1, not the 2 the apply left",
+        f"part 1 at location {DESTINATION} holds 4, the undo's snapshot says 5",
+    ]
+
+
+def test_a_change_to_the_split_parent_alone_is_not_the_undo_running() -> None:
+    """The undo never writes on the item a split took from: its later entries say nothing about the undo."""
+    found, before = split_snapshot()
+    assert undo_changes(found, before, BEFORE_UNDO, history={NEW: [701], 57: [570, 700, 900]}) == []

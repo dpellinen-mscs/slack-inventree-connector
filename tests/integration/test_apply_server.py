@@ -15,7 +15,7 @@ from faultproxy import Fault, FaultProxy, Rule
 from pydantic import SecretStr
 from views import picked, view
 
-from stockthread.apply import apply_request, recover_request
+from stockthread.apply import apply_request, recover_request, recover_undo, undo_apply
 from stockthread.config import InvenTreeSettings
 from stockthread.core.marker import Marker
 from stockthread.core.model import Match, MatchRule, MatchStatus, Operation, PostKey, RequestKey
@@ -153,6 +153,50 @@ async def test_recovery_concludes_an_unknown_outcome_from_the_server(
     assert sum(Decimal(str(row["quantity"])) for row in moved) == (Decimal(2) if landed else 0)
 
 
+@pytest.mark.parametrize(
+    ("fault", "landed"),
+    [(Fault.DROP_AFTER, True), (Fault.DROP_BEFORE, False), (Fault.FAIL_AFTER, True), (Fault.FAIL_BEFORE, False)],
+)
+@pytest.mark.parametrize("quantity", ["2", "5"])  # the undo of a split, and of a whole item
+@pytest.mark.anyio
+async def test_recovery_concludes_an_unknown_undo_from_the_server(
+    store: Store, scratch: Scratch, proxy: FaultProxy, fault: Fault, landed: bool, quantity: str
+) -> None:
+    """The undo's answer is lost or is a proxy's 502. It ran (after): undone, every item back at the source. It never
+    reached the server (before): undo_failed, the apply's stock standing, and no second undo sent."""
+    item = scratch.stock(5)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], quantity)
+    assert await run(store, movement) is RequestState.VERIFIED
+    proxy.inject(Rule("POST", PATHS[Operation.TRANSFER], fault, status=502))
+    lock = anyio.Lock()
+    async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(proxy.url), token()) as writer:
+        undo = await undo_apply(
+            KEY, movement, store=store, reader=reader, writer=writer, lock=lock, lock_owner=OWNER, user="U0DAN0001"
+        )
+        assert undo.state is RequestState.UNDO_UNKNOWN, undo
+        proxy.wait_for(1)
+        recovered = await recover_undo(KEY, movement, store=store, reader=reader, lock=lock, settle=timedelta(0))
+        assert recovered.problems == (), recovered.problems
+        assert recovered.state is (RequestState.UNDONE if landed else RequestState.UNDO_FAILED)
+        if not landed:  # it may still land: a second undo would reverse the apply twice
+            again = await undo_apply(
+                KEY,
+                movement,
+                store=store,
+                reader=reader,
+                writer=writer,
+                lock=lock,
+                lock_owner=OWNER,
+                user="U0DAN0001",
+            )
+            assert again.why.startswith("no undo: an earlier undo of this request was not refused"), again
+    moved = scratch.api.items(scratch.part, scratch.other)
+    assert sum(Decimal(str(row["quantity"])) for row in moved) == (0 if landed else Decimal(quantity))
+    back = scratch.api.items(scratch.part, scratch.parent)
+    assert sum(Decimal(str(row["quantity"])) for row in back) == (Decimal(5) if landed else 5 - Decimal(quantity))
+
+
 @pytest.mark.anyio
 async def test_a_named_item_deleted_since_the_plan_sends_nothing(store: Store, scratch: Scratch) -> None:
     item = scratch.stock(5, delete_on_deplete=True)
@@ -161,3 +205,31 @@ async def test_a_named_item_deleted_since_the_plan_sends_nothing(store: Store, s
     assert scratch.api.status(f"/api/stock/{item['pk']}/") == 404
     assert await run(store, taken(scratch, item["pk"], "2")) is RequestState.PLANNED
     assert scratch.api.items(scratch.part, scratch.other) == []
+
+
+@pytest.mark.parametrize(("fault", "landed"), [(Fault.DROP_AFTER, True), (Fault.DROP_BEFORE, False)])
+@pytest.mark.anyio
+async def test_recovery_of_an_unknown_undo_whose_item_was_deleted_concludes(
+    store: Store, scratch: Scratch, proxy: FaultProxy, fault: Fault, landed: bool
+) -> None:
+    """The reversed item is used up and deleted before recovery runs. Its history query would answer 400; recovery
+    concludes verify_failed instead of failing on every run. On this server the apply's entries no longer show the
+    deleted item either, so the apply-history check concludes it first; the 400 path is in test_undo_apply.py."""
+    item = scratch.stock(5, delete_on_deplete=True)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], "5")
+    assert await run(store, movement) is RequestState.VERIFIED
+    proxy.inject(Rule("POST", PATHS[Operation.TRANSFER], fault, status=502))
+    lock = anyio.Lock()
+    async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(proxy.url), token()) as writer:
+        undo = await undo_apply(
+            KEY, movement, store=store, reader=reader, writer=writer, lock=lock, lock_owner=OWNER, user="U0DAN0001"
+        )
+        assert undo.state is RequestState.UNDO_UNKNOWN, undo
+        proxy.wait_for(1)
+        scratch.api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 5}], "notes": "used up"})
+        assert scratch.api.status(f"/api/stock/{item['pk']}/") == 404
+        recovered = await recover_undo(KEY, movement, store=store, reader=reader, lock=lock, settle=timedelta(0))
+    assert recovered.state is RequestState.VERIFY_FAILED, recovered
+    assert recovered.problems, recovered
+    assert store.recorded_requests(POST)[0].attempts[-1].marker_found is landed

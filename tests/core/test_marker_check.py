@@ -140,11 +140,11 @@ def test_a_verified_request_found_only_by_an_earlier_attempt_is_a_hit_and_missin
     ]
 
 
-def test_an_undo_of_a_verified_request_that_wrote_is_a_hit() -> None:
-    # undo_unknown, recovered as verified: the undo did not happen, so its marker must not be there.
-    verified = request(S.VERIFIED, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.UNKNOWN, NOT_FOUND))
-    assert check(verified, [m(APPLY, 1)]) == []
-    assert check(verified, [m(APPLY, 1), m(UNDO, 1)]) == [(HIT, m(UNDO, 1))]
+def test_an_undo_recovery_did_not_find_that_wrote_late_is_a_hit() -> None:
+    # undo_unknown, recovered as undo_failed: the undo did not happen, so its marker must not be there.
+    failed = request(S.UNDO_FAILED, (APPLY, 1, OC.ACCEPTED), (UNDO, 1, OC.UNKNOWN, NOT_FOUND))
+    assert check(failed, [m(APPLY, 1)]) == []
+    assert check(failed, [m(APPLY, 1), m(UNDO, 1)]) == [(HIT, m(UNDO, 1))]
 
 
 def test_an_undone_request_with_both_markers_is_clear() -> None:

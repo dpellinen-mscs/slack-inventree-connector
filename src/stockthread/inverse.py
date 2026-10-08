@@ -40,7 +40,7 @@ from stockthread.core.model import Operation
 from stockthread.core.resolve import StockItem, Take
 from stockthread.core.write_request import WriteRequest, _check_quantity, _decimal, build_request
 from stockthread.inventree import MarkedEntry
-from stockthread.precondition import Pair, Snapshot, built_from, pairs, places, record
+from stockthread.precondition import Pair, Snapshot, _pk, _quantity, built_from, pairs, places, record
 from stockthread.readback import ADDED, COUNTED, MOVED, REMOVED, SPLIT_CHILD, _number
 from stockthread.slack.replies import MovementView
 
@@ -292,9 +292,37 @@ class UndoSnapshot:
             "history": {str(pk): sorted(entries) for pk, entries in sorted(self.history.items())},
         }
 
+    @classmethod
+    def from_json(cls, stored: Any) -> UndoSnapshot:
+        """The snapshot `as_json` stored. ValueError for anything else: recovery must not compare with a guess."""
+        if not isinstance(stored, dict) or set(stored) != {"totals", "where", "history"}:
+            raise ValueError("a stored undo snapshot has totals, where and history")
+        totals, where, history = stored["totals"], stored["where"], stored["history"]
+        if not all(isinstance(part, dict) for part in (totals, where, history)):
+            raise ValueError("a stored undo snapshot's parts are objects")
+        entries: dict[int, frozenset[int]] = {}
+        for pk, found in history.items():
+            if not isinstance(found, list) or not all(type(entry) is int for entry in found):
+                raise ValueError("a stored history is a list of entry pks")
+            entries[_pk(pk)] = frozenset(found)
+        return cls(
+            {_stored_pair(name): _quantity(total) for name, total in totals.items()},
+            {_pk(pk): _stored_pair(name) for pk, name in where.items()},
+            entries,
+        )
+
 
 def _pair(pair: Pair) -> str:
     return f"{pair[0]}@{pair[1]}"
+
+
+def _stored_pair(name: object) -> Pair:
+    if not isinstance(name, str):
+        raise ValueError("a stored pair is a string")
+    part, at, place = name.partition("@")
+    if not at:
+        raise ValueError(f"a stored pair is not of a part at a location: {name!r}")
+    return (_pk(part), _pk(place))
 
 
 def undo_snapshot(
@@ -330,10 +358,12 @@ def verify_undo(
     read: Mapping[Pair, Sequence[StockItem]],
     *,
     history: Mapping[int, Collection[int]],
+    gone: Collection[int] = (),
 ) -> list[str]:
     """What the read-back of the undo `marker` of `found` disagrees with, or nothing. `before`: `undo_snapshot`;
     `entries`: every entry of the request's marker id, read now; `read`: the stock of `precondition.pairs(view)`, read
-    now, then `history`: the entries of each `Reversal.item`, read now.
+    now, then `history`: the entries of each `Reversal.item`, read now, but for the reversed items InvenTree says
+    are `gone` (it has no history of an item it deleted): each of those is a problem.
 
     It checks three things, as `readback` does for an apply: the undo marker is on exactly one entry per reversed
     item, of the type and with the numbers the undo writes; every reversed item is where the undo leaves it, holding
@@ -378,6 +408,9 @@ def verify_undo(
             )
     own = {entry.pk for entry in entries}
     for reversal in found:
+        if reversal.item in gone:
+            problems.append(f"stock item {reversal.item} is gone")
+            continue
         if reversal.item not in history:
             raise ValueError(f"no history read for stock item {reversal.item}")
         later = set(history[reversal.item]) - before.history.get(reversal.item, frozenset()) - own
@@ -385,6 +418,52 @@ def verify_undo(
             listed = ", ".join(str(entry) for entry in sorted(later))
             problems.append(f"stock item {reversal.item} has history entries {listed} that are not this request's")
     return problems
+
+
+def undo_changes(
+    found: Sequence[Reversal],
+    before: UndoSnapshot,
+    read: Mapping[Pair, Sequence[StockItem]],
+    *,
+    history: Mapping[int, Collection[int]],
+    gone: Collection[int] = (),
+) -> list[str]:
+    """How the stock differs from `before` (`undo_snapshot`), the stock the undo of `found` was built on: what
+    recovery compares with when the undo's marker is not found. `read`: the stock of `precondition.pairs(view)`, read
+    now, then `history`: the entries of each `Reversal.item`, read now, but for the reversed items InvenTree says
+    are `gone`: each of those is a change. Empty means the undo did not run: every total
+    is what it was, every reversed item is where it was holding what the apply left (`Reversal.holds`), and no
+    reversed item has a history entry `before` lacks. The undo writes on its reversed items only, so a change to a
+    split's parent is none of its doing; any other change makes the outcome one recovery cannot conclude."""
+    changes: list[str] = []
+    for reversal in found:
+        if reversal.item not in before.where:
+            raise ValueError(f"stock item {reversal.item} is not in the undo's snapshot")
+        pair = before.where[reversal.item]
+        held = {item.pk: item.quantity for item in read.get(pair, ())}
+        if reversal.item not in held:
+            changes.append(f"stock item {reversal.item} is no longer at location {pair[1]}")
+        elif reversal.holds is not None and held[reversal.item] != reversal.holds:
+            changes.append(
+                f"stock item {reversal.item} holds {_decimal(held[reversal.item])}, not the "
+                f"{_decimal(reversal.holds)} the apply left"
+            )
+    for pair, total in sorted(before.totals.items()):
+        now = sum((item.quantity for item in read.get(pair, ())), Decimal(0))
+        if pair not in read or now != total:
+            says = f"the undo's snapshot says {_decimal(total)}"
+            changes.append(f"part {pair[0]} at location {pair[1]} holds {_decimal(now)}, {says}")
+    for reversal in found:
+        if reversal.item in gone:
+            changes.append(f"stock item {reversal.item} is gone")
+            continue
+        if reversal.item not in history:
+            raise ValueError(f"no history read for stock item {reversal.item}")
+        new = set(history[reversal.item]) - before.history.get(reversal.item, frozenset())
+        if new:
+            listed = ", ".join(str(entry) for entry in sorted(new))
+            changes.append(f"stock item {reversal.item} has history entries {listed} the undo's snapshot lacks")
+    return changes
 
 
 def _undo_entry(operation: Operation, place: int | None, reversal: Reversal, entry: MarkedEntry) -> str | None:

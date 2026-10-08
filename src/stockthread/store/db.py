@@ -71,7 +71,7 @@ RECOVERED_FOUND: dict[tuple[RequestState, RequestState], bool] = {
     (S.UNKNOWN, S.APPLIED): True,
     (S.UNKNOWN, S.FAILED): False,
     (S.UNDO_UNKNOWN, S.UNDONE): True,
-    (S.UNDO_UNKNOWN, S.VERIFIED): False,
+    (S.UNDO_UNKNOWN, S.UNDO_FAILED): False,
 }
 """What recovery must have concluded about the marker for these transitions (design section 7, the recovery
 table). `unknown` or `undo_unknown` to `verify_failed` follows either conclusion."""
@@ -1437,7 +1437,7 @@ class Store:
         `marker_found`: what recovery concluded about the unknown attempt's marker, required when
         the request leaves `unknown` or `undo_unknown` and recorded on that attempt (the marker
         check reads it). It must agree with the target: found for `applied` and `undone`, not
-        found for `failed` and back to `verified`.
+        found for `failed` and `undo_failed`.
         """
         if target in (S.APPLYING, S.UNDOING):
             raise ValueError("a write starts with begin_attempt, which records its intent")
