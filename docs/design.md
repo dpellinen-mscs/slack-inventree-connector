@@ -1470,8 +1470,17 @@ connector never has two InvenTree writes in flight and cannot race itself.
    and leaves its request as it was holds that request back, 30 s doubled
    with each failure in a row up to an hour, so it never holds the others
    back; an outage also pauses every step for 30 s, and any other error is
-   logged as an error for an operator. Nothing in the run loop approves a plan yet, and
-   `run.py` gives the worker no apply step, so writes stay off.
+   logged as an error for an operator. `stockthread run` gives the worker
+   its apply step and undo (`run.inventree_steps`) only when
+   `writes.enabled` is set and the startup version check allows writes;
+   each call opens its own InvenTree clients and checks the version again
+   (an untested server blocks the apply at the gate and refuses the undo),
+   holds one lock for the whole process, and is cut off before the
+   instance lock could go stale. No write is begun with less than two
+   InvenTree timeouts left, so a cut-off ends a read; a write cut off all
+   the same is `unknown`. With writes off, requests left from a run with
+   writes on wait, and the log says how many. Nothing in the run loop
+   approves a plan yet, so nothing new is written.
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
 It takes the process's writer lock, and waits, nothing read and still

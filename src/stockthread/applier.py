@@ -3,9 +3,9 @@ step of each request one is due for. Both act on the views rebuilt from the dry-
 (ADR 0016), and judge the gate with what is read now: the settings, the server's version check, the vehicles, the
 answers and the plan's own state.
 
-The worker runs `work_request` through `Worker.apply` (`Worker.work_due`). Nothing approves a plan in the run loop
-yet: a write the policy approves applies without a click, and ADR 0004 ships that only with its receipt and Undo, so
-until then the run loop keeps writes off whatever the settings say.
+The worker runs `work_request` through `Worker.apply` (`Worker.work_due`), which `stockthread run` sets only when
+writes are on and the server is tested (`run.inventree_steps`). Nothing approves a plan in the run loop yet (neither
+the policy nor an Apply click), so no request is `approved` and nothing is written whatever the settings say.
 
 Known gap: the dry-run record does not say which lines a person named the stock items for, so every line is held to
 the rule a pick without a person follows (`precondition.check` with no `chosen`). A person's pick that rule would
@@ -129,12 +129,13 @@ async def work_request(
     lock_owner: str,
     gate_now: Callable[[], GateNow],
     settle: timedelta,
+    send_by: float | None = None,
 ) -> Applied:
     """The next step of the apply protocol for request `key` (`Store.requests_to_work`): the write of an `approved`
     request (`apply.apply_request`, judged again under the writer lock with `gate_now()`, the plan and the answers
     read then, with the approver whose click approved the plan, `PlanRow.approved_by`), the read-back of an `applied`
     one (`apply.readback_request`), the recovery of an `unknown` one (`apply.recover_request`), or that of an
-    `undo_unknown` one (`apply.recover_undo`).
+    `undo_unknown` one (`apply.recover_undo`). `send_by`: as `apply.apply_request`'s.
 
     Raises NotRebuilt, and changes nothing, when the plan's record cannot be acted on; ValueError for a request in any
     other state; and what the step raises."""
@@ -148,8 +149,9 @@ async def work_request(
             return judge_plan(fresh, gate_now(), clicked_by=fresh.plan.approved_by, marker=marker)
 
         return await apply_request(
-            key, view, rejudge, store=store, reader=reader, writer=writer, lock=lock, lock_owner=lock_owner
-        )
+            key, view, rejudge, store=store, reader=reader, writer=writer, lock=lock, lock_owner=lock_owner,
+            send_by=send_by,
+        )  # fmt: skip
     if state is RequestState.APPLIED:
         return await readback_request(key, view, store=store, reader=reader, lock=lock)
     if state is RequestState.UNKNOWN:

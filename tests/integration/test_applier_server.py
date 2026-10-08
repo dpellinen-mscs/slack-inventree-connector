@@ -17,12 +17,14 @@ from pydantic import SecretStr
 from views import picked, view
 
 from stockthread.applier import GateNow, approve_by_policy, work_request
-from stockthread.config import InvenTreeSettings
+from stockthread.config import InvenTreeSettings, parse_settings
+from stockthread.core.matching import Catalog
 from stockthread.core.model import Extraction, Match, MatchRule, MatchStatus, MovementType, PostKey, RequestKey
 from stockthread.core.requests import RequestState
 from stockthread.gate import Policy, Verdict
 from stockthread.inventree import InvenTreeReader, check_version
 from stockthread.plan_record import plan_of
+from stockthread.run import inventree_steps
 from stockthread.slack.replies import MovementView
 from stockthread.store import DryRunOutcome, NewPlan, Store
 from stockthread.worker import _record
@@ -112,3 +114,38 @@ async def test_a_clear_take_out_is_approved_by_the_policy_written_once_and_verif
     assert store.requests_to_work() == []
     moved = scratch.api.items(scratch.part, scratch.other)
     assert sum(Decimal(str(row["quantity"])) for row in moved) == Decimal(2)
+
+
+def test_the_run_loops_steps_write_once_read_back_and_undo_on_the_real_server(store: Store, scratch: Scratch) -> None:
+    """`run.inventree_steps`, as `stockthread run` gives them to the worker with writes on: a fresh client and a
+    fresh version check per call, the vehicles from the catalog."""
+    item = scratch.stock(5)
+    movement = take_to_truck(scratch, item["pk"], "2")
+    reply(store, movement)
+    settings = parse_settings(
+        {
+            "slack": {"workspace_id": POST.workspace_id, "app_id": "A0ACME001", "channels": [POST.channel_id]},
+            "inventree": {"url": os.environ["STOCKTHREAD_IT_URL"], "timeout_seconds": 10},
+            "writes": {"enabled": True},
+            "apply": {"settle_seconds": 60},
+        },
+        {"SLACK_BOT_TOKEN": "xoxb-synthetic", "SLACK_APP_TOKEN": "xapp-synthetic",
+         "INVENTREE_TOKEN": token().get_secret_value()},
+    )  # fmt: skip
+    vehicles = Catalog((), (), vehicles={SAM: scratch.other})
+    step, undo = inventree_steps(settings, lambda: vehicles, store, OWNER, beat=lambda: None)
+
+    async def version() -> Any:
+        async with InvenTreeReader(server(), token()) as reader:
+            return check_version(await reader.server_info())
+
+    now = GateNow(Policy.of(settings, anyio.run(version)), {SAM: scratch.other})
+    judgement = approve_by_policy(store, OWNER, POST, now)
+    assert judgement is not None
+    assert judgement.allowed, judgement.why
+    applied = step(KEY)
+    assert applied.state is RequestState.VERIFIED, applied
+    assert sum(Decimal(str(row["quantity"])) for row in scratch.api.items(scratch.part, scratch.other)) == Decimal(2)
+    undone = undo(KEY, movement, SAM)
+    assert undone.state is RequestState.UNDONE, undone
+    assert sum(Decimal(str(row["quantity"])) for row in scratch.api.items(scratch.part, scratch.other)) == Decimal(0)
