@@ -1619,7 +1619,8 @@ reverse the apply a second time. The operator accepts the state as it is.
 Undo is allowed only if the stock the apply touched has no later history
 entries except the connector's own, and the condition in the table holds.
 Otherwise undo is refused with an explanation and becomes a review item.
-Undo expires after `undo.max_age` (default 7 days).
+Undo expires after `undo.max_age_hours` (default 168, 7 days) from when the
+apply that wrote started. The poster or an approver may ask for it.
 
 | Operation | Undo | Condition |
 | --- | --- | --- |
@@ -1646,7 +1647,11 @@ one, has no undo: back at 0 the item may be deleted. `inverse.undo_request` buil
 request with an undo marker: a transfer back moves the item the apply
 moved, or the new item its split made, with `merge: false`. Tested on
 every pinned server (`tests/integration/test_undo_server.py`: every total
-the movement touched is back). Not built yet: `undo.max_age` and the button.
+the movement touched is back). Also built: `Store.undo_refusal` and
+`applier.undo_refusal` say whether a person may ask for an undo now: an
+undoable state, an apply that wrote less than `undo.max_age_hours` ago, no
+earlier undo that InvenTree did not refuse, and the poster or an approver
+asking. Not built yet: the button.
 
 ## 8. Data model and audit trail
 

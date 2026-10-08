@@ -13,7 +13,7 @@ not make goes back to review at the write instead of being written; it is never 
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -145,3 +145,14 @@ async def work_request(
     if state is RequestState.UNKNOWN:
         return await recover_request(key, view, store=store, reader=reader, lock=lock, settle=settle)
     raise ValueError(f"request {key} is {state}: no step of the apply protocol is due")
+
+
+def undo_refusal(
+    store: Store, key: RequestKey, *, user: str, poster: str, approvers: Collection[str], max_age: timedelta
+) -> str | None:
+    """Why the Slack user `user` may not ask for an undo of request `key` now, or None (design section 4, "Clicks at
+    ingest"; section 7, "Undo"). The poster of the post (`PlanViews.poster`) or an approver may ask, the approvers as
+    the settings say now; then what the store says (`Store.undo_refusal`; `max_age` is `undo.max_age_hours`)."""
+    if user != poster and user not in approvers:
+        return "only the poster or an approver may undo this movement"
+    return store.undo_refusal(key, max_age=max_age)

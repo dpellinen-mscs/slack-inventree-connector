@@ -5,7 +5,7 @@ included: integration/test_undo_server.py."""
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,10 +14,18 @@ import pytest
 from fake_inventree import ITEM, FakeInvenTree
 from views import DESTINATION, SOURCE, picked, view
 
-from stockthread.apply import Applied, _check_stored_undo, apply_request, recover_undo, undo_apply
+from stockthread.applier import undo_refusal
+from stockthread.apply import (
+    Applied,
+    _check_stored_undo,
+    apply_request,
+    recover_request,
+    recover_undo,
+    undo_apply,
+)
 from stockthread.core.marker import AttemptKind, Marker, new_marker_id
 from stockthread.core.model import Operation, PostKey, RequestKey
-from stockthread.core.requests import Actor, RequestState
+from stockthread.core.requests import UNDOABLE, Actor, RequestState, next_states
 from stockthread.gate import Judgement, Verdict
 from stockthread.inventree import InvenTreeError
 from stockthread.inverse import Reversal, undo_request
@@ -438,3 +446,170 @@ async def test_a_history_read_error_on_an_item_that_exists_raises_around_the_und
     with pytest.raises(InvenTreeError):
         await undo(store, fake)
     assert store.request(KEY).state is S.UNDO_UNKNOWN
+
+
+WEEK = timedelta(days=7)
+
+
+def test_an_undo_starts_by_a_person_from_exactly_the_undoable_states() -> None:
+    assert {state for state in S if S.UNDOING in next_states(state, Actor.HUMAN)} == UNDOABLE
+
+
+@pytest.mark.anyio
+async def test_a_verified_movement_may_be_undone_once(store: Store) -> None:
+    fake = await applied(store)
+    assert store.undo_refusal(KEY, max_age=WEEK) is None
+    assert (await undo(store, fake)).state is S.UNDONE
+    assert store.undo_refusal(KEY, max_age=WEEK) == (
+        "the request is undone: only a movement that was written and read back can be undone"
+    )
+
+
+def test_a_request_never_written_may_not_be_undone(store: Store) -> None:
+    assert store.undo_refusal(KEY, max_age=WEEK) == (
+        "the request is approved: only a movement that was written and read back can be undone"
+    )
+
+
+@pytest.mark.anyio
+async def test_a_failed_apply_may_not_be_undone(store: Store) -> None:
+    fake = FakeInvenTree()
+    fake.lock = anyio.Lock()
+    fake.answer = Outcome.REFUSED
+    done = await apply_request(
+        KEY, MOVE, allowed, store=store, reader=fake, writer=fake, lock=fake.lock, lock_owner=OWNER
+    )
+    assert done.state is S.FAILED
+    assert store.undo_refusal(KEY, max_age=WEEK) == (
+        "the request is failed: only a movement that was written and read back can be undone"
+    )
+
+
+@pytest.mark.anyio
+async def test_an_undo_inventree_refused_may_be_asked_again(store: Store) -> None:
+    fake = await applied(store)
+    fake.answer = Outcome.REFUSED
+    assert (await undo(store, fake)).state is S.UNDO_FAILED
+    assert store.undo_refusal(KEY, max_age=WEEK) is None
+
+
+@pytest.mark.anyio
+async def test_an_undo_recovery_found_never_ran_is_not_asked_again(store: Store) -> None:
+    """`undo_failed` twice over: refused by InvenTree (may be asked again) or concluded by recovery (it may still
+    land, so never again)."""
+    fake = await unknown_undo(store, lands=False)
+    assert (await recover(store, fake)).state is S.UNDO_FAILED
+    assert store.undo_refusal(KEY, max_age=WEEK) == (
+        "an earlier undo was not refused by InvenTree: it wrote, or it may still land"
+    )
+
+
+@pytest.mark.anyio
+async def test_a_verify_failed_undo_is_not_asked_again_but_a_verify_failed_apply_is(store: Store) -> None:
+    fake = await applied(store)
+    fake.moves = False
+    assert (await undo(store, fake)).state is S.VERIFY_FAILED
+    assert store.undo_refusal(KEY, max_age=WEEK) == (
+        "an earlier undo was not refused by InvenTree: it wrote, or it may still land"
+    )
+
+
+@pytest.mark.anyio
+async def test_an_apply_whose_read_back_disagreed_may_be_undone(store: Store) -> None:
+    fake = FakeInvenTree()
+    fake.lock = anyio.Lock()
+    fake.before_write = lambda: fake.write_entry(ITEM, "someone else", {}, 1)
+    done = await apply_request(
+        KEY, MOVE, allowed, store=store, reader=fake, writer=fake, lock=fake.lock, lock_owner=OWNER
+    )
+    assert done.state is S.VERIFY_FAILED
+    assert store.undo_refusal(KEY, max_age=WEEK) is None
+
+
+def test_an_undo_expires_max_age_after_the_apply_wrote_by_the_store_clock(tmp_path: Path) -> None:
+    now = [datetime(2026, 10, 7, 9, 0, tzinfo=UTC)]
+    opened = Store.open(tmp_path / "clock.db", clock=lambda: now[0])
+    opened.acquire_lock(OWNER, stale_after=timedelta(days=30))
+    opened.create_post(POST)
+    opened.create_plan(POST, "0" * 64, (Operation.TRANSFER,))
+    opened.transition(KEY, expected=S.PLANNED, target=S.APPROVED, actor=Actor.HUMAN)
+    anyio.run(applied, opened)
+    now[0] += WEEK - timedelta(seconds=1)
+    assert opened.undo_refusal(KEY, max_age=WEEK) is None
+    now[0] += timedelta(seconds=1)
+    assert opened.undo_refusal(KEY, max_age=WEEK) == (
+        "the movement was written more than 168 hours ago: undo it in InvenTree"
+    )
+    opened.close()
+
+
+@pytest.mark.parametrize(
+    ("user", "refusal"),
+    [
+        ("U0SAM0001", None),  # the poster
+        ("U0DAN0001", None),  # an approver
+        ("U0ALEX001", "only the poster or an approver may undo this movement"),
+    ],
+)
+@pytest.mark.anyio
+async def test_the_poster_or_an_approver_may_ask_for_an_undo(store: Store, user: str, refusal: str | None) -> None:
+    await applied(store)
+    asked = undo_refusal(store, KEY, user=user, poster="U0SAM0001", approvers={"U0DAN0001"}, max_age=WEEK)
+    assert asked == refusal
+
+
+def test_who_asks_is_checked_before_the_store(store: Store) -> None:
+    asked = undo_refusal(store, KEY, user="U0ALEX001", poster="U0SAM0001", approvers=(), max_age=WEEK)
+    assert asked == "only the poster or an approver may undo this movement"
+
+
+@pytest.mark.anyio
+async def test_a_read_back_failure_before_any_write_may_not_be_undone(store: Store) -> None:
+    """verify_failed with no apply that wrote: the marker check found the request's marker before it was sent."""
+    fake = FakeInvenTree()
+    fake.lock = anyio.Lock()
+    marker = Marker(store.request(KEY).marker_id, AttemptKind.APPLY, 1)
+    fake.write_entry(ITEM, f"{marker} written by hand", {}, 1)
+    done = await apply_request(
+        KEY, MOVE, allowed, store=store, reader=fake, writer=fake, lock=fake.lock, lock_owner=OWNER
+    )
+    assert done.state is S.VERIFY_FAILED
+    assert fake.sent == []
+    assert store.undo_refusal(KEY, max_age=WEEK) == "no apply of this request wrote"
+
+
+@pytest.mark.anyio
+async def test_an_apply_refused_then_tried_again_is_undone_from_the_one_that_wrote(store: Store) -> None:
+    fake = FakeInvenTree()
+    fake.lock = anyio.Lock()
+    fake.answer = Outcome.REFUSED
+    first = await apply_request(
+        KEY, MOVE, allowed, store=store, reader=fake, writer=fake, lock=fake.lock, lock_owner=OWNER
+    )
+    assert first.state is S.FAILED
+    store.transition(KEY, expected=S.FAILED, target=S.APPROVED, actor=Actor.HUMAN)
+    fake.answer = Outcome.ACCEPTED
+    again = await apply_request(
+        KEY, MOVE, allowed, store=store, reader=fake, writer=fake, lock=fake.lock, lock_owner=OWNER
+    )
+    assert again.state is S.VERIFIED
+    assert store.undo_refusal(KEY, max_age=WEEK) is None
+
+
+@pytest.mark.anyio
+async def test_an_apply_recovery_found_may_be_undone(store: Store) -> None:
+    fake = FakeInvenTree()
+    fake.lock = anyio.Lock()
+    fake.answer, fake.lands = Outcome.UNKNOWN, True
+    done = await apply_request(
+        KEY, MOVE, allowed, store=store, reader=fake, writer=fake, lock=fake.lock, lock_owner=OWNER
+    )
+    assert done.state is S.UNKNOWN
+    assert store.undo_refusal(KEY, max_age=WEEK) == (
+        "the request is unknown: only a movement that was written and read back can be undone"
+    )
+    fake.answer, fake.lands = Outcome.ACCEPTED, False
+    recovered = await recover_request(KEY, MOVE, store=store, reader=fake, lock=fake.lock, settle=timedelta(0))
+    assert recovered.state is S.VERIFIED
+    assert store.undo_refusal(KEY, max_age=WEEK) is None
+    assert (await undo(store, fake)).state is S.UNDONE
