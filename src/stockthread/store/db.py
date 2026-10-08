@@ -1841,11 +1841,12 @@ class Store:
     def undo_refusal(self, key: RequestKey, *, max_age: timedelta) -> str | None:
         """Why no undo of request `key` may be asked for now, or None: what an Undo button checks, as offered and as
         clicked, before `apply.undo_apply` (design section 7, "Undo"). An undo starts only from a `verified`,
-        `verify_failed` or `undo_failed` request whose apply wrote less than `max_age` ago (by the store clock, from
-        when its intent was stored: the write ran after that, and a crash or a recovery cannot stretch the time), and only when every earlier undo of it was refused by InvenTree: one
-        that wrote, or whose outcome was unknown (even one recovery concluded `undo_failed`, ADR 0018), would reverse
-        the apply twice. It reads the store only. Whatever passes here is checked again by `undo_apply` under the
-        writer lock, with the stock, and a block that passes (another write of the post in flight) is its to report."""
+        `verify_failed` or `undo_failed` request whose apply wrote less than `max_age` ago, by the store clock, from
+        when its intent was stored (the write ran after that, and a crash or a recovery cannot stretch the time), and
+        only when every earlier undo of it was refused by InvenTree: one that wrote, or whose outcome was unknown
+        (even one recovery concluded `undo_failed`, ADR 0018), would reverse the apply twice. It reads the store only.
+        Whatever passes here is checked again by `undo_apply` under the writer lock, with the stock, and a block that
+        passes (another write of the post in flight) is its to report."""
         row, _, _ = self._request(key)
         if row.state not in UNDOABLE:
             return f"the request is {row.state}: only a movement that was written and read back can be undone"
