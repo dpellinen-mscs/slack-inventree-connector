@@ -1603,7 +1603,7 @@ class Worker:
             question=sent.question,
             plan=sent.plan,
         )
-        self._judge_later(key, sent.plan, now)
+        self._judge_later(key, sent.revision, sent.plan, now)
         if sent.outcome is DryRunOutcome.RETRACTED:
             log.info("post %s: revision %d notice posted", key.ts, sent.revision)
         elif sent.revision > 1:
@@ -1722,12 +1722,13 @@ class Worker:
             answers=answers,
             plan=plan,
         )
-        self._judge_later(key, plan, self._now())
+        self._judge_later(key, revision, plan, self._now())
 
-    def _judge_later(self, key: PostKey, plan: NewPlan | None, now: Decimal) -> None:
-        """The plan just made, if any, is the one `approve_due` judges; any earlier one of the post is not."""
+    def _judge_later(self, key: PostKey, revision: int, plan: NewPlan | None, now: Decimal) -> None:
+        """The plan just made, if any, is the one `approve_due` judges when the post's first dry run made it; any
+        earlier one of the post is not judged (ADR 0019)."""
         self._to_approve.pop(key, None)
-        if plan is not None and self.approve is not None:
+        if plan is not None and revision == 1 and self.approve is not None:
             self._to_approve[key] = (now, 0, now)
 
     def _messages(

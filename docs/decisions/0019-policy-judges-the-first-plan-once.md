@@ -27,10 +27,16 @@ cases make "judge every current plan on every step" unsafe:
    in the queue after the reply that made it is recorded
    (`Worker.approve_due`), whatever the verdict. A plan the policy does not
    approve waits for Apply.
-2. Only a post's first plan (`PlanRow.revision == 1`) is ever approved by
-   the policy (`applier.approve_by_policy`). Any later plan, made after an
-   edit, a joined message or an answer, waits for Apply even when the gate
-   would allow it.
+2. Only the plan a post's first dry run made is ever approved by the
+   policy: the worker queues a plan for judgement only from dry-run
+   revision 1, and `applier.approve_by_policy` also requires plan row
+   revision 1, no second dry run and no noted edit or deletion. A plan
+   made after an edit, a joined message or an answer waits for Apply even
+   when the gate would allow it. The plan row's revision alone is not
+   enough: a post whose first dry run made no plan (chatter, or a
+   question) gets its first plan row from a later dry run, and chatter
+   edited into a take-out would otherwise be written with no click.
+
 3. Which plans wait to be judged is kept in memory only. A plan whose
    judgement a restart cut off waits for Apply. An outage (InvenTree, the
    network, the disk) puts the judgement off, 30 s doubled with each
@@ -51,3 +57,11 @@ cases make "judge every current plan on every step" unsafe:
   The Apply button (next) gives those a way through.
 - A post edited before its write needs a click even when the edit changed
   nothing that matters. Revisit if that turns out to be common.
+- The judgement waits for an empty event queue. In a very busy channel a
+  plan can age out to "waits for Apply" without being judged; that fails
+  closed, and the log says so for each plan.
+- Once approved, the write itself is retried through outages by the apply
+  step, with no 10-minute limit; an edit or deletion before the write
+  begins still cancels it. The reply still reads "Dry run" for the moment
+  between the reply and the write; the receipt that follows says what was
+  written. Both are revisited with the Apply button slice.

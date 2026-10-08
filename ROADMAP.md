@@ -138,7 +138,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] A request waits, keeping its approval, while a sibling is due or in flight, and goes back to review when its plan stopped at an earlier request or the store refuses it for good (`Store.apply_waits_for`, `Store.plan_stopped_before`)
   - [x] Worker: run the step each request is due for, an outage pausing every step, a broken record an operator error (`Worker.work_due`; `Worker.apply` not given by `run.py` yet)
   - [x] The run loop gives the worker its apply step and undo when writes are on and the server is tested (`run.inventree_steps`)
-  - [x] The run loop approves by policy: each plan judged once right after its reply, only a post's first plan ([0019](docs/decisions/0019-policy-judges-the-first-plan-once.md); `Worker.approve_due`, `run.policy_approver`)
+  - [x] The run loop approves by policy: each plan judged once right after its reply, only the plan a post's first dry run made ([0019](docs/decisions/0019-policy-judges-the-first-plan-once.md); `Worker.approve_due`, `run.policy_approver`)
   - [ ] The Apply button: an approver's click approves a plan that waits
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)

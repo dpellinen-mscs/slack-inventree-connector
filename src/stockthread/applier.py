@@ -112,9 +112,10 @@ def approve_by_policy(store: Store, owner: str, post: PostKey, now: GateNow) -> 
     NotRebuilt when the plan's record cannot be acted on, and what `Store.approve_plan` raises when the plan moved on
     in between.
 
-    Only the post's first plan is ever approved by the policy (ADR 0019): a later one, made after an edit, a joined
-    message or an answer, waits for Apply even when the gate would allow it, so an edit after an undo never writes
-    the movement again unasked."""
+    Only a plan its first dry run made is ever approved by the policy (ADR 0019): one made after an edit, a deletion,
+    a joined message or an answer waits for Apply even when the gate would allow it, so an edit after an undo never
+    writes the movement again unasked, and neither does an edit that turned chatter into a movement. The plan row's
+    revision is not enough: a post's first plan row may come from a later dry run."""
     plan = store.current_plan(post)
     if plan is None or any(row.state is not RequestState.PLANNED for row in plan.requests):
         return None
@@ -122,6 +123,10 @@ def approve_by_policy(store: Store, owner: str, post: PostKey, now: GateNow) -> 
     if judgement.allowed and plan.revision > 1:
         return Judgement(
             Verdict.WAITS, f"plan revision {plan.revision}: only a post's first plan applies with no click"
+        )
+    if judgement.allowed and (len(store.dry_run_history(post)) > 1 or store.post_has_revision(post)):
+        return Judgement(
+            Verdict.WAITS, "the post was edited or read again: only its first dry run applies with no click"
         )
     if judgement.allowed:
         store.approve_plan(owner, post, plan.revision, actor=Actor.POLICY)

@@ -23,7 +23,7 @@ from stockthread.core.resolve import STATUS_OK, StockItem
 from stockthread.gate import Judgement, Policy, Verdict
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, ServerInfo, VersionCheck, check_version
 from stockthread.run import policy_approver
-from stockthread.store import Store
+from stockthread.store import LockLost, Store
 from stockthread.worker import APPROVE_FOR_SECONDS, WORK_RETRY_SECONDS, Worker
 
 S = RequestState
@@ -262,14 +262,110 @@ def test_a_plan_made_again_by_an_edit_that_reads_the_same_waits_for_apply(store:
     plan = store.current_plan(POST)
     assert plan is not None
     assert plan.revision == 2  # the edit staled the first plan before it was judged, and made it again
-    assert approve.calls[-1] == POST
-    last = approve.judged[-1]
+    assert approve.calls == [POST]  # the second dry run's plan is not queued
+    last = approve_by_policy(store, OWNER, POST, ON)  # nor approved if it were judged
     assert last is not None
     assert (last.verdict, last.why) == (
         Verdict.WAITS,
         "plan revision 2: only a post's first plan applies with no click",
     )
     assert store.request(RequestKey(POST, 2, 1)).state is S.PLANNED
+
+
+def edit(at: str, before: str, after: str) -> dict[str, Any]:
+    edited = message(at, "")
+    edited["event"]["subtype"] = "message_changed"
+    base = {"type": "message", "user": SAM, "ts": ROOT}
+    edited["event"]["message"] = {**base, "text": after, "edited": {"user": SAM, "ts": at}}
+    edited["event"]["previous_message"] = {**base, "text": before}
+    return edited
+
+
+def test_a_first_plan_an_edit_made_waits_for_apply(store: Store, clock: Clock) -> None:
+    """The post's first plan row, made by its second dry run: chatter edited into a take-out needs a click."""
+    approve = Approving(store)
+    worker = Worker(settings(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock, approve=approve)  # type: ignore[arg-type]
+    enqueue(store, message(ROOT, "took some stuff"))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert store.current_plan(POST) is None
+    enqueue(store, edit("1790000040.000100", "took some stuff", TAKE))
+    clock.at("1790000100.000000")
+    worker.step()
+    plan = store.current_plan(POST)
+    assert plan is not None
+    assert plan.revision == 1  # the first plan row, from the post's second dry run
+    assert approve.calls == []  # not queued: only the first dry run's plan is judged
+    judgement = approve_by_policy(store, OWNER, POST, ON)  # nor approved if it were judged
+    assert judgement is not None
+    assert (judgement.verdict, judgement.why) == (
+        Verdict.WAITS,
+        "the post was edited or read again: only its first dry run applies with no click",
+    )
+    assert store.request(KEY).state is S.PLANNED
+
+
+def test_a_second_dry_run_alone_keeps_the_policy_from_approving(
+    store: Store, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A message joined to a post makes a second dry run with no edit noted (the joined text below is read as an
+    edit, then the edit is hidden): the dry runs alone hold the first plan row back."""
+    worker = Worker(settings(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock)  # type: ignore[arg-type]
+    enqueue(store, message(ROOT, "took some stuff"))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    enqueue(store, edit("1790000040.000100", "took some stuff", TAKE))
+    clock.at("1790000100.000000")
+    worker.step()
+    assert len(store.dry_run_history(POST)) == 2
+    monkeypatch.setattr(store, "post_has_revision", lambda _: False)
+    judgement = approve_by_policy(store, OWNER, POST, ON)
+    assert judgement is not None
+    assert judgement.verdict is Verdict.WAITS
+    assert store.request(KEY).state is S.PLANNED
+
+
+def test_a_lost_lock_stops_the_judgement(store: Store, clock: Clock) -> None:
+    approve = Approving(store)
+    approve.fail = [InvenTreeError("down")]
+    worker = replied(store, clock, approve)
+    approve.fail = [LockLost()]
+    clock.at(str(Decimal("1790000030") + WORK_RETRY_SECONDS))
+    with pytest.raises(LockLost):
+        worker.approve_due()
+
+
+def test_an_outage_puts_off_every_judgement_left_in_the_step(store: Store, clock: Clock) -> None:
+    approve = Approving(store)
+    approve.fail = [InvenTreeError("down")]
+    worker = Worker(settings(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock, approve=approve)  # type: ignore[arg-type]
+    other = PostKey(WORKSPACE, CHANNEL, "1790000000.000200")
+    enqueue(store, message(ROOT, TAKE))
+    enqueue(store, message(other.ts, TAKE, user=LUIS))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert store.current_plan(POST) is not None
+    assert store.current_plan(other) is not None
+    assert approve.calls == [POST]  # the first failure stops the other judgement in this step
+    clock.at(str(Decimal("1790000030") + WORK_RETRY_SECONDS))
+    assert worker.approve_due() == 1
+    assert approve.calls == [POST, POST, other]
+
+
+def test_a_reply_that_takes_the_plan_back_drops_its_judgement(store: Store, clock: Clock) -> None:
+    approve = Approving(store)
+    approve.fail = [InvenTreeError("down")]
+    worker = replied(store, clock, approve)
+    enqueue(store, edit("1790000040.000100", TAKE, "lunch?"))
+    clock.at(str(Decimal("1790000030") + WORK_RETRY_SECONDS))
+    worker.step()
+    assert store.current_plan(POST) is None
+    clock.at(str(Decimal("1790000030") + 4 * WORK_RETRY_SECONDS))
+    worker.step()
+    assert approve.calls == [POST]  # the edit's reply dropped the earlier plan's judgement
 
 
 # --- `run.policy_approver` ---

@@ -22,8 +22,8 @@ Nothing is released yet. With `writes.enabled = true`, the connector writes clea
 ### Added
 
 - With writes on, the policy approves a clear take-out right after its dry run (ADR 0004, 0019): it is
-  written, read back, and gets a receipt with an Undo button. Each plan is judged once; a later plan of the
-  same post (after an edit, say) waits for Apply.
+  written, read back, and gets a receipt with an Undo button. Each plan is judged once, and only the plan a
+  post's first dry run made: one made after an edit or a joined message waits for Apply.
 - `stockthread trail <message link>`: one post's dry runs with every review reason and who raised it, its
   questions with their answers and who gave them, and its audit log. It only reads the database, and prints
   ids and codes unless `--text` is given.
