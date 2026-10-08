@@ -137,7 +137,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] The step for one request: write an `approved` one, read back an `applied` one, recover an `unknown` apply or undo (`applier.work_request`, `Store.requests_to_work`); a plan is approved whole (`Store.approve_plan`)
   - [x] A request waits, keeping its approval, while a sibling is due or in flight, and goes back to review when its plan stopped at an earlier request or the store refuses it for good (`Store.apply_waits_for`, `Store.plan_stopped_before`)
   - [x] Worker: run the step each request is due for, an outage pausing every step, a broken record an operator error (`Worker.work_due`; `Worker.apply` not given by `run.py` yet)
-  - [ ] The run loop approves by policy and gives the worker its apply step (ADR 0004), with the Apply button
+  - [ ] The run loop approves by policy and gives the worker its apply step (ADR 0004), with the Apply button (worker gets its apply step and undo when writes are on: #136; approval still to do)
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
   - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`, run by `run.run` at start)
