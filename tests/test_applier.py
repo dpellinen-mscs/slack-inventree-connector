@@ -17,12 +17,13 @@ import pytest
 from fake_inventree import ITEM, FakeInvenTree
 from views import DESTINATION, picked, view
 
-from stockthread.applier import GateNow, approve_by_policy, judge_plan, plan_views, work_request
+from stockthread.applier import GateNow, approve_by_click, approve_by_policy, judge_plan, plan_views, work_request
 from stockthread.apply import Applied
+from stockthread.core.grouping import seconds
 from stockthread.core.marker import AttemptKind
 from stockthread.core.model import Extraction, MovementType, Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, IllegalTransition, RequestState
-from stockthread.gate import Policy, Verdict
+from stockthread.gate import Judgement, Policy, Verdict
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, ServerInfo, VersionCheck
 from stockthread.plan_record import NotRebuilt, plan_of
 from stockthread.slack.replies import MovementView
@@ -194,6 +195,79 @@ def test_only_a_posts_first_plan_is_approved_by_the_policy(store: Store) -> None
     )
     assert store.request(RequestKey(POST, 2, 1)).state is S.PLANNED
     assert approve_by_policy(store, OWNER, POST, OFF).verdict is Verdict.BLOCKED  # type: ignore[union-attr]
+
+
+AT = Decimal("1700000200")
+"""A click well within a day-long plan expiry."""
+
+
+def test_an_approvers_click_approves_a_plan_that_waits(store: Store) -> None:
+    reply(store, record(BACK))
+    judgement = approve_by_click(store, OWNER, POST, 1, LUIS, ON, at=AT, expiry_hours=24)
+    assert judgement is not None
+    assert (judgement.verdict, judgement.why, judgement.approved_by) == (
+        Verdict.ALLOWED,
+        "approved by an approver",
+        LUIS,
+    )
+    assert store.request(KEY).state is S.APPROVED
+    assert store.plan(POST, 1).approved_by == LUIS
+    assert (
+        approve_by_click(store, OWNER, POST, 1, LUIS, ON, at=AT, expiry_hours=24) is None
+    )  # a second click: done already
+
+
+def test_a_click_by_someone_not_an_approver_approves_nothing_even_a_clear_take_out(store: Store) -> None:
+    reply(store, record(TAKE))
+    assert judge_plan(plan_views(store, store.plan(POST, 1)), ON).allowed  # the policy alone would approve it
+    judgement = approve_by_click(store, OWNER, POST, 1, SAM, ON, at=AT, expiry_hours=24)
+    assert judgement == Judgement(Verdict.BLOCKED, "only an approver may apply a movement")
+    assert store.request(KEY).state is S.PLANNED
+
+
+def test_a_click_on_a_plan_that_moved_on_or_expired_approves_nothing(store: Store) -> None:
+    reply(store, record(BACK))
+    store.stale_plan(OWNER, POST)
+    reply(store, record(BACK), revision=2)
+    judgement = approve_by_click(store, OWNER, POST, 1, LUIS, ON, at=AT, expiry_hours=24)
+    assert judgement == Judgement(Verdict.BLOCKED, "plan revision 1 is no longer current")
+    day = Decimal(24 * 3600)
+    expires = approve_by_click(store, OWNER, POST, 2, LUIS, ON, at=seconds(POST.ts) + day + 1, expiry_hours=24)
+    assert expires == Judgement(Verdict.BLOCKED, "the plan expired")
+    assert store.request(RequestKey(POST, 2, 1)).state is S.PLANNED
+    blocked = approve_by_click(store, OWNER, POST, 2, LUIS, OFF, at=AT, expiry_hours=24)
+    assert blocked is not None
+    assert (blocked.verdict, blocked.why) == (Verdict.BLOCKED, "stock writes are off")
+    assert store.request(RequestKey(POST, 2, 1)).state is S.PLANNED
+    assert approve_by_click(store, OWNER, POST, 2, LUIS, ON, at=AT, expiry_hours=24).allowed  # type: ignore[union-attr]
+
+
+def test_a_click_expires_with_the_plan_its_first_dry_run_fixed(store: Store) -> None:
+    joined = PostKey(POST.workspace_id, POST.channel_id, "1700000050.000100")
+    store.place_message(OWNER, joined, user_id=SAM, thread_ts=POST.ts, window_seconds=5)
+    reply(store, record(BACK))
+    assert store.plan_expires_from(POST) == joined.ts  # the newest message the first dry run read
+    hour = Decimal(3600)
+    late = approve_by_click(store, OWNER, POST, 1, LUIS, ON, at=seconds(joined.ts) + hour + 1, expiry_hours=1)
+    assert late == Judgement(Verdict.BLOCKED, "the plan expired")
+    judgement = approve_by_click(store, OWNER, POST, 1, LUIS, ON, at=seconds(joined.ts) + hour, expiry_hours=1)
+    assert judgement is not None
+    assert judgement.allowed
+
+
+@pytest.mark.anyio
+async def test_a_clear_take_out_clicked_by_a_removed_approver_is_not_written_by_the_policy(store: Store) -> None:
+    reply(store, record(TAKE))
+    store.stale_plan(OWNER, POST)
+    reply(store, record(TAKE), revision=2)  # a plan the policy never approves (ADR 0019)
+    judgement = approve_by_click(store, OWNER, POST, 2, LUIS, ON, at=AT, expiry_hours=24)
+    assert judgement is not None
+    assert judgement.allowed
+    removed = replace(ON, policy=replace(ON.policy, approvers=frozenset()))
+    fake = FakeInvenTree()
+    waits = await step(store, fake, RequestKey(POST, 2, 1), now=removed)
+    assert waits == Applied(S.APPROVED, "not written: the approver who clicked Apply is no longer an approver")
+    assert fake.sent == []
 
 
 def test_no_current_plan_approves_nothing(store: Store) -> None:
