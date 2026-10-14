@@ -196,7 +196,8 @@ def approve_by_click(
     """Approve plan `revision` of the post for `user`, who clicked its Apply button, when the gate allows it with
     that click (`gate.judge`, `clicked_by`), and say why or why not. A click never approves by the policy: a user who
     is not an approver is refused even when the policy would approve the plan with no click. Blocked when the
-    revision is not the post's current plan, or when its plan expired at `at`: `expiry_hours` after the time
+    revision is not the post's current plan, when an undo of an earlier revision of the post was asked for, or when
+    its plan expired at `at`: `expiry_hours` after the time
     `Store.plan_expires_from` gives, as the worker counts it. None when the plan is approved already or further on.
     Raises NotRebuilt when the plan's record cannot be acted on, and what `Store.approve_plan` raises (StateConflict,
     WriteBlocked) when the plan moved on in between or the post may not be approved now."""
@@ -207,6 +208,9 @@ def approve_by_click(
         return Judgement(Verdict.BLOCKED, f"plan revision {revision} is no longer current")
     if any(row.state is not RequestState.PLANNED for row in plan.requests):
         return None
+    if store.undone_before(post, revision):
+        # An edit that changed nothing makes the plan again after its undo: the receipt above says it was undone.
+        return Judgement(Verdict.BLOCKED, "this movement was undone; post it again to move the stock again")
     expires_from = store.plan_expires_from(post)
     if expires_from is None or at - seconds(expires_from) > expiry_hours * 3600:
         return Judgement(Verdict.BLOCKED, "the plan expired")

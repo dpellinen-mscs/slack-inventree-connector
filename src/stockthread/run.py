@@ -28,7 +28,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
-from stockthread.applier import GateNow, approve_by_policy, work_request
+from stockthread.applier import GateNow, approve_by_click, approve_by_policy, work_request
 from stockthread.apply import Applied, ApplyReader, Sender, undo_apply
 from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import Settings
@@ -47,7 +47,16 @@ from stockthread.slack.listener import IdentityError, Listener, ThreadStores, bu
 from stockthread.slack.replies import MovementView
 from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
 from stockthread.store.db import posters_seen
-from stockthread.worker import Approver, PosterBusy, PostStillRunning, Stepper, StockReader, Undoer, Worker
+from stockthread.worker import (
+    Approver,
+    ClickApprover,
+    PosterBusy,
+    PostStillRunning,
+    Stepper,
+    StockReader,
+    Undoer,
+    Worker,
+)
 from stockthread.writer import InvenTreeWriter
 
 log = logging.getLogger(__name__)
@@ -378,6 +387,34 @@ def policy_approver(
     return approve
 
 
+def click_approver(
+    settings: Settings,
+    catalog: Callable[[], Catalog],
+    store: Store,
+    owner: str,
+    *,
+    beat: Callable[[], None],
+    check: Callable[[Settings], VersionCheck] = check_inventree,
+) -> ClickApprover:
+    """The worker's approval of a plan for an approver who clicked Apply (`applier.approve_by_click`), for
+    `writes.enabled`: judged with the settings, the server's version read again (`check`) and the catalog's vehicles
+    (`catalog`, the cache), the lock beaten (`beat`) after each read; the plan expires `slack.plan_expiry_hours` after
+    its post, as the worker counts it. Approving writes nothing: the write is judged again before it is sent
+    (`inventree_steps`)."""
+
+    def approve(post: PostKey, revision: int, user: str, at: Decimal) -> Judgement | None:
+        vehicles = dict(catalog().vehicles)
+        beat()
+        version = check(settings)
+        beat()
+        now = GateNow(Policy.of(settings, version), vehicles)
+        return approve_by_click(
+            store, owner, post, revision, user, now, at=at, expiry_hours=settings.slack.plan_expiry_hours
+        )
+
+    return approve
+
+
 def check_setup(settings: Settings) -> list[Finding]:
     """The setup check's findings (setup_check.py). Raises InvenTreeError when the server cannot be read."""
 
@@ -459,10 +496,11 @@ def run(
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     steps: Callable[..., tuple[Stepper, Undoer]] = inventree_steps,
     approver: Callable[..., Approver] = policy_approver,
+    clicker: Callable[..., ClickApprover] = click_approver,
 ) -> int:
     """Serve until `stop` is set. Returns the process exit code. The worker gets its apply step and undo (`steps`),
-    and approval by the policy (`approver`), only when `writes.enabled` is set and the server's version is tested for
-    writes."""
+    approval by the policy (`approver`) and by an Apply click (`clicker`), only when `writes.enabled` is set and the
+    server's version is tested for writes."""
     http = settings.slack.transport == "http"
     signing_secret = settings.secrets.slack_signing_secret
     if (signing_secret if http else settings.secrets.slack_app_token) is None:  # the settings refuse this already
@@ -554,6 +592,7 @@ def run(
             beat = functools.partial(worker.beat, now=True)
             worker.apply, worker.undo = steps(settings, cache, store, owner, beat=beat)
             worker.approve = approver(settings, cache, store, owner, beat=beat, check=check)
+            worker.approve_click = clicker(settings, cache, store, owner, beat=beat, check=check)
             auto = ", ".join(settings.policy.auto_apply) or "none"
             log.warning(
                 "stock writes are ON: movements the policy approves (%s) are written, read back and can be undone",

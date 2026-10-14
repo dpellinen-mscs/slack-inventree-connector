@@ -458,6 +458,45 @@ def with_question(reply: Mapping[str, Any], question: Mapping[str, Any]) -> dict
     return {"text": reply["text"], "blocks": blocks}
 
 
+APPLY_ACTION = "apply"
+"""The action id of the Apply button on a dry-run reply that made a plan. Its value is the dry-run revision of the
+reply: the click counts only on that reply, while it is the newest in the thread (`Worker._handle_apply`)."""
+APPLY_BLOCK = "apply"
+APPLY_CONFIRM = {
+    "title": {"type": "plain_text", "text": "Apply this movement?"},
+    "text": {
+        "type": "plain_text",
+        "text": "The stock moves in InvenTree as this reply shows, if it is still there when checked again.",
+    },
+    "confirm": {"type": "plain_text", "text": "Apply"},
+    "deny": {"type": "plain_text", "text": "Not now"},
+}
+"""Slack asks the clicker to confirm before an Apply click is sent: a stray tap writes nothing."""
+
+
+def with_apply(reply: Mapping[str, Any], revision: int) -> dict[str, Any]:
+    """The dry-run reply of revision `revision` with an Apply button below it, for an approver to approve the plan it
+    made (ADR 0019: a plan the policy does not approve waits for Apply). Only an approver's click counts."""
+    if revision < 1:
+        raise ValueError("a dry-run revision is at least 1")
+    button = {
+        "type": "button",
+        "action_id": APPLY_ACTION,
+        "text": {"type": "plain_text", "text": "Apply", "emoji": False},
+        "style": "primary",
+        "value": str(revision),
+        "confirm": APPLY_CONFIRM,
+    }
+    blocks = [
+        *reply["blocks"],
+        _section("An approver can apply it now."),
+        {"type": "actions", "block_id": APPLY_BLOCK, "elements": [button]},
+    ]
+    if len(blocks) > MAX_BLOCKS:
+        raise ValueError("a reply with its Apply button has more blocks than Slack allows")
+    return {"text": reply["text"], "blocks": blocks}
+
+
 def _labels(buttons: Sequence[Choice], names: Mapping[int, str], *, cut_left: bool) -> list[str]:
     """Button labels. Records that would look alike get their primary key, so no two buttons read the same.
     A location path is cut from the left, since its last part names the place."""

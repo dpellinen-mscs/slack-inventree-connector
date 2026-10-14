@@ -139,9 +139,9 @@ payloads whose channel or message does not fit the stored id.
   - [x] Worker: run the step each request is due for, an outage pausing every step, a broken record an operator error (`Worker.work_due`; `Worker.apply` not given by `run.py` yet)
   - [x] The run loop gives the worker its apply step and undo when writes are on and the server is tested (`run.inventree_steps`)
   - [x] The run loop approves by policy: each plan judged once right after its reply, only the plan a post's first dry run made ([0019](docs/decisions/0019-policy-judges-the-first-plan-once.md); `Worker.approve_due`, `run.policy_approver`)
-  - [ ] The Apply button: an approver's click approves a plan that waits
+  - [x] The Apply button: an approver's click approves a plan that waits
     - [x] A click's approval: only an approver, only the current plan revision before its expiry, judged by the gate with the click (`applier.approve_by_click`)
-    - [ ] The button on a reply whose plan waits, and the worker's click handler
+    - [x] The button on a reply that made a plan, with writes on, and the worker's click handler, bound to the stored reply (`Worker._handle_apply`, `run.click_approver`)
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
   - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`, run by `run.run` at start)
