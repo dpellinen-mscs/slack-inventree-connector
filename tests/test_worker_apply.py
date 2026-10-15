@@ -322,7 +322,7 @@ def test_a_deletion_that_comes_during_the_reads_before_the_write_stops_the_write
     assert store.request(KEY).state is S.APPROVED
     assert store.markers(KEY) == []
     running.step()  # drains the deletion first
-    assert store.request(KEY).state is not S.APPROVED
+    assert store.request(KEY).state is S.CANCELLED
     assert running.work_due() == 0
     assert inventree.sent == []
 

@@ -310,6 +310,20 @@ def test_no_apply_begins_while_an_event_waits_in_the_queue(store: Store) -> None
     assert store.request(key()).state is S.APPLYING
 
 
+def test_an_event_another_connection_stored_holds_the_apply_back(store: Store, path: Path) -> None:
+    """The Slack listener stores events through a connection of its own, as here."""
+    plan(store)
+    approve(store, key())
+    listener = Store.open(path)
+    try:
+        assert listener.enqueue_event("Ev1", "event", "{}")
+    finally:
+        listener.close()
+    with pytest.raises(EventsWaiting):
+        begin(store, key())
+    assert store.request(key()).state is S.APPROVED
+
+
 def test_an_undo_begins_while_an_event_waits_in_the_queue(store: Store) -> None:
     """An undo is asked for by a click, an event being processed while it runs; an edit does not take it back."""
     plan(store)
