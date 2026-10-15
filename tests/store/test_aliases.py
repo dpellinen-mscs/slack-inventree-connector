@@ -18,7 +18,7 @@ from stockthread.core.matching import Alias, Catalog, PartRecord, match_part
 from stockthread.core.model import MatchRule, Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.write_request import write_notes
-from stockthread.store import AliasKind, LockLost, SchemaTooOld, StateConflict, Store, StoredAlias
+from stockthread.store import AliasKind, LockLost, StateConflict, Store, StoredAlias
 
 S = RequestState
 POST = PostKey("T0ACME", "C0STOCK", "1727600000.000100")
@@ -223,16 +223,30 @@ def test_an_alias_an_admin_typed_has_no_source(store: Store, tmp_path: Path) -> 
     assert store.remove_alias(typed.id) == typed
     events = [(actor, event) for _, actor, event, _, _ in store.audit(POST)]
     assert ("admin", "alias_removed") not in events  # no post taught it
+    raw = sqlite3.connect(tmp_path / "stockthread.db")
+    rows = raw.execute("SELECT actor, event, post_id, request_id FROM audit_log WHERE alias_id = ?", (typed.id,))
+    assert rows.fetchall() == [("admin", "alias_removed", None, None)]
+    raw.close()
+
+
+def test_a_removed_alias_s_id_is_never_given_again(store: Store) -> None:
+    """The audit log and `aliases remove` name aliases by id: a new alias never takes a removed one's (review)."""
+    verify(store)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "disc 50", 2, rivals=[2], learned_from=KEY)
+    store.remove_alias(2)
+    store.learn_alias(OWNER, PART, "red cable", 3, rivals=[3], learned_from=KEY)
+    assert [(alias.id, alias.text) for alias in store.stored_aliases()] == [(1, "disc 40"), (3, "red cable")]
 
 
 def test_the_list_quotes_text_from_slack() -> None:
-    hostile = StoredAlias(3, PART, 'disc\x1b[2J "40"', 1, "U0SAM", None, KEY, "then", "now")
+    hostile = StoredAlias(3, PART, 'disc\x1b[2J\x7f\x9b\u202e "40" é', 1, "U0\x85SAM", None, KEY, "then", "now")
     (heading, line, hint) = alias_lines([hostile])
     assert heading == "part aliases:"
-    assert "\x1b" not in line
+    assert line.isprintable()
     assert line == (
-        '    3  "disc\\u001b[2J \\"40\\"" -> part 1, posts by "U0SAM" only; learned now from post C0STOCK'
-        " 1727600000.000100"
+        '    3  "disc\\u001b[2J\\u007f\\u009b\\u202e \\"40\\" é" -> part 1, posts by "U0\\u0085SAM" only; learned now'
+        " from post C0STOCK 1727600000.000100"
     )
     assert "aliases remove" in hint
     assert alias_lines([]) == ["no aliases stored: one is learned when a confirmed plan is applied and verified"]
@@ -304,12 +318,14 @@ def test_the_command_reads_but_never_creates_or_migrates(
         assert aliases(config, *action) == 2
     assert not (tmp_path / "stockthread.db").exists()
     Store.open(tmp_path / "stockthread.db").close()
-    raw = sqlite3.connect(tmp_path / "stockthread.db")
+    raw = sqlite3.connect(tmp_path / "stockthread.db", isolation_level=None)
+    raw.execute("DROP TABLE aliases")  # back to schema 20, which `Store.open` would migrate
+    raw.execute("ALTER TABLE audit_log DROP COLUMN alias_id")
     raw.execute("PRAGMA user_version = 20")
-    raw.close()
     assert aliases(config, "remove", "1") == 2
-    with pytest.raises(SchemaTooOld):
-        Store.open_read_only(tmp_path / "stockthread.db")  # still not migrated
+    assert raw.execute("PRAGMA user_version").fetchone() == (20,)  # still not migrated
+    assert raw.execute("SELECT count(*) FROM sqlite_schema WHERE name = 'aliases'").fetchone() == (0,)
+    raw.close()
     assert capsys.readouterr().err.count("ERROR ") == 4
     assert cli.main(["aliases"]) == 0
     assert "list" in capsys.readouterr().out

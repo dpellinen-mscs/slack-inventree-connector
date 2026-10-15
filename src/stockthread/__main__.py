@@ -205,7 +205,7 @@ def aliases_command(path: Path, action: str, ids: list[int]) -> int:
             print("\n".join(alias_lines(store.stored_aliases())))
             return 0
         if action == "export":
-            print(json.dumps(export(store.stored_aliases()), indent=2, ensure_ascii=False))
+            print(json.dumps(export(store.stored_aliases()), indent=2))  # ASCII: Slack text is escaped
             return 0
         missing = False
         for alias_id in ids:

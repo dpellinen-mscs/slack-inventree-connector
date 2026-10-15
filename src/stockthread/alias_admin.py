@@ -1,6 +1,7 @@
 """What an admin sees of the confirmed aliases (`stockthread aliases`, ADR 0012): a list, an export and a removal.
 
-Alias text comes from Slack messages, so it is printed JSON-quoted: a control character cannot reach the terminal.
+Alias text and user ids come from Slack, so they are printed quoted, with every character that is not printable
+(control characters, DEL, C1 codes, bidi overrides) escaped: none reaches the terminal as itself.
 """
 
 from __future__ import annotations
@@ -16,7 +17,8 @@ EXPORT_VERSION = 1
 
 
 def _quoted(text: str) -> str:
-    return json.dumps(text, ensure_ascii=False)
+    quoted = json.dumps(text, ensure_ascii=False)
+    return "".join(char if char.isprintable() else f"\\u{ord(char):04x}" for char in quoted)
 
 
 def describe(alias: StoredAlias) -> str:
