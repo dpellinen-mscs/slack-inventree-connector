@@ -124,8 +124,11 @@ def test_aliases_the_matcher_ignores_are_logged_once_until_the_list_changes(
     catalog = with_aliases(lambda: Catalog(parts=next(snapshots), locations=()), store)
     caplog.set_level("WARNING", logger="stockthread.catalog")
 
+    seen: list[str] = []
+
     def warned() -> list[str]:
         messages = [record.getMessage() for record in caplog.records]
+        seen.extend(messages)
         caplog.clear()
         return messages
 
@@ -141,7 +144,8 @@ def test_aliases_the_matcher_ignores_are_logged_once_until_the_list_changes(
     assert "name location 5, which" in message
     assert match_part("disc 40", catalog()).status.value == "unmatched"  # inactive again
     assert "part 1" in warned()[0]
-    assert all("disc" not in record.getMessage() for record in caplog.records)
+    assert len(seen) == 3
+    assert all("disc" not in message for message in seen)
 
 
 def test_a_confirmation_replaces_every_alias_the_matcher_takes_for_its_text(store: Store) -> None:
