@@ -5,8 +5,9 @@ answers and the plan's own state.
 
 The worker runs `approve_by_policy` through `Worker.approve` once, right after the reply that made a plan is
 recorded (`Worker.approve_due`), and `work_request` through `Worker.apply` (`Worker.work_due`); `stockthread run`
-sets both only when writes are on and the server is tested (`run.inventree_steps`, `run.policy_approver`). There is
-no Apply button yet: a plan the policy does not approve is never written.
+sets both only when writes are on and the server is tested (`run.inventree_steps`, `run.policy_approver`). A plan
+the policy does not approve waits for an approver's Apply click (`approve_by_click`, through `Worker._handle_apply`
+and `run.click_approver`); only then is it written.
 
 Known gap: the dry-run record does not say which lines a person named the stock items for, so every line is held to
 the rule a pick without a person follows (`precondition.check` with no `chosen`). A person's pick that rule would

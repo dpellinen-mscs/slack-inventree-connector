@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from views import view as support_view
 
 from stockthread.core.model import (
     CandidateMovement,
@@ -26,6 +27,7 @@ from stockthread.slack.replies import (
     MAX_CANDIDATES,
     MAX_MOVEMENTS,
     MAX_SECTION,
+    NO_APPLY_TEXT,
     NO_APPROVERS,
     REASONS,
     MovementView,
@@ -33,6 +35,8 @@ from stockthread.slack.replies import (
     dry_run_reply,
     escape,
     question_closed,
+    shows_everything,
+    with_no_apply,
     without_question,
 )
 from stockthread.store import Answered
@@ -145,6 +149,33 @@ def test_a_long_reply_stays_inside_slack_limits() -> None:
     assert text_of(body).count("…") == 1
     assert COULD_APPLY not in text_of(body)
     assert REASONS[ReasonCode.PART_UNMATCHED] in text_of(body)
+
+
+def test_a_reply_cut_to_slacks_limits_does_not_show_everything() -> None:
+    """Review #139 finding 1: 50 returned adapters do not fit one section; the reply leaves out the last lines and
+    both places, so it may not carry an Apply button."""
+    lines = tuple((f"Synthetic adapter {n:02d}", "1") for n in range(1, 51))
+    parts = {1 + n: f"Synthetic adapter {1 + n:02d} with a long catalog name" for n in range(50)}
+    stock = tuple(SourcePick((Take(100 + n, Decimal(1)),)) for n in range(50))
+    long = support_view(MovementType.RETURN, lines, stock)
+    assert not shows_everything([long], parts, LOCATIONS)
+    shown = text_of(dry_run_reply([long], parts, LOCATIONS))
+    assert "Synthetic adapter 50 with" not in shown  # cut out of the reply
+    short = support_view(MovementType.RETURN, lines[:3], stock[:3])
+    assert shows_everything([short], parts, LOCATIONS)
+
+
+def test_a_reply_that_hides_movements_does_not_show_everything() -> None:
+    assert shows_everything([view()] * MAX_MOVEMENTS, PARTS, LOCATIONS)
+    assert not shows_everything([view()] * (MAX_MOVEMENTS + 1), PARTS, LOCATIONS)
+
+
+def test_a_reply_with_no_apply_says_why() -> None:
+    body = dry_run_reply([view()], PARTS, LOCATIONS)
+    noted = with_no_apply(body)
+    assert noted["text"] == body["text"]
+    assert noted["blocks"][:-1] == body["blocks"]
+    assert text_of(noted).endswith(NO_APPLY_TEXT)
 
 
 def test_quantities_are_shown_as_written() -> None:

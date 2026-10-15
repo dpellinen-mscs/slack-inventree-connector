@@ -228,11 +228,30 @@ def dry_run_reply(
     """The body of the dry-run reply: `text` for notifications, and `blocks`. Nothing was written. `revised`:
     the post was read again because the thread changed, and this reply takes the place of the one above.
     `answered`: what changed is only that a question was answered."""
+    return _dry_run(views, parts, locations, revised=revised, answered=answered)[0]
+
+
+def shows_everything(views: Sequence[MovementView], parts: Mapping[int, str], locations: Mapping[int, str]) -> bool:
+    """Whether the dry-run reply of `views` shows every movement, line, stock item, place and reason in full. A reply
+    cut to Slack's limits leaves out what a write would do, and an approver approves only what they were shown
+    (ADR 0016), so such a reply gets no Apply button (`with_no_apply`)."""
+    return _dry_run(views, parts, locations)[1]
+
+
+def _dry_run(
+    views: Sequence[MovementView],
+    parts: Mapping[int, str],
+    locations: Mapping[int, str],
+    *,
+    revised: bool = False,
+    answered: bool = False,
+) -> tuple[dict[str, Any], bool]:
+    """The dry-run reply, and whether nothing of it was cut (`shows_everything`)."""
     if not views:
         raise ValueError("a dry-run reply shows at least one movement")
     because = "a question was answered" if answered else "the thread changed"
     heading = f"*Revised dry run* ({because})." if revised else "*Dry run.*"
-    blocks: list[dict[str, Any]] = [_section(f"{heading} Nothing was changed in inventory.")]
+    texts = [f"{heading} Nothing was changed in inventory."]
     for number, view in enumerate(views[:MAX_MOVEMENTS], start=1):
         movement = view.movement
         heading = TYPE_LABELS[movement.movement_type]
@@ -244,7 +263,7 @@ def dry_run_reply(
             movement.destination_text, view.destination, locations, "location", view.named.get("destination")
         )
         places = f"From {source} to {destination}"
-        blocks.append(_section("\n".join([f"*{heading}*", *lines, places])))
+        texts.append("\n".join([f"*{heading}*", *lines, places]))
         details: dict[ReasonCode, list[str]] = {}
         for code, detail in sorted(gate_reasons(view), key=lambda reason: (reason[0].value, reason[1])):
             details.setdefault(code, [])
@@ -252,14 +271,17 @@ def dry_run_reply(
                 details[code].append(detail)
         if details:
             needs = "\n".join(_reason_line(code, found) for code, found in details.items())
-            blocks.append(_section(f"*Needs a human before it could apply:*\n{needs}"))
+            texts.append(f"*Needs a human before it could apply:*\n{needs}")
         else:
-            blocks.append(_section("Nothing needs a human. With writes on, this could apply."))
+            texts.append("Nothing needs a human. With writes on, this could apply.")
+    whole = len(views) <= MAX_MOVEMENTS and all(len(text) <= MAX_SECTION for text in texts)
+    blocks = [_section(text) for text in texts]
     if len(views) > MAX_MOVEMENTS:
         hidden = len(views) - MAX_MOVEMENTS
         blocks.append(_section(f"…and {hidden} more movements, not shown here."))
     count = f"{len(views)} movements" if len(views) > 1 else "1 movement"
-    return {"text": f"{'Revised dry run' if revised else 'Dry run'}: {count}, nothing changed.", "blocks": blocks}
+    text = f"{'Revised dry run' if revised else 'Dry run'}: {count}, nothing changed."
+    return {"text": text, "blocks": blocks}, whole
 
 
 RETRACTION_REASONS = {
@@ -494,6 +516,21 @@ def with_apply(reply: Mapping[str, Any], revision: int) -> dict[str, Any]:
     ]
     if len(blocks) > MAX_BLOCKS:
         raise ValueError("a reply with its Apply button has more blocks than Slack allows")
+    return {"text": reply["text"], "blocks": blocks}
+
+
+NO_APPLY_TEXT = (
+    "This reply is too long to show everything a write would do, so it cannot be applied from here."
+    " To record the movement, split the post into shorter ones."
+)
+
+
+def with_no_apply(reply: Mapping[str, Any]) -> dict[str, Any]:
+    """The dry-run reply of a plan that `shows_everything` says the reply does not show in full, with the reason it
+    has no Apply button below it. The plan waits, as one with no reply does, until it expires."""
+    blocks = [*reply["blocks"], _section(NO_APPLY_TEXT)]
+    if len(blocks) > MAX_BLOCKS:
+        raise ValueError("a reply with its note has more blocks than Slack allows")
     return {"text": reply["text"], "blocks": blocks}
 
 

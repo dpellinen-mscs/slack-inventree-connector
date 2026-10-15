@@ -134,7 +134,9 @@ from stockthread.slack.replies import (
     receipt_replaced,
     rejection_notice,
     retraction_notice,
+    shows_everything,
     with_apply,
+    with_no_apply,
     with_question,
     without_question,
 )
@@ -355,6 +357,7 @@ APPLY_FEEDBACK = {
     "no_plan": "Not applied: this reply has nothing that could apply now.",
     "post_changed": "Not applied: the post changed or is being worked on. Please try again in a moment.",
     "not_rebuilt": "Not applied: the connector cannot rebuild this movement from its records.",
+    "not_shown": "Not applied: the reply is too long to show everything a write would do.",
     "failed": "Not applied: something went wrong before anything was changed. Please try again in a few minutes.",
 }
 """What the clicker alone is told about an Apply click (`Worker._handle_apply`). A refusal by the gate adds its why."""
@@ -642,7 +645,8 @@ class Worker:
 
         Nothing is written here: `work_due` writes an approved plan, judged again under the writer lock. A click that
         fails is not tried again later, so no plan is approved long after the click: the clicker is told to try again.
-        The clicker alone is told what came of it."""
+        A reply too long to show the plan in full (`shows_everything`, with the catalog's names now) approves
+        nothing, though it carries no button. The clicker alone is told what came of it."""
         found = self.store.dry_run_with_reply(self.settings.slack.workspace_id, click.channel, click.message_ts)
         if found is None or not _REVISION.fullmatch(click.value) or int(click.value) != found[1]:
             return self._told(click, EventStatus.DROPPED, "unknown_button", CLICK_FEEDBACK["unknown_button"])
@@ -657,6 +661,12 @@ class Worker:
             return self._told(click, EventStatus.DROPPED, "no_plan", APPLY_FEEDBACK["no_plan"])
         self.beat(now=True)  # the judgement reads the catalog and the server's version
         try:
+            # An approver approves only what the reply showed (ADR 0016): one cut short carries no button.
+            catalog = self.catalog()
+            parts = {part.pk: part.name for part in catalog.parts}
+            locations = {location.pk: location.path for location in catalog.locations}
+            if not shows_everything(plan_views(self.store, plan).views, parts, locations):
+                return self._told(click, EventStatus.DROPPED, "not_shown", APPLY_FEEDBACK["not_shown"])
             judgement = self.approve_click(post, plan.revision, click.user, self._now())
         except LockLost:
             raise
@@ -1288,8 +1298,9 @@ class Worker:
             return True
         plan = _plan(key, decided)
         if plan is not None and asked is None and self.approve_click is not None:
-            try:
-                body = with_apply(body, post.revision)
+            try:  # an approver approves only what they were shown (ADR 0016): a reply cut short gets no button
+                complete = shows_everything(views, parts, locations)
+                body = with_apply(body, post.revision) if complete else with_no_apply(body)
             except Exception as error:  # the reply still says it could apply; the plan waits for a newer reply
                 _log_failure("apply button", key.ts, error)
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and

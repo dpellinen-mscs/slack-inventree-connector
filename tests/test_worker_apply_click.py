@@ -22,7 +22,7 @@ from stockthread.core.resolve import STATUS_OK, StockItem
 from stockthread.gate import Judgement, Policy, Verdict
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, ServerInfo, VersionCheck, check_version
 from stockthread.run import click_approver
-from stockthread.slack.replies import APPLY_ACTION, APPLY_BLOCK, CLICK_FEEDBACK, with_apply
+from stockthread.slack.replies import APPLY_ACTION, APPLY_BLOCK, CLICK_FEEDBACK, NO_APPLY_TEXT, with_apply
 from stockthread.store import DryRunOutcome, EventStatus, StateConflict, Store, WriteBlocked
 from stockthread.worker import APPLY_FEEDBACK, Worker
 
@@ -353,6 +353,50 @@ def test_a_click_that_fails_is_never_tried_again_later(store: Store, clock: Cloc
     clock.at("1790000600.000000")
     worker.step()
     assert clicking.calls == [(POST, 1, LUIS)]  # once
+    assert store.request(KEY).state is S.PLANNED
+
+
+ADAPTERS = 50
+LONG_RETURN = (
+    "returned "
+    + ", ".join(f"1 Synthetic adapter {n:02d}" for n in range(1, ADAPTERS + 1))
+    + " from truck 1 to main stock"
+)
+
+
+def test_a_reply_too_long_to_show_in_full_has_no_apply_button(store: Store, clock: Clock) -> None:
+    """Review #139 finding 1: a return of 50 adapters does not fit the reply, which leaves out the last lines and both
+    places. An approver approves only what they were shown (ADR 0016), so the reply says why it has no Apply button,
+    and a click on it approves nothing."""
+    parts = tuple(PartRecord(n, f"ADAPTER-{n:02d}", f"Synthetic adapter {n:02d}") for n in range(1, ADAPTERS + 1))
+    catalog = Catalog(parts=parts, locations=CATALOG.locations)
+
+    def on_the_truck(pairs: Sequence[tuple[int, int]]) -> dict[tuple[int, int], list[StockItem]]:
+        return {
+            (part, at): [StockItem(100 + part, Decimal(5), STATUS_OK, Decimal(0))] if at == TRUCK else []
+            for part, at in pairs
+        }
+
+    clicking = Clicking(store)
+    worker = Worker(
+        settings(), store, OWNER, FakeSlack(), lambda: catalog, clock, stock=on_the_truck, approve_click=clicking,  # type: ignore[arg-type]
+    )  # fmt: skip
+    enqueue(store, message(ROOT, LONG_RETURN))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    plan = store.current_plan(POST)
+    assert plan is not None, "the reply made no plan"
+    [reply] = slack(worker).posted
+    shown = "\n".join(block["text"]["text"] for block in reply["blocks"] if block["type"] == "section")
+    assert "Synthetic adapter 50" not in shown  # cut out of the reply
+    assert apply_button(reply) is None
+    assert shown.endswith(NO_APPLY_TEXT)
+    click(store, worker)  # a forged click, as if the reply carried the button
+    worker.drain()
+    assert last_event(store) == (EventStatus.DROPPED, "not_shown")
+    assert told(worker) == [(LUIS, APPLY_FEEDBACK["not_shown"])]
+    assert clicking.calls == []
     assert store.request(KEY).state is S.PLANNED
 
 
