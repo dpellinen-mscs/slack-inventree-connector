@@ -102,6 +102,7 @@ The quickstart reaches the first dry-run in about 15 minutes.
 - [ ] Plan expiry
   - [x] A question whose plan expired is taken out of its reply, says so, and takes no answer (migration 0014)
   - [x] One expiry time per post for its questions and its revisions (migration 0015, #74)
+  - [x] An approved plan is never written past its expiry; one whose first write began is finished (`applier.work_request`, `applier.plan_expired`)
 - [x] Setup check: users without a vehicle, token roles, locations that are missing (`stockthread check-setup`; users are those who have posted, from the local database, so no new Slack scope)
 - [x] Admin guidance: how to model vehicles and sites as stock locations (`docs/locations.md`)
 
