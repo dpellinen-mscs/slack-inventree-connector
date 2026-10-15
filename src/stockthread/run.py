@@ -40,12 +40,20 @@ from stockthread.gate import Policy
 from stockthread.inventree import InvenTreeError, InvenTreeReader, VersionCheck, check_version
 from stockthread.llm.extract import LLMExtractor, WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
-from stockthread.setup_check import Finding, Level, check_posters, check_roles, check_vehicles, lacks_catalog_view
+from stockthread.setup_check import (
+    Finding,
+    Level,
+    check_aliases,
+    check_posters,
+    check_roles,
+    check_vehicles,
+    lacks_catalog_view,
+)
 from stockthread.slack.catchup import SWEEP_SECONDS, CatchUp, HistoryClient
 from stockthread.slack.http_server import HttpServer, ServeError
 from stockthread.slack.listener import IdentityError, Listener, ThreadStores, build_app, identify
 from stockthread.slack.replies import MovementView
-from stockthread.store import InstanceLocked, LockLost, Store, new_lock_owner
+from stockthread.store import InstanceLocked, LockLost, SchemaTooNew, SchemaTooOld, Store, StoredAlias, new_lock_owner
 from stockthread.store.db import posters_seen
 from stockthread.worker import PosterBusy, PostStillRunning, Stepper, StockReader, Undoer, Worker
 from stockthread.writer import InvenTreeWriter
@@ -357,18 +365,43 @@ def check_inventree(settings: Settings) -> VersionCheck:
 def check_setup(settings: Settings) -> list[Finding]:
     """The setup check's findings (setup_check.py). Raises InvenTreeError when the server cannot be read."""
 
+    aliases, unread = _stored_aliases(settings.storage.database)
+
     async def read() -> list[Finding]:
         async with InvenTreeReader(settings.inventree, settings.secrets.inventree_token) as reader:
-            return await inventree_findings(reader, settings.vehicles, writes=settings.writes.enabled)
+            return await inventree_findings(reader, settings.vehicles, writes=settings.writes.enabled, aliases=aliases)
 
     return [
         *asyncio.run(read()),
         *check_posters(posters_seen(settings.storage.database), settings.vehicles),
+        *unread,
     ]
 
 
-async def inventree_findings(reader: InvenTreeReader, vehicles: Mapping[str, str], *, writes: bool) -> list[Finding]:
-    """Version, roles, and `[vehicles]` paths. A catalog that cannot be read is a finding, so the roles still print."""
+def _stored_aliases(path: str) -> tuple[tuple[StoredAlias, ...], list[Finding]]:
+    """The stored aliases, read without changing the database: none without one, and a finding when its schema is
+    not this version's."""
+    try:
+        store = Store.open_read_only(path)
+    except FileNotFoundError:
+        return (), []
+    except (SchemaTooNew, SchemaTooOld) as exc:
+        return (), [Finding(Level.WARN, f"aliases: not checked: {exc}")]
+    try:
+        return store.stored_aliases(), []
+    finally:
+        store.close()
+
+
+async def inventree_findings(
+    reader: InvenTreeReader,
+    vehicles: Mapping[str, str],
+    *,
+    writes: bool,
+    aliases: Sequence[StoredAlias] = (),
+) -> list[Finding]:
+    """Version, roles, `[vehicles]` paths, and the records `aliases` name. A catalog that cannot be read is a finding,
+    so the roles still print."""
     version = check_version(await reader.server_info())
     roles = await reader.user_roles()
     found = [
@@ -381,7 +414,7 @@ async def inventree_findings(reader: InvenTreeReader, vehicles: Mapping[str, str
         catalog = await load_catalog(reader)
     except InvenTreeError as exc:
         return [*found, Finding(Level.ERROR, f"vehicles: not checked, the catalog could not be read: {exc}")]
-    return [*found, *check_vehicles(catalog, vehicles)]
+    return [*found, *check_vehicles(catalog, vehicles), *check_aliases(catalog, aliases)]
 
 
 def llm_provider(settings: Settings) -> OpenAICompatible | None:

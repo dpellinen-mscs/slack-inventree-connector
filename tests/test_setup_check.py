@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -13,12 +14,20 @@ from pydantic import SecretStr
 
 from stockthread import __main__ as cli
 from stockthread.config import InvenTreeSettings
-from stockthread.core.matching import Catalog, LocationRecord
+from stockthread.core.matching import Alias, Catalog, LocationRecord, PartRecord, stale_aliases
 from stockthread.core.model import PostKey
 from stockthread.inventree import InvenTreeReader
-from stockthread.run import inventree_findings
-from stockthread.setup_check import Finding, Level, check_posters, check_roles, check_vehicles, exit_code
-from stockthread.store import Store
+from stockthread.run import _stored_aliases, inventree_findings
+from stockthread.setup_check import (
+    Finding,
+    Level,
+    check_aliases,
+    check_posters,
+    check_roles,
+    check_vehicles,
+    exit_code,
+)
+from stockthread.store import AliasKind, Store, StoredAlias
 from stockthread.store.db import posters_seen
 
 NONE_OF_THE_REST = dict.fromkeys(("admin", "part_category", "bom", "build", "purchase_order", "sales_order"))
@@ -280,3 +289,85 @@ def test_with_writes_off_a_view_is_still_needed() -> None:
         (Level.OK, "roles: stock lacks add, needed only once writes are on (writes are off)"),
     ]
     assert exit_code(findings) == 1
+
+
+ALIAS_CATALOG = Catalog(
+    parts=(
+        PartRecord(1, "AP-1", "Disc 40"),
+        PartRecord(2, "KIT", "Install kit", template=True),
+        PartRecord(3, "SVC", "Labour", virtual=True),
+        PartRecord(4, "OLD", "Disc 30", active=False),
+    ),
+    locations=(LocationRecord(5, "Vehicles", structural=True), LocationRecord(6, "Vehicles/Truck 1")),
+)
+
+
+def stored(alias_id: int, kind: AliasKind, record: int) -> StoredAlias:
+    return StoredAlias(alias_id, kind, "words from slack", record, None, frozenset(), None, "then", "then")
+
+
+def test_an_alias_whose_record_cannot_be_matched_is_a_warning_with_its_id() -> None:
+    part, location = AliasKind.PART, AliasKind.LOCATION
+    aliases = [stored(1, part, 1), stored(2, part, 2), stored(3, part, 3), stored(4, part, 4), stored(5, part, 9)]
+    aliases += [stored(6, location, 5), stored(7, location, 6), stored(8, location, 8)]
+    findings = check_aliases(ALIAS_CATALOG, aliases)
+    assert {f.level for f in findings} == {Level.WARN}
+    assert [f.text.split(", which ")[1].split(": it is")[0] for f in findings] == [
+        "is a template part (it holds no stock)",
+        "is a virtual part (it holds no stock)",
+        "is not an active part in InvenTree (made inactive, or deleted)",
+        "is not an active part in InvenTree (made inactive, or deleted)",
+        "is a structural location (it cannot hold stock)",
+        "is not a stock location in InvenTree",
+    ]
+    assert findings[0].text == (
+        "aliases: alias 2 names part 2, which is a template part (it holds no stock): it is ignored"
+        " (`stockthread aliases remove 2` forgets it)"
+    )
+    assert "words from slack" not in "\n".join(f.text for f in findings)  # ids only, never a message's words
+    # The same aliases the matcher ignores, no more and no fewer.
+    catalog = Catalog(
+        parts=ALIAS_CATALOG.parts,
+        locations=ALIAS_CATALOG.locations,
+        part_aliases=tuple(Alias("x", a.record) for a in aliases if a.kind is part),
+        location_aliases=tuple(Alias("x", a.record) for a in aliases if a.kind is location),
+    )
+    warned = [int(f.text.split(" names ")[1].split(",")[0].split()[1]) for f in findings]
+    assert warned == [alias.record for alias in stale_aliases(catalog)]
+    assert exit_code(findings) == 0
+
+
+def test_aliases_that_all_match_are_one_ok_line_and_none_are_no_line() -> None:
+    assert check_aliases(ALIAS_CATALOG, [stored(1, AliasKind.PART, 1), stored(2, AliasKind.LOCATION, 6)]) == [
+        Finding(Level.OK, "aliases: every one of the 2 names a record that can be matched")
+    ]
+    assert check_aliases(ALIAS_CATALOG, []) == []
+
+
+@pytest.mark.anyio
+async def test_the_catalog_read_checks_the_aliases() -> None:
+    client, _ = inventree(MINIMUM)
+    async with client:
+        findings = await inventree_findings(
+            client, {"U0SAM001": "Vehicles/Sam"}, writes=True, aliases=[stored(3, AliasKind.LOCATION, 10)]
+        )
+        missing = await inventree_findings(client, {}, writes=True, aliases=[stored(4, AliasKind.PART, 1)])
+    assert findings[-1] == Finding(Level.OK, "aliases: every one of the 1 names a record that can be matched")
+    assert missing[-1].text.startswith("aliases: alias 4 names part 1, which is not an active part")
+
+
+def test_the_aliases_are_read_without_changing_the_database(tmp_path: Path) -> None:
+    path = tmp_path / "stockthread.db"
+    assert _stored_aliases(str(path)) == ((), [])
+    assert not path.exists()  # nothing is created
+    Store.open(path).close()
+    assert _stored_aliases(str(path)) == ((), [])
+    raw = sqlite3.connect(path, isolation_level=None)
+    raw.execute("DROP TABLE aliases")  # back to schema 20
+    raw.execute("ALTER TABLE audit_log DROP COLUMN alias_id")
+    raw.execute("PRAGMA user_version = 20")
+    aliases, findings = _stored_aliases(str(path))
+    assert aliases == ()
+    assert [(f.level, f.text.split(":")[0]) for f in findings] == [(Level.WARN, "aliases")]
+    assert raw.execute("PRAGMA user_version").fetchone() == (20,)  # not migrated
+    raw.close()
