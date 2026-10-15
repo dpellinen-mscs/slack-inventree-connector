@@ -244,7 +244,7 @@ async def test_a_catalog_refused_despite_the_roles_is_an_error_and_the_roles_sti
     async with client:
         findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
     assert levels(findings) == [Level.OK, Level.OK, Level.ERROR]
-    assert findings[2].text.startswith("vehicles: not checked, the catalog could not be read: ")
+    assert findings[2].text.startswith("vehicles and aliases: not checked, the catalog could not be read: ")
 
 
 @pytest.mark.anyio

@@ -413,7 +413,8 @@ async def inventree_findings(
     try:
         catalog = await load_catalog(reader)
     except InvenTreeError as exc:
-        return [*found, Finding(Level.ERROR, f"vehicles: not checked, the catalog could not be read: {exc}")]
+        unread = f"vehicles and aliases: not checked, the catalog could not be read: {exc}"
+        return [*found, Finding(Level.ERROR, unread)]
     return [*found, *check_vehicles(catalog, vehicles), *check_aliases(catalog, aliases)]
 
 
