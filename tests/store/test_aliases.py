@@ -271,13 +271,15 @@ def test_a_removed_alias_s_id_is_never_given_again(store: Store) -> None:
 
 
 def test_the_list_quotes_text_from_slack() -> None:
-    hostile = StoredAlias(3, PART, 'disc\x1b[2J\x7f\x9b\u202e "40" é', 1, "U0\x85SAM", None, KEY, "then", "now")
+    hostile = StoredAlias(
+        3, PART, 'disc\x1b[2J\x7f\x9b\u202e "40" é', 1, "U0\x85SAM\U000e0041", None, KEY, "then", "now"
+    )
     (heading, line, hint) = alias_lines([hostile])
     assert heading == "part aliases:"
     assert line.isprintable()
     assert line == (
-        '    3  "disc\\u001b[2J\\u007f\\u009b\\u202e \\"40\\" é" -> part 1, posts by "U0\\u0085SAM" only; learned now'
-        " from post C0STOCK 1727600000.000100"
+        '    3  "disc\\u001b[2J\\u007f\\u009b\\u202e \\"40\\" é" -> part 1, posts by "U0\\u0085SAM\\udb40\\udc41" only;'
+        " learned now from post C0STOCK 1727600000.000100"
     )
     assert "aliases remove" in hint
     assert alias_lines([]) == ["no aliases stored: one is learned when a confirmed plan is applied and verified"]
