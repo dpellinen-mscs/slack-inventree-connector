@@ -107,6 +107,31 @@ def test_delay_times_out_the_client_after_the_server_answered(
     assert len(upstream.received) == 1
 
 
+def test_hold_forwards_only_after_release_once_the_client_gave_up(
+    upstream: _Upstream, proxy: FaultProxy, client: httpx.Client
+) -> None:
+    proxy.inject(Rule("POST", TRANSFER, Fault.HOLD))
+    with pytest.raises(httpx.ReadTimeout):
+        client.post(TRANSFER, json={}, timeout=0.2)
+    proxy.wait_held()
+    assert upstream.received == []
+    assert proxy.log == []
+    proxy.release()
+    assert proxy.wait_for(1) == [Entry("POST", TRANSFER, Fault.HOLD, 201)]
+    assert len(upstream.received) == 1
+
+
+def test_a_request_still_held_when_the_proxy_closes_is_dropped_not_forwarded(upstream: _Upstream) -> None:
+    host, port = upstream.server_address[:2]
+    with FaultProxy(f"http://{host!s}:{port}") as proxy:
+        proxy.inject(Rule("POST", TRANSFER, Fault.HOLD))
+        with pytest.raises(httpx.TransportError):
+            httpx.post(f"{proxy.url}{TRANSFER}", json={}, timeout=0.2)
+        proxy.wait_held()
+    assert proxy.wait_for(1) == [Entry("POST", TRANSFER, Fault.HOLD, None)]
+    assert upstream.received == []
+
+
 def test_garble_keeps_the_status_and_cuts_the_body(proxy: FaultProxy, client: httpx.Client) -> None:
     proxy.inject(Rule("POST", TRANSFER, Fault.GARBLE))
     response = client.post(TRANSFER, json={})
