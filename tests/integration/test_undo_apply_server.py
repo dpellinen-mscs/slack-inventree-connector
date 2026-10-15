@@ -159,3 +159,45 @@ def test_recovery_concludes_an_unknown_undo_of_an_add_a_remove_and_a_count(
 
     anyio.run(apply_then_lose_the_undo)
     assert totals() == (before if landed else applied)
+
+
+def test_two_undo_clicks_at_once_move_stock_once(api: RawApi, scratch: Scratch, store: Store) -> None:
+    """M3 DoD: two undo clicks move stock once, even with a writer lock each, as two processes would have."""
+    item = scratch.stock(5, delete_on_deplete=False)
+    movement = planned(scratch, MovementType.TAKE_TO_VEHICLE, item["pk"], "2")
+    marker = Marker(new_marker_id(), AttemptKind.APPLY, 1)
+    (operation,) = {request.operation for request in plan_requests([movement], [marker], user="U0SAM0001")}
+    store.create_plan(POST, "0" * 64, (operation,))
+    store.transition(KEY, expected=S.PLANNED, target=S.APPROVED, actor=Actor.HUMAN)
+    read = inventree_stock(settings())
+    before = {pair: sum(stock.quantity for stock in items) for pair, items in read(pairs(movement)).items()}
+    outcomes: list[RequestState | str] = []
+
+    async def apply_then_undo_twice() -> None:
+        async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(), token()) as writer:
+            done = await apply_request(
+                KEY, movement, allowed(movement), store=store, reader=reader, writer=writer, lock=anyio.Lock(),
+                lock_owner=OWNER,
+            )  # fmt: skip
+            assert done.state is S.VERIFIED, done
+
+            async def click(user: str) -> None:
+                try:
+                    undone = await undo_apply(
+                        KEY, movement, store=store, reader=reader, writer=writer, lock=anyio.Lock(), lock_owner=OWNER,
+                        user=user,
+                    )  # fmt: skip
+                    outcomes.append(undone.state)
+                except Exception as error:
+                    outcomes.append(type(error).__name__)
+
+            async with anyio.create_task_group() as group:
+                group.start_soon(click, "U0DAN0001")
+                group.start_soon(click, "U0SAM0001")
+
+    anyio.run(apply_then_undo_twice)
+    assert outcomes.count(S.UNDONE) == 1, outcomes
+    assert set(outcomes) - {S.UNDONE} <= {S.VERIFIED, "StateConflict", "ValueError"}, outcomes  # refused, nothing sent
+    assert len([m for m in store.markers(KEY) if m.kind is AttemptKind.UNDO]) == 1
+    after = {pair: sum(stock.quantity for stock in items) for pair, items in read(pairs(movement)).items()}
+    assert after == before
