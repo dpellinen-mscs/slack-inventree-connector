@@ -3,7 +3,8 @@ what it decided, and who answered what (design section 8).
 
 Read only: it never changes the database. By default it prints ids, codes and InvenTree primary keys, never
 words of the post, so its output can be pasted into an issue. `text=True` adds the words each line was read
-from, as stored.
+from, as stored. Every character that is not printable (control characters, DEL, C1 codes, bidi overrides), which
+only words from Slack can hold, is printed escaped as `\\uXXXX`: none reaches the terminal as itself.
 """
 
 from __future__ import annotations
@@ -73,7 +74,11 @@ def post_trail(store: Store, message: PostKey, *, text: bool = False) -> list[st
     lines.extend(
         f"  {at} {actor} {event}{_states(before, after)}" for at, actor, event, before, after in store.audit(key)
     )
-    return lines
+    return [_printable(line) for line in lines]
+
+
+def _printable(line: str) -> str:
+    return "".join(char if char.isprintable() else f"\\u{ord(char):04x}" for char in line)
 
 
 def _decided(result: Mapping[str, Any], *, text: bool) -> list[str]:

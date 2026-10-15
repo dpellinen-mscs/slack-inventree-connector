@@ -126,6 +126,18 @@ def test_every_reason_of_the_gate_is_shown_with_who_raised_it(store: Store, path
     assert '5 of "Disc 40" part 1' in "\n".join(read(path, text=True))
 
 
+def test_words_from_slack_never_reach_the_terminal_as_control_characters(store: Store, path: Path) -> None:
+    movement = {**SPLIT["movements"][0], "source_text": "main\u202e stock"}  # type: ignore[index]
+    movement["items"] = [{**movement["items"][0], "item_text": "Disc\x1b[2J\x7f\x9b 40 é"}]
+    hostile = {**SPLIT, "movements": [movement]}
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, "1790000020.000100", extractor="llm:m", result=hostile)
+    lines = read(path, text=True)
+    assert all(line.isprintable() for line in lines)
+    shown = "\n".join(lines)
+    assert '"main\\u202e stock"' in shown
+    assert '5 of "Disc\\u001b[2J\\u007f\\u009b 40 é" part 1' in shown
+
+
 def test_a_post_without_a_dry_run_or_a_record_says_so(store: Store, path: Path) -> None:
     assert "no dry run yet" in read(path)
     store.finish_dry_run(OWNER, POST, DryRunOutcome.SILENT)
