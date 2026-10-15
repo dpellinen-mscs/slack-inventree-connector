@@ -78,7 +78,16 @@ def post_trail(store: Store, message: PostKey, *, text: bool = False) -> list[st
 
 
 def _printable(line: str) -> str:
-    return "".join(char if char.isprintable() else f"\\u{ord(char):04x}" for char in line)
+    return "".join(char if char.isprintable() else _escaped(char) for char in line)
+
+
+def _escaped(char: str) -> str:
+    """`\\uXXXX`, or the UTF-16 surrogate pair as JSON writes it above U+FFFF: never read as fewer digits."""
+    code = ord(char)
+    if code <= 0xFFFF:
+        return f"\\u{code:04x}"
+    code -= 0x10000
+    return f"\\u{0xD800 + (code >> 10):04x}\\u{0xDC00 + (code & 0x3FF):04x}"
 
 
 def _decided(result: Mapping[str, Any], *, text: bool) -> list[str]:
