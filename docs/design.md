@@ -1990,6 +1990,10 @@ window between the precondition and the write:
 `test_another_users_change_between_the_precondition_and_the_write_is_found_and_blocks_the_post`
 takes stock from the item there, and the read-back names the other
 writer's entry (`verify_failed`, a receipt due, the post blocked).
+`test_a_crash_during_an_undo_is_recovered_after_a_restart` kills a run
+(`tests/support/crashing_undo.py`, SIGKILL) while its undo's write is
+held; the write then lands or never does, and the next start concludes
+it `undone` or `undo_failed`, never undoing twice.
 
 ## 12. Configuration
 

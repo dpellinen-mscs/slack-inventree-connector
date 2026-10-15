@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from datetime import timedelta
 from decimal import Decimal
@@ -358,3 +360,66 @@ async def test_another_users_change_between_the_precondition_and_the_write_is_fo
     moved = scratch.api.items(scratch.part, scratch.other)  # the 1 left moved whole, not the 2 planned
     assert sum(Decimal(str(row["quantity"])) for row in moved) == 1
     assert scratch.api.items(scratch.part, scratch.parent) == []
+
+
+@pytest.mark.parametrize("landed", [True, False])
+@pytest.mark.anyio
+async def test_a_crash_during_an_undo_is_recovered_after_a_restart(
+    store: Store, scratch: Scratch, proxy: FaultProxy, tmp_path: Path, landed: bool
+) -> None:
+    """M3 DoD: a crash during undo is recovered. A run of its own starts the undo of a verified transfer and is killed
+    (SIGKILL) while its write is held on the way, leaving `undoing`. The write then lands, or never does. The next
+    start concludes it `undo_unknown`, and recovery finds it `undone` with every total back, or `undo_failed` with the
+    apply's stock standing; either way a second undo is refused, so the stock moves back at most once."""
+    item = scratch.stock(5)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], "2")
+    assert await run(store, movement) is RequestState.VERIFIED
+    store.release_lock(OWNER)
+    store.close()
+    proxy.inject(Rule("POST", PATHS[Operation.TRANSFER], Fault.HOLD))
+    script = Path(__file__).parents[1] / "support" / "crashing_undo.py"
+    args = (tmp_path / "stockthread.db", proxy.url, item["pk"], scratch.part, scratch.parent, scratch.other, "2")
+    crashing = subprocess.Popen([sys.executable, str(script), *map(str, args)])  # noqa: S603 (our own script)
+    try:
+        await anyio.to_thread.run_sync(proxy.wait_held)
+    finally:
+        crashing.kill()
+        crashing.wait()
+    if landed:
+        proxy.release()
+        assert proxy.wait_for(1)[0].upstream_status == 201
+
+    restarted = Store.open(tmp_path / "stockthread.db")
+    try:
+        assert restarted.request(KEY).state is RequestState.UNDOING
+        restarted.acquire_lock("worker-it-restarted", stale_after=timedelta(0))  # the killed run's lock is stale
+        assert restarted.conclude_crashed_writes("worker-it-restarted") == [KEY]
+        assert restarted.request(KEY).state is RequestState.UNDO_UNKNOWN
+        lock = anyio.Lock()
+        async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(), token()) as writer:
+            recovered = await recover_undo(
+                KEY, movement, store=restarted, reader=reader, lock=lock, settle=timedelta(0)
+            )
+            assert recovered.problems == (), recovered.problems
+            assert recovered.state is (RequestState.UNDONE if landed else RequestState.UNDO_FAILED)
+            if landed:
+                with pytest.raises(ValueError, match="is undone, not one an undo may start from"):
+                    await undo_apply(
+                        KEY, movement, store=restarted, reader=reader, writer=writer, lock=lock,
+                        lock_owner="worker-it-restarted", user="U0DAN0001",
+                    )  # fmt: skip
+            else:  # it may still land: a second undo would reverse the apply twice
+                again = await undo_apply(
+                    KEY, movement, store=restarted, reader=reader, writer=writer, lock=lock,
+                    lock_owner="worker-it-restarted", user="U0DAN0001",
+                )  # fmt: skip
+                assert again.state is RequestState.UNDO_FAILED, again
+                assert again.why.startswith("no undo: an earlier undo of this request was not refused"), again
+    finally:
+        restarted.close()
+    assert transfers_sent(proxy) == ([201] if landed else [])
+    moved = scratch.api.items(scratch.part, scratch.other)
+    assert sum(Decimal(str(row["quantity"])) for row in moved) == (0 if landed else Decimal(2))
+    back = scratch.api.items(scratch.part, scratch.parent)
+    assert sum(Decimal(str(row["quantity"])) for row in back) == (Decimal(5) if landed else Decimal(3))
