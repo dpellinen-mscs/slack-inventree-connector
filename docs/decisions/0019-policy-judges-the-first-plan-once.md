@@ -62,6 +62,9 @@ cases make "judge every current plan on every step" unsafe:
   closed, and the log says so for each plan.
 - Once approved, the write itself is retried through outages by the apply
   step, with no 10-minute limit; an edit or deletion before the write
-  begins still cancels it. The reply still reads "Dry run" for the moment
+  begins still cancels it: `Store.begin_attempt` refuses to start an
+  apply while any event waits in the queue, checked in the transaction
+  that stores the intent, so an edit received during the reads before
+  the write is handled first. The reply still reads "Dry run" for the moment
   between the reply and the write; the receipt that follows says what was
   written. Both are revisited with the Apply button slice.

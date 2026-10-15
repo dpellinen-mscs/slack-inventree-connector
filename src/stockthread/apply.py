@@ -36,7 +36,7 @@ from stockthread.inverse import (
 from stockthread.precondition import Pair, Snapshot, Stale, built_from, check, pairs
 from stockthread.readback import created, verify
 from stockthread.slack.replies import MovementView
-from stockthread.store import Store, WriteBlocked
+from stockthread.store import EventsWaiting, Store, WriteBlocked
 from stockthread.writer import Outcome, Sent, WriteRefused
 
 
@@ -182,10 +182,11 @@ async def apply_request(
     cuts the step off cuts a read off, not a write; the request then stays `approved`.
 
     Each outcome is a state of the request: still `approved` when it waits for another request of the post
-    (`Store.apply_waits_for`) or the gate blocks it now (nothing read or written), `planned` when the store refuses
-    the write for good (an earlier request of the plan went wrong, `Store.plan_stopped_before`, checked before the
-    gate with nothing read; or `WriteBlocked`: a write of the post may still land, or the attempt limit), so it goes
-    back to review, `verify_failed` when the history already disagrees with the store, `planned` when the
+    (`Store.apply_waits_for`), the gate blocks it now (nothing read or written) or an event came into the queue
+    during the reads (`EventsWaiting`: an edit may take the approval back; nothing written), `planned` when the store
+    refuses the write for good (an earlier request of the plan went wrong, `Store.plan_stopped_before`, checked before
+    the gate with nothing read; or `WriteBlocked`: a write of the post may still land, or the attempt limit), so it
+    goes back to review, `verify_failed` when the history already disagrees with the store, `planned` when the
     stock changed since the plan, `failed` when InvenTree refused the write (or the writer refused to send it),
     `unknown` when the outcome is not known (recovery's), `verified` or `verify_failed` after the read-back. A read
     error before the write leaves the request `approved` and raises; one in the read-back leaves it `applied` (not
@@ -244,6 +245,8 @@ async def apply_request(
                 request_body=dict(request.body),
                 lock_owner=lock_owner,
             )
+        except EventsWaiting as waiting:  # the worker drains the queue first, then this step runs again
+            return Applied(RequestState.APPROVED, f"not written yet: {waiting}")
         except WriteBlocked as blocked:  # for good: what would wait was waited for above, under the same lock
             return _back_to_review(store, key, str(blocked))
         # Step 4: send once. From here on, only InvenTree's own answer makes the outcome known.

@@ -106,6 +106,11 @@ class WriteBlocked(Exception):
     """The transition is allowed by the state machine, but the post or plan forbids it now."""
 
 
+class EventsWaiting(Exception):
+    """An event waits in the queue, so no apply starts now: an edit or a deletion among them may take the approval
+    back (`Worker.drain` handles it first). Nothing changed; the request may be tried again."""
+
+
 class InstanceLocked(Exception):
     """Another instance holds the lock and its heartbeat is fresh."""
 
@@ -1676,7 +1681,9 @@ class Store:
         Returns the marker of the attempt, which `request_body` must already lead its notes with
         (`next_marker` says which; ValueError otherwise). The caller sends the write only after this returns.
         Raises LockLost unless `lock_owner` holds the instance lock, StateConflict if someone else
-        moved the request first, and WriteBlocked if the post or plan forbids a write now:
+        moved the request first, EventsWaiting for an apply while any event waits in the queue (`events_pending`:
+        an edit received during the reads before the write cancels it, checked in the same transaction), and
+        WriteBlocked if the post or plan forbids a write now:
 
         - another write of the post is in flight or not yet read back (`applied`);
         - for an apply: the plan is not current, a read-back of the post found something unexpected,
@@ -1700,6 +1707,8 @@ class Store:
             if any(state in NOT_READ_BACK for state in others):
                 raise WriteBlocked("another write of this post is in flight or not read back yet")
             if kind is AttemptKind.APPLY:
+                if self.events_pending():
+                    raise EventsWaiting("an event waits in the queue; it may take the approval back")
                 if row.plan_state != "current":
                     raise WriteBlocked(f"plan revision {key.revision} is {row.plan_state}")
                 if S.VERIFY_FAILED in others:

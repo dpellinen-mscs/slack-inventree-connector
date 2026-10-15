@@ -226,6 +226,25 @@ async def test_a_read_error_before_the_write_leaves_the_request_approved(store: 
 
 
 @pytest.mark.anyio
+async def test_an_event_that_comes_during_the_reads_leaves_the_request_approved_and_writes_nothing(
+    store: Store,
+) -> None:
+    fake = FakeInvenTree()
+    read = fake.stock_items
+
+    async def edited_meanwhile(part: int, location: int) -> list[dict[str, Any]]:
+        store.enqueue_event("EvEdit:event", "event", "{}")
+        return await read(part, location)
+
+    fake.stock_items = edited_meanwhile  # type: ignore[method-assign]
+    applied = await run(store, fake)
+    assert applied == Applied(S.APPROVED, "not written yet: an event waits in the queue; it may take the approval back")
+    assert store.request(KEY).state is S.APPROVED
+    assert fake.sent == []
+    assert store.markers(KEY) == []
+
+
+@pytest.mark.anyio
 async def test_only_an_approved_request_is_applied(store: Store) -> None:
     store.transition(KEY, expected=S.APPROVED, target=S.PLANNED, actor=Actor.APPLIER)
     fake = FakeInvenTree()
