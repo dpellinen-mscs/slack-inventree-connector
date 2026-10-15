@@ -17,7 +17,7 @@ import re
 import secrets
 import sqlite3
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -30,6 +30,7 @@ from typing import Any, Literal
 from stockthread.core.grouping import Arrival, Placed, choose_post, seconds
 from stockthread.core.marker import MAX_ATTEMPT, AttemptKind, Marker, marked, new_marker_id
 from stockthread.core.marker_check import Outcome, RecordedAttempt, RecordedRequest
+from stockthread.core.matching import Alias, words
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import (
     NEW_TRY,
@@ -96,6 +97,11 @@ class SchemaTooNew(Exception):
 
 class SchemaTooOld(Exception):
     """A read-only open found a database that this version has not migrated yet."""
+
+
+class AliasKind(StrEnum):
+    PART = "part"
+    LOCATION = "location"
 
 
 class StateConflict(Exception):
@@ -2142,6 +2148,62 @@ class Store:
                     (swept_to, self._now(), workspace_id, channel_id),
                 )
             return stored
+
+    # Aliases
+
+    def learn_alias(
+        self,
+        owner: str,
+        kind: AliasKind,
+        text: str,
+        record: int,
+        *,
+        rivals: Collection[int],
+        learned_from: RequestKey,
+        user: str | None = None,
+    ) -> None:
+        """Store `text` as a confirmed alias of part or location `record` (ADR 0012), confirmed in request
+        `learned_from`, which must be `verified`: only a confirmation that moved stock teaches an alias. `rivals`: the
+        records the whole-word and fuzzy rules fitted then. A later confirmation of the same words
+        (and user) replaces the alias. StateConflict, and nothing changes, when the request is not verified. `owner`
+        must hold the instance lock."""
+        if not words(text) or record <= 0:
+            raise ValueError("an alias names one record with at least one word")
+        key = " ".join(words(text))
+        with self._transaction():
+            self._check_lock(owner)
+            request, _, post_id = self._request(learned_from)
+            if request.state is not S.VERIFIED:
+                raise StateConflict(f"request {learned_from} is {request.state}: only a verified one teaches an alias")
+            stored = json.dumps(sorted(set(rivals)))
+            now = self._now()
+            found = self._db.execute(
+                "SELECT id FROM aliases WHERE kind = ? AND words = ? AND ifnull(user_id, '') = ?",
+                (kind.value, key, user or ""),
+            ).fetchone()
+            if found is None:
+                alias_id = self._db.execute(
+                    "INSERT INTO aliases (kind, text, words, record, user_id, rivals, request_id, created_at,"
+                    " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (kind.value, text.strip(), key, record, user, stored, request.id, now, now),
+                ).lastrowid
+            else:
+                alias_id = found[0]
+                self._db.execute(
+                    "UPDATE aliases SET text = ?, record = ?, rivals = ?, request_id = ?, updated_at = ? WHERE id = ?",
+                    (text.strip(), record, stored, request.id, now, alias_id),
+                )
+            self._audit(Actor.APPLIER, "alias_learned", post_id=post_id, request_id=request.id, alias_id=alias_id)
+
+    def aliases(self, kind: AliasKind) -> tuple[Alias, ...]:
+        """Every stored alias of `kind`, as the matcher takes them, oldest first."""
+        rows = self._db.execute(
+            "SELECT text, record, user_id, rivals FROM aliases WHERE kind = ? ORDER BY id", (kind.value,)
+        ).fetchall()
+        return tuple(
+            Alias(text, record, user, None if rivals is None else frozenset(json.loads(rivals)))
+            for text, record, user, rivals in rows
+        )
 
     def release_lock(self, owner: str) -> None:
         with self._transaction():

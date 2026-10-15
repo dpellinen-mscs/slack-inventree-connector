@@ -190,3 +190,45 @@ def test_part_aliases_of_another_user_do_not_apply() -> None:
 
 def test_aliases_to_records_that_cannot_match_are_reported() -> None:
     assert stale_aliases(CATALOG) == [Alias("old kit", 4)]
+
+
+# --- learned aliases are asked again when the catalog grows a rival (ADR 0012) ---
+
+PRO = PartRecord(7, "AP-NV-D40P", "Norvane Disc 40 Pro", "ap wifi")
+
+
+def test_a_learned_alias_is_ambiguous_once_a_new_record_fits_its_text() -> None:
+    learned = Alias("disc 40", 1, rivals=frozenset({1}))
+    before = Catalog(parts=PARTS, locations=LOCATIONS, part_aliases=(learned,))
+    assert match_part("disc 40", before) == matched(1, MatchRule.ALIAS)
+    grown = Catalog(parts=(*PARTS, PRO), locations=LOCATIONS, part_aliases=(learned,))
+    assert match_part("Disc 40", grown) == Match(MatchStatus.AMBIGUOUS, rule=MatchRule.ALIAS, candidates=(1, 7))
+
+
+def test_a_learned_alias_confirmed_against_a_record_stays_matched() -> None:
+    learned = Alias("disc 40", 1, rivals=frozenset({1, 7}))
+    grown = Catalog(parts=(*PARTS, PRO), locations=LOCATIONS, part_aliases=(learned,))
+    assert match_part("disc 40", grown) == matched(1, MatchRule.ALIAS)
+
+
+def test_a_rival_found_only_by_the_fuzzy_rule_counts() -> None:
+    learned = Alias("norvane disc", 1, rivals=frozenset({1, 2}))
+    typo = PartRecord(8, "AP-NR-DSC", "Norvana Disc Mount", "")
+    grown = Catalog(parts=(*PARTS, typo), locations=LOCATIONS, part_aliases=(learned,))
+    assert match_part("norvane disc", grown) == Match(MatchStatus.AMBIGUOUS, rule=MatchRule.ALIAS, candidates=(1, 8))
+
+
+def test_an_alias_an_admin_typed_is_not_rechecked() -> None:
+    typed = Alias("disc 40", 1)
+    grown = Catalog(parts=(*PARTS, PRO), locations=LOCATIONS, part_aliases=(typed,))
+    assert match_part("disc 40", grown) == matched(1, MatchRule.ALIAS)
+
+
+def test_a_learned_location_alias_is_rechecked_too() -> None:
+    learned = Alias("truck", 11, rivals=frozenset({11, 12}))
+    grown = Catalog(
+        parts=PARTS, locations=(*LOCATIONS, LocationRecord(14, "Vehicles/Truck 3", "")), location_aliases=(learned,)
+    )
+    assert match_location("truck", grown, poster="U0SAM") == Match(
+        MatchStatus.AMBIGUOUS, rule=MatchRule.ALIAS, candidates=(11, 14)
+    )

@@ -68,6 +68,9 @@ class Alias:
     text: str
     record: int
     user: str | None = None
+    rivals: frozenset[int] | None = None
+    """The records the whole-word and fuzzy rules fitted when the alias was confirmed (ADR 0012); a record that fits
+    now and is not one of them makes the alias ambiguous. None for an alias an admin typed: never rechecked."""
 
 
 @dataclass(frozen=True)
@@ -169,15 +172,34 @@ def _match(
     normalized = (pk for pk, names in records.items() if any(_same(wanted, _text_words(name)) for name in names))
     if decided := _decide(normalized, MatchRule.NORMALIZED):
         return decided
-    by_alias = (alias.record for alias in aliases if alias.record in records and _same(wanted, _text_words(alias.text)))
-    if decided := _decide(by_alias, MatchRule.ALIAS):
-        return decided
+    used = [alias for alias in aliases if alias.record in records and _same(wanted, _text_words(alias.text))]
     loose = _text_words(stripped, loose=True)
+    if decided := _decide((alias.record for alias in used), MatchRule.ALIAS):
+        return _rechecked(decided, used, _fits(loose, records, vocabulary, typos=True))
     for rule, typos in ((MatchRule.WORDS, False), (MatchRule.FUZZY, True)):
-        hits = (pk for pk in records if all(_found(forms, vocabulary(pk), typos) for forms in loose))
-        if decided := _decide(hits, rule):
+        if decided := _decide(_fits(loose, records, vocabulary, typos=typos), rule):
             return decided
     return Match(MatchStatus.UNMATCHED)
+
+
+def _fits(
+    loose: list[set[str]], records: Iterable[int], vocabulary: Callable[[int], set[str]], *, typos: bool
+) -> list[int]:
+    """Rule 4 (rule 5 with `typos`, which finds every record rule 4 finds and more)."""
+    return [pk for pk in records if all(_found(forms, vocabulary(pk), typos) for forms in loose)]
+
+
+def _rechecked(decided: Match, used: list[Alias], fits: Iterable[int]) -> Match:
+    """An alias match is ambiguous when a record fits its text now by the whole-word or fuzzy rule that fitted none
+    of the records it was confirmed against (ADR 0012): "Disc 40" is asked again once a "Disc 40 Pro" exists. An
+    alias an admin typed (no `rivals`) is not rechecked."""
+    if decided.record is None or any(alias.rivals is None for alias in used):
+        return decided
+    known = {pk for alias in used for pk in alias.rivals or ()}
+    new = set(fits) - known - {decided.record}
+    if not new:
+        return decided
+    return Match(MatchStatus.AMBIGUOUS, rule=MatchRule.ALIAS, candidates=tuple(sorted({decided.record, *new})))
 
 
 def _names(*texts: str) -> tuple[str, ...]:

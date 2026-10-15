@@ -30,7 +30,7 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 from stockthread.applier import GateNow, work_request
 from stockthread.apply import Applied, ApplyReader, Sender, undo_apply
-from stockthread.catalog import assign_vehicles, load_catalog
+from stockthread.catalog import assign_vehicles, load_catalog, with_aliases
 from stockthread.config import Settings
 from stockthread.core.matching import Catalog
 from stockthread.core.model import RequestKey
@@ -522,7 +522,7 @@ def run(
         except OSError as error:
             log.error("cannot start: %s reaching Slack", type(error).__name__)
             return 2
-        worker.slack, worker.catalog = DeadlinePoster(client), cache
+        worker.slack, worker.catalog = DeadlinePoster(client), with_aliases(cache, store)
         worker.stock = stock or inventree_stock(settings)
         if settings.writes.enabled and version.writes_allowed:
             beat = functools.partial(worker.beat, now=True)

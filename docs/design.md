@@ -1729,7 +1729,7 @@ and needs no extra service.
 | `interactions` | One row per button: its random id, its question and the answer it stands for (migration 0010) |
 | `instance_lock` | The single-instance lock with its heartbeat |
 | `api_calls` | Every InvenTree request and response, redacted |
-| `aliases` | Alias, target, who confirmed it, from which review item |
+| `aliases` | One per kind, words and user: the text, the part or location, the records rules 4 and 5 fitted when it was confirmed, and the verified request that taught it (migration 0021) |
 | `audit_log` | Append-only log of every state change, ids only |
 
 `audit_log` rows are never updated or deleted by the application. Database
@@ -1884,7 +1884,7 @@ Deterministic. The rules run in this order:
   is `ambiguous` with every hit as a candidate. Matching does not fall
   through to a later rule to find a single winner. The candidate list is
   capped where it is shown, not in the result.
-- One exception, planned with alias learning (ADR 0012, M3): an alias
+- One exception (ADR 0012; `matching._rechecked`): an alias
   learned from a confirmation stores the records that fitted its text at
   rules 4 and 5 then. When it hits, those rules run again, and a record
   that fits now and is not in the stored set makes the result `ambiguous`
