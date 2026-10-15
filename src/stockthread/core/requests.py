@@ -43,6 +43,8 @@ class Actor(StrEnum):
     """The apply and undo protocol, including the read-back."""
     RECOVERY = "recovery"
     """Recovery of an unknown outcome, after the settle time; and, at start, of a write a crash left in flight."""
+    ADMIN = "admin"
+    """An operator at the command line, when they remove an alias. Never makes a transition."""
 
 
 S = RequestState

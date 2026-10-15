@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 
 from stockthread import __version__
+from stockthread.alias_admin import alias_lines, describe, export
 from stockthread.config import ConfigError, load_settings
 from stockthread.inventree import InvenTreeError
 from stockthread.run import check_setup, run
@@ -64,6 +65,21 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("STOCKTHREAD_CONFIG", DEFAULT_CONFIG)),
         help=f"settings file (default: $STOCKTHREAD_CONFIG or {DEFAULT_CONFIG})",
     )
+    aliases = commands.add_parser("aliases", help="list, export or remove the confirmed aliases (reads the database)")
+    alias_actions = aliases.add_subparsers(dest="action")
+    config = argparse.ArgumentParser(add_help=False)
+    config.add_argument(
+        "--config",
+        type=Path,
+        default=Path(os.environ.get("STOCKTHREAD_CONFIG", DEFAULT_CONFIG)),
+        help=f"settings file (default: $STOCKTHREAD_CONFIG or {DEFAULT_CONFIG})",
+    )
+    alias_actions.add_parser("list", parents=[config], help="print every alias, and the post it was learned from")
+    alias_actions.add_parser("export", parents=[config], help="print every alias as JSON")
+    remove = alias_actions.add_parser(
+        "remove", parents=[config], help="forget aliases: the next post is matched as if they were never learned"
+    )
+    remove.add_argument("ids", nargs="+", type=int, metavar="ID", help="an alias id, as `aliases list` prints it")
     args = parser.parse_args(argv)
 
     if args.command == "check-config":
@@ -74,6 +90,11 @@ def main(argv: list[str] | None = None) -> int:
         return run_command(args.config)
     if args.command == "trail":
         return trail_command(args.config, args.message, args.ts, text=args.text)
+    if args.command == "aliases":
+        if args.action is None:
+            aliases.print_help()
+            return 0
+        return aliases_command(args.config, args.action, getattr(args, "ids", []))
     parser.print_help()
     return 0
 
@@ -161,6 +182,44 @@ def trail_command(path: Path, reference: str, ts: str | None, *, text: bool) -> 
         store.close()
     print("\n".join(lines))
     return 0
+
+
+def aliases_command(path: Path, action: str, ids: list[int]) -> int:
+    """List, export or remove aliases; 1 when an id names no alias, 2 when the database cannot be read."""
+    try:
+        settings = load_settings(path, os.environ)
+    except ConfigError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    try:
+        # Read-only first: a missing database is not created, and one of another schema is not migrated.
+        store = Store.open_read_only(settings.storage.database)
+        if action == "remove":
+            store.close()
+            store = Store.open(settings.storage.database)
+    except (FileNotFoundError, SchemaTooNew, SchemaTooOld, sqlite3.Error) as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    try:
+        if action == "list":
+            print("\n".join(alias_lines(store.stored_aliases())))
+            return 0
+        if action == "export":
+            print(json.dumps(export(store.stored_aliases()), indent=2, ensure_ascii=False))
+            return 0
+        missing = False
+        for alias_id in ids:
+            try:
+                print(f"removed {describe(store.remove_alias(alias_id)).lstrip()}")
+            except KeyError:
+                print(f"ERROR no alias {alias_id}", file=sys.stderr)
+                missing = True
+        return 1 if missing else 0
+    except sqlite3.Error as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    finally:
+        store.close()
 
 
 if __name__ == "__main__":

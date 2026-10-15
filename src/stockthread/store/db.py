@@ -104,6 +104,23 @@ class AliasKind(StrEnum):
     LOCATION = "location"
 
 
+@dataclass(frozen=True)
+class StoredAlias:
+    """A stored alias as an admin sees it (`stockthread aliases`)."""
+
+    id: int
+    kind: AliasKind
+    text: str
+    record: int
+    user: str | None
+    """The Slack user whose posts use it; None for everyone's."""
+    rivals: frozenset[int] | None
+    learned_from: RequestKey | None
+    """The verified request whose confirmation taught it last; None for one an admin typed."""
+    created_at: str
+    updated_at: str
+
+
 class StateConflict(Exception):
     """The request is not in the expected state: someone else moved it first. Nothing changed."""
 
@@ -2212,6 +2229,66 @@ class Store:
             Alias(text, record, user, None if rivals is None else frozenset(json.loads(rivals)))
             for text, record, user, rivals in rows
         )
+
+    _STORED_ALIAS_SELECT = (
+        "SELECT a.id, a.kind, a.text, a.record, a.user_id, a.rivals, a.created_at, a.updated_at,"
+        " p.workspace_id, p.channel_id, p.ts, l.revision, r.sequence, a.request_id, l.post_id"
+        " FROM aliases a LEFT JOIN requests r ON r.id = a.request_id LEFT JOIN plans l ON l.id = r.plan_id"
+        " LEFT JOIN posts p ON p.id = l.post_id"
+    )
+
+    @staticmethod
+    def _stored_alias(row: Sequence[Any]) -> StoredAlias:
+        (
+            alias_id,
+            kind,
+            text,
+            record,
+            user,
+            rivals,
+            created_at,
+            updated_at,
+            workspace,
+            channel,
+            ts,
+            revision,
+            sequence,
+        ) = row[:13]
+        learned_from = None if ts is None else RequestKey(PostKey(workspace, channel, ts), revision, sequence)
+        return StoredAlias(
+            alias_id,
+            AliasKind(kind),
+            text,
+            record,
+            user,
+            None if rivals is None else frozenset(json.loads(rivals)),
+            learned_from,
+            created_at,
+            updated_at,
+        )
+
+    def stored_aliases(self) -> tuple[StoredAlias, ...]:
+        """Every stored alias with where it was learned: parts first, then locations, oldest first."""
+        rows = self._db.execute(f"{self._STORED_ALIAS_SELECT} ORDER BY a.kind = 'location', a.id").fetchall()
+        return tuple(self._stored_alias(row) for row in rows)
+
+    def remove_alias(self, alias_id: int) -> StoredAlias:
+        """Delete alias `alias_id` and return what it was. The matcher stops using it at its next catalog read, so a
+        post read after that is matched as if it had never been learned. Audited as the admin's, with the request that
+        taught it. KeyError, and nothing changes, when there is no such alias.
+
+        Needs no instance lock: an admin removes an alias while the connector runs."""
+        with self._transaction():
+            row = self._db.execute(
+                f"{self._STORED_ALIAS_SELECT} WHERE a.id = ?",
+                (alias_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"no alias {alias_id}")
+            removed, (request_id, post_id) = self._stored_alias(row), row[13:]
+            self._db.execute("DELETE FROM aliases WHERE id = ?", (alias_id,))
+            self._audit(Actor.ADMIN, "alias_removed", post_id=post_id, request_id=request_id, alias_id=alias_id)
+            return removed
 
     def release_lock(self, owner: str) -> None:
         with self._transaction():

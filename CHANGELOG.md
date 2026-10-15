@@ -24,6 +24,8 @@ Nothing is released yet. The connector cannot write stock in this state.
   matches with the aliases stored now (`catalog.with_aliases`). A learned alias is asked again when a record its text
   did not fit when it was confirmed fits now ("Disc 40" once a "Disc 40 Pro" exists; ADR 0012). Nothing learns an
   alias yet.
+- `stockthread aliases list | export | remove <id>`: the stored aliases with the post each was learned from, as text
+  or JSON, and their removal (audited as the admin's; the matcher stops using it at its next catalog read).
 
 - `stockthread trail <message link>`: one post's dry runs with every review reason and who raised it, its
   questions with their answers and who gave them, and its audit log. It only reads the database, and prints
