@@ -57,7 +57,7 @@ concurrency:
 jobs:
   inventree:
     name: InvenTree ${{ matrix.inventree }} (${{ matrix.db }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19; bump on purpose
     timeout-minutes: 20
     strategy:
       fail-fast: false
