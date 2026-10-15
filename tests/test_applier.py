@@ -900,3 +900,15 @@ def test_a_plan_expires_after_the_expiry_hours_from_its_post(store: Store) -> No
     other = PostKey(POST.workspace_id, POST.channel_id, "1700009000.000100")
     store.place_message(OWNER, other, user_id=SAM, thread_ts=None, window_seconds=5)
     assert plan_expired(store, other, start, 24)  # no dry run fixed its time: expired
+
+
+@pytest.mark.anyio
+async def test_every_request_of_an_expired_plan_goes_back_to_review(store: Store) -> None:
+    reply(store, record(TAKE, TWO))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    fake = FakeInvenTree()
+    assert (await step(store, fake, expired=lambda _: True)).state is S.PLANNED
+    assert (await step(store, fake, SECOND, expired=lambda _: True)).state is S.PLANNED
+    assert states(store) == [S.PLANNED, S.PLANNED]
+    assert store.requests_to_work() == []
+    assert fake.sent == []
