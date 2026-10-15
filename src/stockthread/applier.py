@@ -156,7 +156,8 @@ async def work_request(
     `undo_unknown` one (`apply.recover_undo`). `send_by`: as `apply.apply_request`'s.
 
     `expired(post)` (`plan_expired`, now): a plan that expired before its first write began goes back to review,
-    however it was approved, and is never written; so does one that expires while it is judged again under the lock.
+    however it was approved, and is never written; so does one that expires while it is judged again under the lock,
+    or during the reads before the write (asked again right before the attempt is begun).
     A plan whose first write began is finished: half a movement in InvenTree is worse than a late one, and each
     write still checks the stock first.
 
@@ -181,9 +182,15 @@ async def work_request(
                 return Judgement(Verdict.WAITS, "the approver who clicked Apply is no longer an approver")
             return judgement
 
+        def too_late() -> str | None:
+            # Asked again after the reads: they may cross the expiry (review #141).
+            if not _plan_began(store.plan(key.post, key.revision)) and expired(key.post):
+                return "the plan expired before it was written"
+            return None
+
         return await apply_request(
             key, view, rejudge, store=store, reader=reader, writer=writer, lock=lock, lock_owner=lock_owner,
-            send_by=send_by,
+            send_by=send_by, too_late=too_late,
         )  # fmt: skip
     if state is RequestState.APPLIED:
         return await readback_request(key, view, store=store, reader=reader, lock=lock)

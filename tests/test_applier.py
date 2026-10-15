@@ -15,7 +15,7 @@ from typing import Any
 import anyio
 import pytest
 from fake_inventree import ITEM, FakeInvenTree
-from views import DESTINATION, picked, view
+from views import DESTINATION, SOURCE, picked, view
 
 from stockthread.applier import (
     GateNow,
@@ -875,6 +875,28 @@ async def test_a_plan_that_expires_while_it_is_judged_again_is_not_written(store
     assert fake.sent == []
 
 
+@pytest.mark.anyio
+async def test_a_plan_that_expires_during_the_reads_before_its_write_is_not_written(store: Store) -> None:
+    """Both checks before the reads pass; the stock read crosses the expiry: no attempt is begun, nothing sent
+    (review #141)."""
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    crossed: list[bool] = []
+
+    class SlowStock(FakeInvenTree):
+        async def stock_items(self, part: int, location: int) -> list[dict[str, Any]]:
+            crossed.append(True)  # the clock passes the plan's expiry during this read
+            return await super().stock_items(part, location)
+
+    fake = SlowStock()
+    applied = await step(store, fake, expired=lambda _: bool(crossed))
+    assert crossed
+    assert applied == Applied(S.PLANNED, "back to review: the plan expired before it was written")
+    assert store.request(KEY).state is S.PLANNED
+    assert store.markers(KEY) == []
+    assert fake.sent == []
+
+
 def test_a_plan_whose_first_write_began_is_finished_after_its_expiry(store: Store) -> None:
     """Half a movement in InvenTree is worse than a late one: the rest is written, each write checking the stock."""
     reply(store, record(TAKE, TWO))
@@ -890,6 +912,20 @@ def test_a_plan_whose_first_write_began_is_finished_after_its_expiry(store: Stor
     applied = anyio.run(lambda: step(store, fake, SECOND, expired=expired))
     assert asked == []
     assert "expired" not in applied.why
+
+
+@pytest.mark.anyio
+async def test_the_rest_of_a_begun_plan_is_written_after_its_expiry(store: Store) -> None:
+    other = view(lines=(("U7 Lite", "1"),), stock=(picked((58, "1")),))
+    reply(store, record(TAKE, other))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    fake = FakeInvenTree()
+    fake.items[58] = [1, SOURCE, Decimal(1)]
+    fake.entries.append((571, 58, "", {}, 1))
+    assert (await step(store, fake)).state is S.VERIFIED
+    applied = await step(store, fake, SECOND, expired=lambda _: True)
+    assert applied.state is S.VERIFIED, applied.why
+    assert len(fake.sent) == 2
 
 
 def test_a_plan_expires_after_the_expiry_hours_from_its_post(store: Store) -> None:
