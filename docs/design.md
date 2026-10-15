@@ -1985,7 +1985,11 @@ timeout (`tests/integration/test_apply_server.py`):
 `test_a_write_that_lands_after_recovery_concluded_failed_is_never_sent_again`
 (the write reaches the server only after recovery concluded `failed`: a
 person's retry and a new revision are refused before and after it lands,
-and the marker check reports it as a hit).
+and the marker check reports it as a hit). A held write also opens the
+window between the precondition and the write:
+`test_another_users_change_between_the_precondition_and_the_write_is_found_and_blocks_the_post`
+takes stock from the item there, and the read-back names the other
+writer's entry (`verify_failed`, a receipt due, the post blocked).
 
 ## 12. Configuration
 

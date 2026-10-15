@@ -146,7 +146,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         state.record(Entry(self.command, path, fault, response.status_code))
         answer = {name: value for name, value in response.headers.items() if name.lower() not in HOP_BY_HOP}
-        if rule is None:
+        if rule is None or rule.fault is Fault.HOLD:
             self._send(response.status_code, answer, response.content)
         elif rule.fault is Fault.DELAY:
             time.sleep(rule.seconds)

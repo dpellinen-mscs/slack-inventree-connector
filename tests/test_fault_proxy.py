@@ -121,6 +121,21 @@ def test_hold_forwards_only_after_release_once_the_client_gave_up(
     assert len(upstream.received) == 1
 
 
+def test_a_client_still_waiting_gets_the_held_requests_answer_unchanged(
+    upstream: _Upstream, proxy: FaultProxy, client: httpx.Client
+) -> None:
+    proxy.inject(Rule("POST", TRANSFER, Fault.HOLD))
+
+    def release_once_held() -> None:
+        proxy.wait_held()
+        proxy.release()
+
+    threading.Thread(target=release_once_held, daemon=True).start()
+    response = client.post(TRANSFER, json={"notes": "n"})
+    assert (response.status_code, response.json()) == (201, {"pk": 7, "echo": '{"notes":"n"}'})
+    assert len(upstream.received) == 1
+
+
 def test_a_request_still_held_when_the_proxy_closes_is_dropped_not_forwarded(upstream: _Upstream) -> None:
     host, port = upstream.server_address[:2]
     with FaultProxy(f"http://{host!s}:{port}") as proxy:

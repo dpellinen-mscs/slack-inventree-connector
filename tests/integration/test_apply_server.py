@@ -310,3 +310,51 @@ async def test_a_write_that_lands_after_recovery_concluded_failed_is_never_sent_
     moved = scratch.api.items(scratch.part, scratch.other)
     assert sum(Decimal(str(row["quantity"])) for row in moved) == Decimal(2)
     assert Decimal(str(scratch.item(item["pk"])["quantity"])) == Decimal(3)
+
+
+@pytest.mark.anyio
+async def test_another_users_change_between_the_precondition_and_the_write_is_found_and_blocks_the_post(
+    store: Store, scratch: Scratch, proxy: FaultProxy
+) -> None:
+    """M3 DoD: a stock change by another user between precondition and write is detected and reported. The transfer
+    of 2 is held on its way while someone takes 4 of the 5, then lands and moves the 1 left. The read-back names the
+    other writer's entry: `verify_failed`, a receipt is due for it, and no new revision of the post is approved."""
+    item = scratch.stock(5)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], "2")
+    proxy.inject(Rule("POST", PATHS[Operation.TRANSFER], Fault.HOLD))
+    states: list[RequestState] = []
+    problems: list[str] = []
+
+    async def write() -> None:
+        async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(proxy.url), token()) as writer:
+            applied = await apply_request(
+                KEY, movement, allowed(movement), store=store, reader=reader, writer=writer, lock=anyio.Lock(),
+                lock_owner=OWNER,
+            )  # fmt: skip
+        states.append(applied.state)
+        problems.extend(applied.problems)
+
+    def take() -> None:
+        scratch.api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 4}], "notes": "x"})
+        proxy.release()
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(write)
+        await anyio.to_thread.run_sync(proxy.wait_held)
+        assert store.request(KEY).state is RequestState.APPLYING  # the precondition held, the intent is stored
+        await anyio.to_thread.run_sync(take)
+    assert states == [RequestState.VERIFY_FAILED], (states, problems)
+    assert store.request(KEY).state is RequestState.VERIFY_FAILED
+    assert any(problem.endswith(" are another writer's, during the apply") for problem in problems), problems
+    assert store.receipts_due() == [(POST, 1)]
+    revision = store.create_plan(POST, "1" * 64, (Operation.TRANSFER,))
+    with pytest.raises(WriteBlocked, match="left a stock change behind"):
+        store.transition(
+            RequestKey(POST, revision, 1), expected=RequestState.PLANNED, target=RequestState.APPROVED,
+            actor=Actor.HUMAN,
+        )  # fmt: skip
+    assert transfers_sent(proxy) == [201]
+    moved = scratch.api.items(scratch.part, scratch.other)  # the 1 left moved whole, not the 2 planned
+    assert sum(Decimal(str(row["quantity"])) for row in moved) == 1
+    assert scratch.api.items(scratch.part, scratch.parent) == []
