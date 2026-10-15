@@ -30,7 +30,7 @@ from typing import Any, Literal
 from stockthread.core.grouping import Arrival, Placed, choose_post, seconds
 from stockthread.core.marker import MAX_ATTEMPT, AttemptKind, Marker, marked, new_marker_id
 from stockthread.core.marker_check import Outcome, RecordedAttempt, RecordedRequest
-from stockthread.core.matching import Alias, words
+from stockthread.core.matching import Alias, same_words, words
 from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import (
     NEW_TRY,
@@ -2164,9 +2164,10 @@ class Store:
     ) -> None:
         """Store `text` as a confirmed alias of part or location `record` (ADR 0012), confirmed in request
         `learned_from`, which must be `verified`: only a confirmation that moved stock teaches an alias. `rivals`: the
-        records the whole-word and fuzzy rules fitted then. A later confirmation of the same words
-        (and user) replaces the alias. StateConflict, and nothing changes, when the request is not verified. `owner`
-        must hold the instance lock."""
+        records the whole-word and fuzzy rules fit it to now (`matching.part_rivals`, `location_rivals`). Every alias
+        of the kind and user the matcher takes for the same text ("patch cable" for "patch cables") is replaced by
+        this one. StateConflict, and nothing changes, when the request is not verified. `owner` must hold the instance
+        lock."""
         if not words(text) or record <= 0:
             raise ValueError("an alias names one record with at least one word")
         key = " ".join(words(text))
@@ -2177,10 +2178,16 @@ class Store:
                 raise StateConflict(f"request {learned_from} is {request.state}: only a verified one teaches an alias")
             stored = json.dumps(sorted(set(rivals)))
             now = self._now()
-            found = self._db.execute(
-                "SELECT id FROM aliases WHERE kind = ? AND words = ? AND ifnull(user_id, '') = ?",
-                (kind.value, key, user or ""),
-            ).fetchone()
+            # One alias per text as the matcher reads it: "patch cables" replaces "patch cable" (plurals folded).
+            rows = self._db.execute(
+                "SELECT id, text FROM aliases WHERE kind = ? AND ifnull(user_id, '') = ? ORDER BY id",
+                (kind.value, user or ""),
+            ).fetchall()
+            same = [alias_id for alias_id, known in rows if same_words(known, text)]
+            found = same[0] if same else None
+            for other in same[1:]:
+                self._db.execute("DELETE FROM aliases WHERE id = ?", (other,))
+                self._audit(Actor.APPLIER, "alias_replaced", post_id=post_id, request_id=request.id, alias_id=other)
             if found is None:
                 alias_id = self._db.execute(
                     "INSERT INTO aliases (kind, text, words, record, user_id, rivals, request_id, created_at,"
@@ -2188,10 +2195,11 @@ class Store:
                     (kind.value, text.strip(), key, record, user, stored, request.id, now, now),
                 ).lastrowid
             else:
-                alias_id = found[0]
+                alias_id = found
                 self._db.execute(
-                    "UPDATE aliases SET text = ?, record = ?, rivals = ?, request_id = ?, updated_at = ? WHERE id = ?",
-                    (text.strip(), record, stored, request.id, now, alias_id),
+                    "UPDATE aliases SET text = ?, words = ?, record = ?, rivals = ?, request_id = ?, updated_at = ?"
+                    " WHERE id = ?",
+                    (text.strip(), key, record, stored, request.id, now, alias_id),
                 )
             self._audit(Actor.APPLIER, "alias_learned", post_id=post_id, request_id=request.id, alias_id=alias_id)
 

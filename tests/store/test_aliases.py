@@ -108,3 +108,50 @@ def test_the_worker_s_catalog_carries_the_aliases_stored_now(store: Store) -> No
     verify(store)
     store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
     assert match_part("disc 40", catalog()).rule is MatchRule.ALIAS
+
+
+def test_a_confirmation_replaces_every_alias_the_matcher_takes_for_its_text(store: Store) -> None:
+    """Plurals fold: "patch cables" and "patch cable" are one alias, or the question would never stop (review #142)."""
+    verify(store)
+    store.learn_alias(OWNER, PART, "patch cable", 1, rivals=[1], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "patch cables", 7, rivals=[1, 7], learned_from=KEY)
+    assert store.aliases(PART) == (Alias("patch cables", 7, rivals=frozenset({1, 7})),)
+    parts = (PartRecord(1, "PC-1", "Patch Cable 1m", ""), PartRecord(7, "PC-3", "Patch Cable 3m", ""))
+    catalog = with_aliases(lambda: Catalog(parts=parts, locations=()), store)
+    assert match_part("patch cable", catalog()).record == 7
+
+
+def test_learning_again_is_audited_with_the_alias(store: Store, tmp_path: Path) -> None:
+    verify(store)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "Disc 40", 2, rivals=[1, 2], learned_from=KEY)
+    raw = sqlite3.connect(tmp_path / "stockthread.db")
+    events = raw.execute("SELECT event, alias_id FROM audit_log WHERE alias_id IS NOT NULL ORDER BY id").fetchall()
+    raw.close()
+    assert events == [("alias_learned", 1), ("alias_learned", 1)]
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        (
+            "INSERT OR REPLACE INTO aliases (id, kind, text, words, record, created_at, updated_at)"
+            " VALUES (1, 'part', 'x', 'x', 2, 'now', 'now')",
+            "aliases are replaced by UPDATE only",
+        ),
+        (
+            "INSERT INTO aliases (kind, text, words, record, rivals, created_at, updated_at)"
+            " VALUES ('part', 'y', 'y', 2, '[\"x\", 1.5]', 'now', 'now')",
+            "rivals must be record ids",
+        ),
+        ("UPDATE aliases SET rivals = '[0]'", "rivals must be record ids"),
+    ],
+)
+def test_the_database_keeps_aliases_whole(store: Store, tmp_path: Path, statement: str, message: str) -> None:
+    verify(store)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+    raw = sqlite3.connect(tmp_path / "stockthread.db", isolation_level=None)
+    with pytest.raises(sqlite3.IntegrityError, match=message):
+        raw.execute(statement)
+    raw.close()
+    assert store.aliases(PART) == (Alias("disc 40", 1, rivals=frozenset({1})),)

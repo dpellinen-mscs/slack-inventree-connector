@@ -22,3 +22,23 @@ CREATE TABLE aliases (
 CREATE UNIQUE INDEX aliases_one_per_text ON aliases (kind, words, ifnull(user_id, ''));
 
 ALTER TABLE audit_log ADD COLUMN alias_id INTEGER;
+
+-- As for every other table (0001): REPLACE would delete a row without a trace.
+CREATE TRIGGER aliases_no_replace BEFORE INSERT ON aliases
+WHEN EXISTS (
+    SELECT 1 FROM aliases
+    WHERE id = NEW.id OR (kind = NEW.kind AND words = NEW.words AND ifnull(user_id, '') = ifnull(NEW.user_id, ''))
+)
+BEGIN SELECT RAISE(ABORT, 'aliases are replaced by UPDATE only'); END;
+
+-- `rivals` holds record ids: positive integers only (a CHECK cannot read json_each).
+CREATE TRIGGER aliases_rivals_insert BEFORE INSERT ON aliases
+WHEN NEW.rivals IS NOT NULL AND EXISTS (
+    SELECT 1 FROM json_each(NEW.rivals) WHERE type <> 'integer' OR value <= 0
+)
+BEGIN SELECT RAISE(ABORT, 'rivals must be record ids'); END;
+CREATE TRIGGER aliases_rivals_update BEFORE UPDATE OF rivals ON aliases
+WHEN NEW.rivals IS NOT NULL AND EXISTS (
+    SELECT 1 FROM json_each(NEW.rivals) WHERE type <> 'integer' OR value <= 0
+)
+BEGIN SELECT RAISE(ABORT, 'rivals must be record ids'); END;
