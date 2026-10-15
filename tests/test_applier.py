@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
@@ -17,7 +17,15 @@ import pytest
 from fake_inventree import ITEM, FakeInvenTree
 from views import DESTINATION, picked, view
 
-from stockthread.applier import GateNow, approve_by_click, approve_by_policy, judge_plan, plan_views, work_request
+from stockthread.applier import (
+    GateNow,
+    approve_by_click,
+    approve_by_policy,
+    judge_plan,
+    plan_expired,
+    plan_views,
+    work_request,
+)
 from stockthread.apply import Applied
 from stockthread.core.grouping import seconds
 from stockthread.core.marker import AttemptKind
@@ -102,6 +110,7 @@ async def step(
     now: GateNow = ON,
     *,
     settle: timedelta = timedelta(seconds=120),
+    expired: Callable[[PostKey], bool] = lambda _: False,
 ) -> Applied:
     lock = fake.lock = anyio.Lock()
     return await work_request(
@@ -112,6 +121,7 @@ async def step(
         lock=lock,
         lock_owner=OWNER,
         gate_now=lambda: now,
+        expired=expired,
         settle=settle,
     )
 
@@ -308,6 +318,7 @@ async def test_writes_turned_off_while_the_write_waits_for_the_lock_write_nothin
                 lock=lock,
                 lock_owner=OWNER,
                 gate_now=lambda: now[0],
+                expired=lambda _: False,
                 settle=timedelta(seconds=120),
             )
         )
@@ -825,3 +836,67 @@ def test_an_undo_in_flight_at_the_migration_is_reported_once_it_concluded(store:
     reopened.transition(KEY, expected=S.UNDOING, target=S.VERIFY_FAILED, actor=Actor.APPLIER)
     assert reopened.receipts_due() == [(POST, 1)]
     reopened.close()
+
+
+# --- expiry before the write ---
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("by", [Actor.POLICY, Actor.HUMAN])
+async def test_an_approved_plan_that_expired_before_its_write_goes_back_to_review(store: Store, by: Actor) -> None:
+    """However it was approved, a plan that expired before its first write is never written: the reply that offered
+    it is too old to stand for what is in stock now."""
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=by, approver=LUIS if by is Actor.HUMAN else None)
+    fake = FakeInvenTree()
+    fake.fail_reads = True  # none may happen
+    applied = await step(store, fake, expired=lambda _: True)
+    assert applied == Applied(S.PLANNED, "back to review: the plan expired before it was written")
+    assert store.request(KEY).state is S.PLANNED
+    assert fake.sent == []
+    assert store.markers(KEY) == []
+
+
+@pytest.mark.anyio
+async def test_a_plan_that_expires_while_it_is_judged_again_is_not_written(store: Store) -> None:
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    fake = FakeInvenTree()
+    asked: list[PostKey] = []
+
+    def expires_now(post: PostKey) -> bool:
+        asked.append(post)
+        return len(asked) > 1  # still current before the lock, expired under it
+
+    applied = await step(store, fake, expired=expires_now)
+    assert applied == Applied(S.APPROVED, "not written: the plan expired")
+    assert fake.sent == []
+    assert (await step(store, fake, expired=lambda _: True)).state is S.PLANNED
+    assert fake.sent == []
+
+
+def test_a_plan_whose_first_write_began_is_finished_after_its_expiry(store: Store) -> None:
+    """Half a movement in InvenTree is worse than a late one: the rest is written, each write checking the stock."""
+    reply(store, record(TAKE, TWO))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    write(store, KEY, S.VERIFIED)
+    asked: list[PostKey] = []
+
+    def expired(post: PostKey) -> bool:
+        asked.append(post)
+        return True
+
+    fake = FakeInvenTree()
+    applied = anyio.run(lambda: step(store, fake, SECOND, expired=expired))
+    assert asked == []
+    assert "expired" not in applied.why
+
+
+def test_a_plan_expires_after_the_expiry_hours_from_its_post(store: Store) -> None:
+    reply(store, record(TAKE))
+    start = seconds(store.plan_expires_from(POST) or "")
+    assert not plan_expired(store, POST, start + 24 * 3600, 24)
+    assert plan_expired(store, POST, start + 24 * 3600 + Decimal("0.000001"), 24)
+    other = PostKey(POST.workspace_id, POST.channel_id, "1700009000.000100")
+    store.place_message(OWNER, other, user_id=SAM, thread_ts=None, window_seconds=5)
+    assert plan_expired(store, other, start, 24)  # no dry run fixed its time: expired

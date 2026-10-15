@@ -95,6 +95,7 @@ def fake(store: Store) -> FakeInvenTree:
             lock=inventree.lock,
             lock_owner=OWNER,
             gate_now=lambda: ON,
+            expired=lambda _: False,
             settle=timedelta(seconds=120),
         )
 
