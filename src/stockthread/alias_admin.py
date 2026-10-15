@@ -18,7 +18,16 @@ EXPORT_VERSION = 1
 
 def _quoted(text: str) -> str:
     quoted = json.dumps(text, ensure_ascii=False)
-    return "".join(char if char.isprintable() else f"\\u{ord(char):04x}" for char in quoted)
+    return "".join(char if char.isprintable() else _escaped(char) for char in quoted)
+
+
+def _escaped(char: str) -> str:
+    """`\\uXXXX`, or the UTF-16 surrogate pair as JSON writes it above U+FFFF: never read as fewer digits."""
+    code = ord(char)
+    if code <= 0xFFFF:
+        return f"\\u{code:04x}"
+    code -= 0x10000
+    return f"\\u{0xD800 + (code >> 10):04x}\\u{0xDC00 + (code & 0x3FF):04x}"
 
 
 def describe(alias: StoredAlias) -> str:
