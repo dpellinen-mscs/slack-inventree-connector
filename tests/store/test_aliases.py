@@ -113,6 +113,37 @@ def test_the_worker_s_catalog_carries_the_aliases_stored_now(store: Store) -> No
     assert match_part("disc 40", catalog()).rule is MatchRule.ALIAS
 
 
+def test_aliases_the_matcher_ignores_are_logged_once_until_the_list_changes(
+    store: Store, caplog: pytest.LogCaptureFixture
+) -> None:
+    """M4 DoD: an alias that points to an inactive part or a deleted location is ignored and reported."""
+    verify(store)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+    store.learn_alias(OWNER, LOCATION, "the yard", 5, rivals=[5], learned_from=KEY)
+    snapshots = iter([(), (), PARTS, (PartRecord(1, "AP-NV-D40", "Norvane Disc 40", active=False),)])
+    catalog = with_aliases(lambda: Catalog(parts=next(snapshots), locations=()), store)
+    caplog.set_level("WARNING", logger="stockthread.catalog")
+
+    def warned() -> list[str]:
+        messages = [record.getMessage() for record in caplog.records]
+        caplog.clear()
+        return messages
+
+    assert match_part("disc 40", catalog()).status.value == "unmatched"  # ignored, not matched to a missing part
+    assert warned() == [
+        "aliases: stored aliases name location 5, part 1, which cannot be matched now: they are ignored"
+        " (`stockthread check-setup` lists them by id)"
+    ]
+    catalog()
+    assert warned() == []  # the same list: said once
+    catalog()  # part 1 is back
+    (message,) = warned()
+    assert "name location 5, which" in message
+    assert match_part("disc 40", catalog()).status.value == "unmatched"  # inactive again
+    assert "part 1" in warned()[0]
+    assert all("disc" not in record.getMessage() for record in caplog.records)
+
+
 def test_a_confirmation_replaces_every_alias_the_matcher_takes_for_its_text(store: Store) -> None:
     """Plurals fold: "patch cables" and "patch cable" are one alias, or the question would never stop (review #142)."""
     verify(store)
