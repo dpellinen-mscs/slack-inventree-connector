@@ -65,6 +65,9 @@ cases make "judge every current plan on every step" unsafe:
   begins still cancels it: `Store.begin_attempt` refuses to start an
   apply while any event waits in the queue, checked in the transaction
   that stores the intent, so an edit received during the reads before
-  the write is handled first. The reply still reads "Dry run" for the moment
+  the write is handled first. Any event counts, not only one of the
+  post: an unrelated message that comes during the reads puts the write
+  off to the next step, and in a channel that never goes quiet an
+  approved plan can wait until it expires. That fails closed. The reply still reads "Dry run" for the moment
   between the reply and the write; the receipt that follows says what was
   written. Both are revisited with the Apply button slice.
