@@ -137,7 +137,8 @@ def test_words_from_slack_never_reach_the_terminal_as_control_characters(store: 
     shown = "\n".join(lines)
     assert '"main\\u202e stock"' in shown
     assert '5 of "Disc\\u001b[2J\\u007f\\u009b 40 é\\udb40\\udc41" part 1' in shown
-    assert json.loads('"\\udb40\\udc41"') == "\U000e0041"
+    quoted = shown.split("5 of ", 1)[1].split(" part 1", 1)[0]
+    assert json.loads(quoted) == movement["items"][0]["item_text"]
 
 
 def test_a_post_without_a_dry_run_or_a_record_says_so(store: Store, path: Path) -> None:
