@@ -166,6 +166,35 @@ def test_a_unit_is_compared_without_case_or_plural() -> None:
         assert ReasonCode.PACK_UNIT_AMBIGUOUS in codes(movement, "took 2 breakers from shop to van 3")
 
 
+@pytest.mark.parametrize("unit", ["ft", "feet", "m", "metres", "kg", "spool", "Box"])
+def test_a_line_in_any_unit_but_a_count_is_a_reason(unit: str) -> None:
+    """No request carries a unit, and the part's stocking unit is not read: "50 ft" could be written as 50 m."""
+    text = f"moved 50 {unit} of drop cable from shop to van 3"
+    movement = take("drop cable", "50", line_items=(LineItem("drop cable", Decimal(50), unit),), source_text="shop")
+    reasons = validate(replace(movement, destination_text="van 3"), text, max_quantity=100)
+    assert ReasonCode.PACK_UNIT_AMBIGUOUS in {reason.code for reason in reasons}
+
+
+@pytest.mark.parametrize("unit", [None, "each", "ea", "pc", "piece", "pieces", "units", "x"])
+def test_a_count_raises_no_unit_reason(unit: str | None) -> None:
+    movement = take(line_items=(LineItem("Disc 40", Decimal(2), unit),))
+    assert ReasonCode.PACK_UNIT_AMBIGUOUS not in codes(movement, "took 2 Disc 40 from main stock to truck 1")
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["moved 50 ft of drop cable from shop to van 3", "moved 50ft of drop cable from shop to van 3",
+     "moved 2.5 metres of drop cable from shop to van 3", "moved 1,000 m of drop cable from shop to van 3"],
+)  # fmt: skip
+def test_a_length_in_the_text_is_a_reason_whatever_the_extractor_says(text: str) -> None:
+    assert ReasonCode.PACK_UNIT_AMBIGUOUS in codes(breakers(item="drop cable"), text)
+
+
+def test_a_length_in_an_item_name_is_not_a_quantity() -> None:
+    movement = take("Cat6 patch cables 3 ft", "4", destination_text="van 3")
+    assert codes(movement, "took 4 Cat6 patch cables 3 ft from main stock to van 3") == set()
+
+
 def test_a_digit_inside_a_word_is_not_a_quantity() -> None:
     # "van3" and "d40" hold digits, but neither says how many.
     assert ReasonCode.QUANTITY_NOT_IN_TEXT in codes(take("d40", quantity="3"), "loaded d40 on van3")

@@ -88,6 +88,11 @@ def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
     return ReviewReason(code, ReasonSource.RULE, detail)
 
 
+DETAIL_NOT_A_COUNT = "a unit other than a count"
+"""The detail of the reason a line in feet, metres or any unit but a count raises."""
+LENGTH_WORDS = re.compile(r"(?<![\w.,])\d+(?:[.,]\d+)*\s*(ft|feet|foot|m|meters?|metres?)\s+of\b")
+""""50 ft of", "3m of", "2.5 metres of": a length of an item in the text, whatever the extractor made of it. Not
+"patch cables 3 ft": there the length is part of the item's name."""
 TYPE_UNCLEAR = "type unclear"
 """The detail of the reason an unclear movement type raises (other MOVEMENT_UNCLEAR details doubt the text)."""
 
@@ -137,6 +142,8 @@ def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     if any(_unit(item.unit) in CONTAINERS or item.pack_size is not None for item in movement.line_items):
         reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS))
     for n, item in enumerate(movement.line_items, start=1):
+        if _unit(item.unit) not in CONTAINERS and not counts_pieces(item.unit):
+            reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {DETAIL_NOT_A_COUNT}"))
         if item.serials and (item.quantity is None or len(item.serials) != item.quantity):
             reasons.add(_rule(ReasonCode.SERIAL_UNCONFIRMED, f"line {n}: serial count differs from the quantity"))
         if any(not _has_words(serial, text) for serial in item.serials):
@@ -146,6 +153,13 @@ def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     if kind is MovementType.UNCLEAR:
         reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, TYPE_UNCLEAR))
     return reasons
+
+
+def counts_pieces(unit: str | None) -> bool:
+    """The unit is a count: none, or "each", "pc", "x". A request carries the quantity alone, as a number of the
+    part's stocking unit, and nothing reads that unit yet: "50 ft" may be 50 m or 50 pieces once written."""
+    unit = _unit(unit)
+    return unit is None or unit in _EACH
 
 
 def _unit(unit: str | None) -> str | None:
@@ -162,6 +176,8 @@ def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         reasons.add(_rule(ReasonCode.SUSPICIOUS_INSTRUCTIONS))
     if CONTAINER_WORDS.search(text):
         reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, "container word in the text"))
+    if LENGTH_WORDS.search(text):
+        reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, "length unit in the text"))
     if VAGUE.search(text):
         reasons.add(_rule(ReasonCode.QUANTITY_VAGUE, "vague quantity word in the text"))
     if CORRECTION.search(text):

@@ -57,7 +57,7 @@ REASONS = {
     ReasonCode.IMPLIED_DESTINATION: "No destination was stated.",
     ReasonCode.QUANTITY_MISSING: "A quantity is missing.",
     ReasonCode.QUANTITY_VAGUE: "A quantity is approximate or vague.",
-    ReasonCode.PACK_UNIT_AMBIGUOUS: "A box, bag or pack: how many pieces is not clear.",
+    ReasonCode.PACK_UNIT_AMBIGUOUS: "A box, a pack or a length: how many in the part's stocking unit is not clear.",
     ReasonCode.ITEMS_MISSING: "No item was named.",
     ReasonCode.PHOTO_ONLY: "The post is a photo without text.",
     ReasonCode.QUANTITY_FROM_PHOTO: "A quantity was read from a photo.",
@@ -341,6 +341,12 @@ def question_message(
         text = f"Which part is {written or 'meant'}?"
     elif ask is Ask.CONFIRM_PART:
         text = f"Is {written or 'the item'} *{record}*?"
+    elif ask is Ask.QUANTITY and question.reason is ReasonCode.PACK_UNIT_AMBIGUOUS:
+        text = (
+            f"How many {written}, in the part's stocking unit? Reply in this thread with a number."
+            if written
+            else "How many of each item, in each part's stocking unit? Reply in this thread with a number for each."
+        )
     elif ask is Ask.QUANTITY:
         text = (
             f"How many {written}? Reply in this thread with a number of pieces."

@@ -54,8 +54,9 @@ _STOCK_DETAILS = [value for name, value in vars(resolve).items() if name.startsw
 _DETAILS = (
     r"line \d+",
     r"line \d+: (above policy\.max_quantity|serial count differs from the quantity|serial not in the text)",
-    r"line \d+: the unit is not the one in the text",
-    "no number|no text|type unclear|container word in the text|vague quantity word in the text",
+    r"line \d+: (the unit is not the one in the text|a unit other than a count)",
+    "no number|no text|type unclear|container word in the text|length unit in the text",
+    "vague quantity word in the text",
     "correction word in the text|someone else is named as the actor|a person is mentioned",
     f"no word in the text supports ({_KINDS})",
     "question or request|plan or condition|a time ahead|negation|hedge|source|destination",
@@ -137,6 +138,7 @@ def test_a_loose_location_match_is_confirmed_by_name() -> None:
     [
         (Question(Ask.NAME_PART, ReasonCode.PART_UNMATCHED, 0, 0), "Which part is “Disc 40”?"),
         (Question(Ask.QUANTITY, ReasonCode.QUANTITY_VAGUE, 0, 0), "How many “Disc 40”?"),
+        (Question(Ask.QUANTITY, ReasonCode.PACK_UNIT_AMBIGUOUS, 0, 0), "How many “Disc 40”, in the part's stocking"),
         (Question(Ask.NAME_LOCATION, ReasonCode.IMPLIED_SOURCE, 0, None, "source"), "Which stock location is"),
         (Question(Ask.SERIALS, ReasonCode.SERIAL_UNCONFIRMED, 0, 0), "Which serial numbers of “Disc 40”?"),
         (Question(Ask.MOVEMENT_TYPE, ReasonCode.MOVEMENT_UNCLEAR, 0), "What kind of movement is this?"),

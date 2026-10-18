@@ -155,8 +155,9 @@ def test_perfect_answers_recorded_and_read_back_score_full_marks() -> None:
     assert alone.detection.as_dict()["recall"] == 1.0
     assert pipeline.detection.as_dict() == alone.detection.as_dict()
     # The rules add a reason the corpus does not expect: quantity_missing beside quantity_vague (ambig-005,
-    # ambig-016), actor_not_poster (adv-006, adv-010). Extra reasons only ask more.
-    assert pipeline.case_exact.as_dict()["correct"] == alone.case_exact.as_dict()["correct"] - 4
+    # ambig-016), actor_not_poster (adv-006, adv-010), pack_unit_ambiguous for a length (ambig-013: the part's
+    # stocking unit is not read). Extra reasons only ask more.
+    assert pipeline.case_exact.as_dict()["correct"] == alone.case_exact.as_dict()["correct"] - 5
     assert pipeline.hard_failures == 0
 
 
