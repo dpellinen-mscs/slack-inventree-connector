@@ -118,6 +118,7 @@ turn them on again in *Event Subscriptions*; catch-up reads what was missed, wit
 
 - [Design](docs/design.md): pipeline, architecture options, safety model
 - [Threat model](docs/threat-model.md): what can go wrong, and which control answers it
+- [Security policy](SECURITY.md): how to report a vulnerability privately
 - [Modeling vehicles and sites](docs/locations.md): stock locations for vehicles, sites and stock rooms
 - [Roadmap](ROADMAP.md): milestones and their definitions of done
 - [Decisions](docs/decisions/): the decision log
