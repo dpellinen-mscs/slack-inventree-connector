@@ -54,8 +54,9 @@ _STOCK_DETAILS = [value for name, value in vars(resolve).items() if name.startsw
 _DETAILS = (
     r"line \d+",
     r"line \d+: (above policy\.max_quantity|serial count differs from the quantity|serial not in the text)",
-    r"line \d+: (the unit is not the one in the text|a unit other than a count)",
-    "no number|no text|type unclear|container word in the text|length unit in the text",
+    r"line \d+: (the unit is not the one in the text|a unit other than a count|the item starts with a unit word)",
+    r"(line \d+: )?(container word|measure) in the text",
+    "no number|no text|type unclear",
     "vague quantity word in the text",
     "correction word in the text|someone else is named as the actor|a person is mentioned",
     f"no word in the text supports ({_KINDS})",

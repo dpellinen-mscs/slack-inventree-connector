@@ -184,10 +184,35 @@ def test_a_count_raises_no_unit_reason(unit: str | None) -> None:
 @pytest.mark.parametrize(
     "text",
     ["moved 50 ft of drop cable from shop to van 3", "moved 50ft of drop cable from shop to van 3",
-     "moved 2.5 metres of drop cable from shop to van 3", "moved 1,000 m of drop cable from shop to van 3"],
+     "moved 2.5 metres of drop cable from shop to van 3", "moved 1,000 m of drop cable from shop to van 3",
+     "moved 50 ft drop cable from shop to van 3", "moved 50 yards of drop cable from shop to van 3",
+     "moved 100' drop cable from shop to van 3", "moved 2 kg drop cable from shop to van 3"],
 )  # fmt: skip
-def test_a_length_in_the_text_is_a_reason_whatever_the_extractor_says(text: str) -> None:
+def test_a_measure_in_the_text_is_a_reason_whatever_the_extractor_says(text: str) -> None:
     assert ReasonCode.PACK_UNIT_AMBIGUOUS in codes(breakers(item="drop cable"), text)
+
+
+@pytest.mark.parametrize("item", ["ft drop cable", "yards of drop cable", "kg solder", "boxes of breakers"])
+def test_a_unit_read_into_the_item_text_is_a_reason(item: str) -> None:
+    """ "moved 50 ft drop cable": an extractor may keep "ft" in the item and leave the unit empty."""
+    reasons = validate(breakers(item=item), f"moved 2 {item} from shop to van 3", max_quantity=100)
+    assert (
+        ReviewReason(ReasonCode.PACK_UNIT_AMBIGUOUS, ReasonSource.RULE, "line 1: the item starts with a unit word")
+        in reasons
+    )
+
+
+def test_a_unit_in_the_text_names_the_line_of_the_item_after_it() -> None:
+    """A reason with a line is settled by that line's quantity question; one with none would wait forever."""
+    lines = (LineItem("drop cable", Decimal(50), "ft"), LineItem("onts", Decimal(2)), LineItem("breakers", Decimal(1)))
+    movement = take(line_items=lines, source_text="shop", destination_text="van 3")
+    text = "moved 50 ft of drop cable and 2 onts and 1 box of breakers from shop to van 3"
+    details = {r.detail for r in validate(movement, text, max_quantity=100) if r.code is ReasonCode.PACK_UNIT_AMBIGUOUS}
+    assert details == {
+        "line 1: a unit other than a count",
+        "line 1: measure in the text",
+        "line 3: container word in the text",
+    }
 
 
 def test_a_length_in_an_item_name_is_not_a_quantity() -> None:

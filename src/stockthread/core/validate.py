@@ -90,9 +90,17 @@ def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
 
 DETAIL_NOT_A_COUNT = "a unit other than a count"
 """The detail of the reason a line in feet, metres or any unit but a count raises."""
-LENGTH_WORDS = re.compile(r"(?<![\w.,])\d+(?:[.,]\d+)*\s*(ft|feet|foot|m|meters?|metres?)\s+of\b")
-""""50 ft of", "3m of", "2.5 metres of": a length of an item in the text, whatever the extractor made of it. Not
-"patch cables 3 ft": there the length is part of the item's name."""
+DETAIL_UNIT_IN_ITEM = "the item starts with a unit word"
+"""The detail of the reason an item text like "ft drop cable" raises: its unit was read as part of the item."""
+MEASURE_WORDS = frozenset(
+    {"ft", "feet", "foot", "m", "meter", "meters", "metre", "metres", "yd", "yds", "yard", "yards", "inch"}
+    | {"inches", "kg", "kgs", "lb", "lbs", "gal", "gallon", "gallons"}
+)
+"""Units of length, weight or volume: a quantity in one of them is not a count."""
+MEASURE = re.compile(
+    rf"(?<![\w.,])\d+(?:[.,]\d+)*\s*(?:(?:{'|'.join(sorted(MEASURE_WORDS))})\b|['\"\N{{RIGHT DOUBLE QUOTATION MARK}}])"
+)
+""""50 ft", "3m", "2.5 metres", "100'", "2 kg": a measure in the text, whatever the extractor made of it."""
 TYPE_UNCLEAR = "type unclear"
 """The detail of the reason an unclear movement type raises (other MOVEMENT_UNCLEAR details doubt the text)."""
 
@@ -144,6 +152,9 @@ def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     for n, item in enumerate(movement.line_items, start=1):
         if _unit(item.unit) not in CONTAINERS and not counts_pieces(item.unit):
             reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {DETAIL_NOT_A_COUNT}"))
+        first = _folded(item.item_text or "").split(" ", 1)[0]
+        if first in MEASURE_WORDS or CONTAINER_WORDS.fullmatch(first):
+            reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {DETAIL_UNIT_IN_ITEM}"))
         if item.serials and (item.quantity is None or len(item.serials) != item.quantity):
             reasons.add(_rule(ReasonCode.SERIAL_UNCONFIRMED, f"line {n}: serial count differs from the quantity"))
         if any(not _has_words(serial, text) for serial in item.serials):
@@ -174,10 +185,11 @@ def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     reasons = set()
     if SUSPICIOUS.search(text):
         reasons.add(_rule(ReasonCode.SUSPICIOUS_INSTRUCTIONS))
-    if CONTAINER_WORDS.search(text):
-        reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, "container word in the text"))
-    if LENGTH_WORDS.search(text):
-        reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, "length unit in the text"))
+    for found in CONTAINER_WORDS.finditer(text):
+        reasons.add(_unit_reason(movement, text, found, "container word in the text"))
+    for found in MEASURE.finditer(text):
+        if not _in_a_name(movement, found):
+            reasons.add(_unit_reason(movement, text, found, "measure in the text"))
     if VAGUE.search(text):
         reasons.add(_rule(ReasonCode.QUANTITY_VAGUE, "vague quantity word in the text"))
     if CORRECTION.search(text):
@@ -199,6 +211,24 @@ def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         if pattern.search(text):
             reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, detail))
     return reasons
+
+
+def _unit_reason(movement: CandidateMovement, text: str, found: re.Match[str], detail: str) -> ReviewReason:
+    """The pack-unit reason of a unit word in the text, naming the line whose item comes next after it, so the
+    line's quantity question settles it. With no item after it, it names no line (and fits a one-line movement)."""
+    after = {
+        n: min(m.start() for m in places)
+        for n, item in enumerate(movement.line_items, start=1)
+        if (places := [m for m in _occurrences(item.item_text or "", text) if m.start() >= found.end()])
+    }
+    line = min(after, key=lambda n: (after[n], n)) if after else None
+    return _rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {line}: {detail}" if line else detail)
+
+
+def _in_a_name(movement: CandidateMovement, found: re.Match[str]) -> bool:
+    """A measure inside an item's text is part of its name: "Cat6 patch cables 3 ft"."""
+    measure = re.sub(r"\s", "", found.group(0))
+    return any(measure in re.sub(r"\s", "", _folded(item.item_text or "")) for item in movement.line_items)
 
 
 def _folded(text: str) -> str:
