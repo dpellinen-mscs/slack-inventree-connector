@@ -12,7 +12,9 @@ request body, marker, state `applying`) is on disk before the write is sent.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import secrets
 import sqlite3
@@ -398,6 +400,16 @@ def posters_seen(path: str | Path) -> list[str] | None:
         connection.close()
 
 
+def _create_private(path: str | Path) -> None:
+    """Create a missing database file readable by its owner only, whatever the umask: it holds every accepted Slack
+    post in full (threat model T10). SQLite gives the -wal and -shm files the mode of the database file. An existing
+    file keeps its mode."""
+    if str(path) == ":memory:":
+        return
+    with contextlib.suppress(FileExistsError):
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+
+
 class Store:
     def __init__(self, connection: sqlite3.Connection, clock: Callable[[], datetime]) -> None:
         self._db = connection
@@ -408,6 +420,7 @@ class Store:
         """Open the database, creating and migrating it as needed."""
         if sqlite3.sqlite_version_info < MIN_SQLITE:
             raise RuntimeError(f"SQLite {'.'.join(map(str, MIN_SQLITE))} or later is needed")
+        _create_private(path)
         connection = sqlite3.connect(path, isolation_level=None, timeout=10)
         try:
             connection.execute("PRAGMA foreign_keys = ON")

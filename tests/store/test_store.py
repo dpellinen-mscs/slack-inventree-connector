@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import stat
 import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -1043,3 +1045,26 @@ def test_a_file_from_before_migration_0016_gets_the_recovery_column(
     assert [(a.outcome, a.marker_found) for a in recorded.attempts] == [(Outcome.ACCEPTED, None)]
     upgraded.transition(key(), expected=S.APPLIED, target=S.VERIFIED, actor=A.APPLIER)
     upgraded.close()
+
+
+def test_a_new_database_and_its_wal_files_are_readable_by_the_owner_only(tmp_path: Path) -> None:
+    """The database holds every accepted Slack post in full: a shared host's umask 022 must not open it (#153)."""
+    path = tmp_path / "stockthread.db"
+    old = os.umask(0o022)
+    try:
+        store = Store.open(path)
+        store.enqueue_event("Ev0001", "event", "{}")
+        files = sorted(tmp_path.iterdir())
+        assert [file.name for file in files] == ["stockthread.db", "stockthread.db-shm", "stockthread.db-wal"]
+        assert {stat.S_IMODE(file.stat().st_mode) for file in files} == {0o600}
+        store.close()
+    finally:
+        os.umask(old)
+
+
+def test_an_existing_database_keeps_its_mode(tmp_path: Path) -> None:
+    path = tmp_path / "stockthread.db"
+    Store.open(path).close()
+    path.chmod(0o640)
+    Store.open(path).close()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
