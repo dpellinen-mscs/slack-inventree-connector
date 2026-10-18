@@ -11,3 +11,9 @@ build/
 coverage/
 .coverage
 .it.env
+# Local settings and the database of Slack posts: never committed (CONTRIBUTING.md).
+stockthread.toml
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
