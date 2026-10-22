@@ -1185,7 +1185,8 @@ class Worker:
             if question is not None:
                 buttons = choices(question)
                 ids = [new_button_id() for _ in buttons]
-                body = with_question(body, question_message(question, views, parts, locations, ids))
+                units = {part.pk: part.units for part in catalog.parts}
+                body = with_question(body, question_message(question, views, parts, locations, ids, units=units))
                 asked = NewQuestion(
                     question_json(question),
                     question.approver_only,

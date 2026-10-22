@@ -213,7 +213,9 @@ an inactive part or a deleted location is ignored and reported.
 - [ ] Release process, without publishing until Dan says so
 - [x] Any unit but a count (feet, metres, a box) asks for the quantity in the part's stocking unit, and no request
   is built for a line that still has a unit (#151)
-- [ ] Read each part's InvenTree unit, so "50 m" of a part stocked in metres needs no question
+- [x] Read each part's InvenTree unit; the quantity question names it ("in m"), or pieces when the part has
+  none, for a part matched surely enough to write
+- [ ] A length in the part's own unit ("50 m" of a part stocked in metres) needs no question
 
 **DoD:** a fresh admin completes the quickstart in about 15 minutes without
 help. No issue labeled `agent-backlog` with high severity is open. Dan has

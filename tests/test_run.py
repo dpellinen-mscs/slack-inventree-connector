@@ -391,12 +391,21 @@ async def test_the_catalog_is_read_from_inventree() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_part_s_stocking_unit_is_read_and_none_is_no_unit() -> None:
+    rows = [{**PART, "units": "m"}, {**PART, "pk": 2, "units": None}, {**PART, "pk": 3, "units": ""}]
+    async with reader({"/api/part/": rows, "/api/stock/location/": [LOCATION]}) as client:
+        catalog = await load_catalog(client)
+    assert [part.units for part in catalog.parts] == ["m", "", ""]
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("path", "row"),
     [
         ("/api/part/", {**PART, "name": ""}),
         ("/api/part/", {**PART, "pk": "1"}),
         ("/api/part/", {key: value for key, value in PART.items() if key != "virtual"}),
+        ("/api/part/", {**PART, "units": 1}),
         ("/api/stock/location/", {**LOCATION, "pathstring": None}),
         ("/api/stock/location/", {**LOCATION, "structural": 0}),
     ],
