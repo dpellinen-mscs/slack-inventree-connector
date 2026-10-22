@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
+from decimal import Decimal
 
 import anyio
 
@@ -30,6 +31,7 @@ from stockthread.apply import (
     recover_request,
     recover_undo,
 )
+from stockthread.core.grouping import seconds
 from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.model import PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
@@ -160,7 +162,12 @@ async def work_request(
 
         def rejudge(marker: Marker) -> Judgement:
             fresh = plan_views(store, store.plan(key.post, key.revision))
-            return judge_plan(fresh, gate_now(), clicked_by=fresh.plan.approved_by, marker=marker)
+            clicked_by = fresh.plan.approved_by
+            judgement = judge_plan(fresh, gate_now(), clicked_by=clicked_by, marker=marker)
+            if clicked_by is not None and judgement.allowed and judgement.approved_by != clicked_by:
+                # The clicker is no longer an approver: the policy never approved this plan (ADR 0019).
+                return Judgement(Verdict.WAITS, "the approver who clicked Apply is no longer an approver")
+            return judgement
 
         return await apply_request(
             key, view, rejudge, store=store, reader=reader, writer=writer, lock=lock, lock_owner=lock_owner,
@@ -173,6 +180,42 @@ async def work_request(
     if state is RequestState.UNDO_UNKNOWN:
         return await recover_undo(key, view, store=store, reader=reader, lock=lock, settle=settle)
     raise ValueError(f"request {key} is {state}: no step of the apply protocol is due")
+
+
+def approve_by_click(
+    store: Store,
+    owner: str,
+    post: PostKey,
+    revision: int,
+    user: str,
+    now: GateNow,
+    *,
+    at: Decimal,
+    expiry_hours: float,
+) -> Judgement | None:
+    """Approve plan `revision` of the post for `user`, who clicked its Apply button, when the gate allows it with
+    that click (`gate.judge`, `clicked_by`), and say why or why not. A click never approves by the policy: a user who
+    is not an approver is refused even when the policy would approve the plan with no click. Blocked when the
+    revision is not the post's current plan, or when its plan expired at `at`: `expiry_hours` after the time
+    `Store.plan_expires_from` gives, as the worker counts it. None when the plan is approved already or further on.
+    Raises NotRebuilt when the plan's record cannot be acted on, and what `Store.approve_plan` raises (StateConflict,
+    WriteBlocked) when the plan moved on in between or the post may not be approved now."""
+    if user not in now.policy.approvers:
+        return Judgement(Verdict.BLOCKED, "only an approver may apply a movement")
+    plan = store.current_plan(post)
+    if plan is None or plan.revision != revision:
+        return Judgement(Verdict.BLOCKED, f"plan revision {revision} is no longer current")
+    if any(row.state is not RequestState.PLANNED for row in plan.requests):
+        return None
+    expires_from = store.plan_expires_from(post)
+    if expires_from is None or at - seconds(expires_from) > expiry_hours * 3600:
+        return Judgement(Verdict.BLOCKED, "the plan expired")
+    judgement = judge_plan(plan_views(store, plan), now, clicked_by=user)
+    if judgement.allowed:
+        if judgement.approved_by != user:
+            raise AssertionError("a click approved by the policy")  # the gate returns the approver it was given
+        store.approve_plan(owner, post, revision, actor=Actor.HUMAN, approver=user)
+    return judgement
 
 
 def undo_refusal(

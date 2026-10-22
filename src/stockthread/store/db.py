@@ -1218,6 +1218,15 @@ class Store:
         item = _review_item(PostKey(*row[11:14]), row[2:11])
         return Button(button_id, item, int(row[0]), json.loads(row[1]))
 
+    def plan_expires_from(self, key: PostKey) -> str | None:
+        """The Slack time the post's plan expires from, fixed by its first dry run (migration 0015); None before
+        it. KeyError when there is no such post."""
+        post_id = self._post_id(key)
+        if post_id is None:
+            raise KeyError("no such post")
+        row = self._db.execute("SELECT plan_from FROM posts WHERE id = ?", (post_id,)).fetchone()
+        return None if row is None or row[0] is None else str(row[0])
+
     def _plan_from(self, post_id: int, revision: int, through: int, question: NewQuestion | None) -> str:
         """The time the post's plan expires from (migration 0015). A revision's is the one its first dry run
         stored. A first dry run takes its question's, which must be the time of one of the post's messages, or
