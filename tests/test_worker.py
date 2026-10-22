@@ -4497,6 +4497,33 @@ def test_a_quantity_typed_for_a_pack_unit_question_counts_pieces(store: Store, c
     assert "24 box" not in reply_text(worker.slack.posted[-1])  # type: ignore[attr-defined]
 
 
+def test_a_length_waits_for_the_quantity_in_the_part_s_stocking_unit(store: Store, clock: Clock) -> None:
+    """The part's stocking unit is not read, so "50 ft" is never written as 50 of whatever the part counts in."""
+    worker = asked(store, clock, CATALOG, "took 50 ft of Disc 40 from main stock to truck 1")
+    [item] = store.questions(KEY)
+    assert (item.question["ask"], item.question["reason"]) == ("quantity", "pack_unit_ambiguous")
+    assert "stocking unit" in reply_text(worker.slack.posted[-1])  # type: ignore[attr-defined]
+    typed_in(store, clock, worker, "15")
+    line = newest_result(store)["movements"][0]["items"][0]
+    assert (line["quantity"], line["unit"]) == ("15", None)
+    assert newest_result(store)["movements"][0]["reasons"] == []
+
+
+def test_a_length_on_one_line_of_several_is_settled_by_that_line_s_answer(store: Store, clock: Clock) -> None:
+    """The text's measure names its line: a line-less reason in a post of two lines could never be settled."""
+    worker = asked(store, clock, CATALOG, "took 50 ft of Disc 40 and 2 ONT 100 from main stock to truck 1")
+    [item] = store.questions(KEY)
+    assert (item.question["ask"], item.question["reason"], item.question["line"]) == (
+        "quantity",
+        "pack_unit_ambiguous",
+        0,
+    )
+    typed_in(store, clock, worker, "15")
+    movement = newest_result(store)["movements"][0]
+    assert [(line["quantity"], line["unit"]) for line in movement["items"]] == [("15", None), ("2", None)]
+    assert all(reason["code"] != "pack_unit_ambiguous" for reason in movement["reasons"])
+
+
 def serial_reading() -> Extraction:
     movement = CandidateMovement(
         MovementType.TAKE_TO_VEHICLE,

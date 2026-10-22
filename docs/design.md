@@ -468,7 +468,7 @@ needs.
      ambiguous part with at most 5 candidates is a button choice, with
      more it is a reply; a part found by the words or fuzzy rule is
      confirmed, yes or no;
-  4. quantities (missing, vague, a container or a pack unit): a reply;
+  4. quantities (missing, vague, a container, a pack unit or a length): a reply;
   5. the source, then 6. the destination, the same way as parts (an
      implied place or an unmapped vehicle is named in a reply);
   7. serial numbers: a reply;
@@ -1157,7 +1157,12 @@ can also steer the gate by what it omits. These rules close that path:
   plans, questions and instructions raise their reasons from the text
   alone. On the corpus, the extra reasons fall on photos, threads,
   multi-movement posts and one Spanish post. The limit applies to every
-  unit, so "300 ft" of cable needs a click at the default of 100.
+  unit, so "300 ft" of cable needs a click at the default of 100. Any
+  unit but a count (feet, metres, a box) is a reason too, whatever the
+  quantity: a request carries the bare number in the part's stocking unit,
+  and the connector does not read that unit yet, so "50 ft" could be
+  written as 50 m. The quantity question asks for the number in the part's
+  stocking unit, and `plan_requests` refuses a line that still has a unit.
 - **Matching is deterministic** and takes only the item text, the location
   text and the poster as input (section 10). The extraction prompt never
   contains catalog or alias data, so the model cannot learn part names to

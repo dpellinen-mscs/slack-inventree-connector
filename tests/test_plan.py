@@ -134,6 +134,21 @@ def test_a_movement_that_is_not_decided_refuses_the_whole_plan(change: dict[str,
         plan_requests(views, markers(2), user=SAM)
 
 
+@pytest.mark.parametrize(("unit", "pack_size"), [("ft", None), ("m", None), ("box", None), (None, Decimal(12))])
+def test_a_line_that_is_not_a_count_is_refused_even_if_the_gate_missed_it(
+    monkeypatch: pytest.MonkeyPatch, unit: str | None, pack_size: Decimal | None
+) -> None:
+    """A request carries the bare quantity in the part's stocking unit: "50 ft" must never be sent as 50."""
+    monkeypatch.setattr("stockthread.plan.gate_reasons", lambda _view: set())
+    given = view()
+    line = replace(given.movement.line_items[0], unit=unit, pack_size=pack_size)
+    given = replace(given, movement=replace(given.movement, line_items=(line,)))
+    with pytest.raises(NotDecided, match="line 1 is not a count"):
+        plan_requests([given], markers(1), user=SAM)
+    each = replace(given, movement=replace(given.movement, line_items=(replace(line, unit="each", pack_size=None),)))
+    assert len(plan_requests([each], markers(1), user=SAM)) == 1
+
+
 def test_an_unclear_movement_or_an_empty_plan_is_refused() -> None:
     with pytest.raises(NotDecided, match="review reason"):
         plan_requests([view(MovementType.UNCLEAR)], markers(1), user=SAM)

@@ -28,7 +28,6 @@ from stockthread.core.model import (
 )
 from stockthread.core.signals import (
     CONTAINER_WORDS,
-    CONTAINERS,
     CORRECTION,
     HEDGE,
     LATER,
@@ -88,6 +87,33 @@ def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
     return ReviewReason(code, ReasonSource.RULE, detail)
 
 
+DETAIL_NOT_A_COUNT = "a unit other than a count"
+"""The detail of the reason a line in feet, metres or any unit but a count raises."""
+DETAIL_UNIT_IN_ITEM = "the item starts with a unit word"
+"""The detail of the reason an item text like "ft drop cable" raises: its unit was read as part of the item."""
+DETAIL_PACK_SIZE = "a pack size"
+"""The detail of the reason a line with a pack size ("a 12-piece box") raises."""
+MEASURE_WORDS = (
+    frozenset(LENGTH_UNITS)
+    | {"yd", "yds", "yard", "yards", "inch", "inches"}
+    | {
+        "kg",
+        "kgs",
+        "lb",
+        "lbs",
+        "gal",
+        "gallon",
+        "gallons",
+    }
+)
+"""Units of length, weight or volume: a quantity in one of them is not a count."""
+_FEET_OR_INCHES = "['\"\N{RIGHT DOUBLE QUOTATION MARK}]"
+MEASURE = re.compile(
+    rf"(?<![\w.,])\d+(?:[.,]\d+)*(?:\s*(?:{'|'.join(sorted(MEASURE_WORDS))})\b"
+    rf"|{_FEET_OR_INCHES}|\s+{_FEET_OR_INCHES}(?!\w))"
+)
+""""50 ft", "3m", "2.5 metres", "100'", '12"cable', "2 kg": a measure in the text, whatever the extractor made of it.
+A quote mark after a space with a word right after it opens a quoted name: 'took 2 "Disc 40"'."""
 TYPE_UNCLEAR = "type unclear"
 """The detail of the reason an unclear movement type raises (other MOVEMENT_UNCLEAR details doubt the text)."""
 
@@ -134,9 +160,14 @@ def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         reasons.add(_rule(ReasonCode.ITEMS_MISSING))
     if any(item.quantity is None for item in movement.line_items):
         reasons.add(_rule(ReasonCode.QUANTITY_MISSING, "no number"))
-    if any(_unit(item.unit) in CONTAINERS or item.pack_size is not None for item in movement.line_items):
-        reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS))
     for n, item in enumerate(movement.line_items, start=1):
+        if not counts_pieces(item.unit):
+            reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {DETAIL_NOT_A_COUNT}"))
+        if item.pack_size is not None:
+            reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {DETAIL_PACK_SIZE}"))
+        first = _folded(item.item_text or "").split(" ", 1)[0]
+        if first in MEASURE_WORDS or CONTAINER_WORDS.fullmatch(first):
+            reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {DETAIL_UNIT_IN_ITEM}"))
         if item.serials and (item.quantity is None or len(item.serials) != item.quantity):
             reasons.add(_rule(ReasonCode.SERIAL_UNCONFIRMED, f"line {n}: serial count differs from the quantity"))
         if any(not _has_words(serial, text) for serial in item.serials):
@@ -146,6 +177,13 @@ def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     if kind is MovementType.UNCLEAR:
         reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, TYPE_UNCLEAR))
     return reasons
+
+
+def counts_pieces(unit: str | None) -> bool:
+    """The unit is a count: none, or "each", "pc", "x". A request carries the quantity alone, as a number of the
+    part's stocking unit, and nothing reads that unit yet: "50 ft" may be 50 m or 50 pieces once written."""
+    unit = _unit(unit)
+    return unit is None or unit in _EACH
 
 
 def _unit(unit: str | None) -> str | None:
@@ -160,8 +198,11 @@ def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     reasons = set()
     if SUSPICIOUS.search(text):
         reasons.add(_rule(ReasonCode.SUSPICIOUS_INSTRUCTIONS))
-    if CONTAINER_WORDS.search(text):
-        reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, "container word in the text"))
+    for found in CONTAINER_WORDS.finditer(text):
+        reasons |= _unit_reasons(movement, text, found, "container word in the text")
+    for found in MEASURE.finditer(text):
+        if not _in_a_name(movement, text, found):
+            reasons |= _unit_reasons(movement, text, found, "measure in the text")
     if VAGUE.search(text):
         reasons.add(_rule(ReasonCode.QUANTITY_VAGUE, "vague quantity word in the text"))
     if CORRECTION.search(text):
@@ -183,6 +224,72 @@ def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         if pattern.search(text):
             reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, detail))
     return reasons
+
+
+def _unit_reasons(movement: CandidateMovement, text: str, found: re.Match[str], detail: str) -> set[ReviewReason]:
+    """The pack-unit reasons of a unit word in the text, each naming a line the unit may belong to, so that line's
+    quantity question settles it; a wrong line settled would write a length as a count. The lines named:
+    - the item right after it ("50 ft of drop cable", "1 box of breakers"), on the same line of text;
+    - the item right before it, with only spaces or punctuation between ("drop cable 50 ft", "breakers, 2 boxes");
+    - when no item is right after it: the item before it however far, and every line whose quantity is its number;
+    - every line whose item is not in the text word for word: where its unit is cannot be told.
+    A movement of a single line whose item is not found names no line, which fits it."""
+    start, number = found.start(), re.match(_NUMBER, found.group(0))
+    if number is None and (number := re.search(rf"{_NUMBER}(?=\s*$)", text[:start])):
+        start = number.start()  # "1 box": the container's number is part of it
+    after: dict[int, int] = {}
+    before: dict[int, int] = {}
+    named = set()
+    for n, item in enumerate(movement.line_items, start=1):
+        places = _occurrences(item.item_text or "", text)
+        if not places:
+            named.add(n)
+        if starts := [m.start() for m in places if m.start() >= found.end()]:
+            after[n] = min(starts)
+        if ends := [m.end() for m in places if m.end() <= start]:
+            before[n] = max(ends)
+    right_after = False
+    if after:
+        nxt = min(after, key=lambda n: (after[n], n))
+        named.add(nxt)
+        right_after = bool(_RIGHT_AFTER.fullmatch(text[found.end() : after[nxt]]))
+    if before:
+        last = max(before, key=lambda n: (before[n], -n))
+        if not right_after or _RIGHT_BEFORE.fullmatch(text[before[last] : start]):
+            named.add(last)
+    if not right_after and number:
+        with contextlib.suppress(InvalidOperation):
+            value = Decimal(number.group(0).replace(",", ""))
+            named |= {n for n, item in enumerate(movement.line_items, start=1) if item.quantity == value}
+    if len(movement.line_items) == 1 and not after and not before:
+        return {_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, detail)}
+    return {_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {detail}") for n in named}
+
+
+_NUMBER = r"\d+(?:[.,]\d+)*"
+_RIGHT_AFTER = re.compile(r"[ \t]*(?:of[ \t]+(?:the[ \t]+)?)?")
+"""What may stand between a unit and the item after it that it belongs to: "50 ft drop cable", "a box of the
+breakers". Not a line break: "drop cable 50 ft\nONT 2" is a list whose unit ends the row before."""
+_RIGHT_BEFORE = re.compile(r"[\s,:;()-]*")
+"""What may stand between an item and a unit after it that may be its own: "drop cable 50 ft", "breakers, 2 boxes"."""
+
+
+def _in_a_name(movement: CandidateMovement, text: str, found: re.Match[str]) -> bool:
+    """A measure inside an item's text is part of its name: "Cat6 patch cables 3 ft". A double quote mark that closes
+    a quoted name is not one: 'took 2 "Disc 40" to van 3'. It does when the nearest double quote mark before it opens
+    a quote: a word right after it and no digit right before it (after '6"pipe and 10"' the nearest is an inch mark)."""
+    if found.group(0)[-1] in '"\N{RIGHT DOUBLE QUOTATION MARK}':
+        before = text[: found.start()]
+        at = max(before.rfind(mark) for mark in '"\N{LEFT DOUBLE QUOTATION MARK}\N{RIGHT DOUBLE QUOTATION MARK}')
+        if (
+            at >= 0
+            and before[at] != "\N{RIGHT DOUBLE QUOTATION MARK}"
+            and re.match(r"\w", before[at + 1 :])
+            and not before[at - 1 : at].isdigit()
+        ):
+            return True
+    measure = re.sub(r"\s", "", found.group(0))
+    return any(measure in re.sub(r"\s", "", _folded(item.item_text or "")) for item in movement.line_items)
 
 
 def _folded(text: str) -> str:

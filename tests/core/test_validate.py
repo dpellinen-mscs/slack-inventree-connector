@@ -166,6 +166,137 @@ def test_a_unit_is_compared_without_case_or_plural() -> None:
         assert ReasonCode.PACK_UNIT_AMBIGUOUS in codes(movement, "took 2 breakers from shop to van 3")
 
 
+@pytest.mark.parametrize("unit", ["ft", "feet", "m", "metres", "kg", "spool", "Box"])
+def test_a_line_in_any_unit_but_a_count_is_a_reason(unit: str) -> None:
+    """No request carries a unit, and the part's stocking unit is not read: "50 ft" could be written as 50 m."""
+    text = f"moved 50 {unit} of drop cable from shop to van 3"
+    movement = take("drop cable", "50", line_items=(LineItem("drop cable", Decimal(50), unit),), source_text="shop")
+    reasons = validate(replace(movement, destination_text="van 3"), text, max_quantity=100)
+    assert ReasonCode.PACK_UNIT_AMBIGUOUS in {reason.code for reason in reasons}
+
+
+@pytest.mark.parametrize("unit", [None, "each", "ea", "pc", "piece", "pieces", "units", "x"])
+def test_a_count_raises_no_unit_reason(unit: str | None) -> None:
+    movement = take(line_items=(LineItem("Disc 40", Decimal(2), unit),))
+    assert ReasonCode.PACK_UNIT_AMBIGUOUS not in codes(movement, "took 2 Disc 40 from main stock to truck 1")
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["moved 50 ft of drop cable from shop to van 3", "moved 50ft of drop cable from shop to van 3",
+     "moved 2.5 metres of drop cable from shop to van 3", "moved 1,000 m of drop cable from shop to van 3",
+     "moved 50 ft drop cable from shop to van 3", "moved 50 yards of drop cable from shop to van 3",
+     "moved 100' drop cable from shop to van 3", "moved 2 kg drop cable from shop to van 3",
+     'moved 12" drop cable from shop to van 3'],
+)  # fmt: skip
+def test_a_measure_in_the_text_is_a_reason_whatever_the_extractor_says(text: str) -> None:
+    assert ReasonCode.PACK_UNIT_AMBIGUOUS in codes(breakers(item="drop cable"), text)
+
+
+@pytest.mark.parametrize("item", ["ft drop cable", "yards of drop cable", "kg solder", "boxes of breakers"])
+def test_a_unit_read_into_the_item_text_is_a_reason(item: str) -> None:
+    """ "moved 50 ft drop cable": an extractor may keep "ft" in the item and leave the unit empty."""
+    reasons = validate(breakers(item=item), f"moved 2 {item} from shop to van 3", max_quantity=100)
+    assert (
+        ReviewReason(ReasonCode.PACK_UNIT_AMBIGUOUS, ReasonSource.RULE, "line 1: the item starts with a unit word")
+        in reasons
+    )
+
+
+def test_a_unit_in_the_text_names_the_line_of_the_item_after_it() -> None:
+    """A reason with a line is settled by that line's quantity question; one with none would wait forever."""
+    lines = (LineItem("drop cable", Decimal(50), "ft"), LineItem("onts", Decimal(2)), LineItem("breakers", Decimal(1)))
+    movement = take(line_items=lines, source_text="shop", destination_text="van 3")
+    text = "moved 50 ft of drop cable and 2 onts and 1 box of breakers from shop to van 3"
+    details = {r.detail for r in validate(movement, text, max_quantity=100) if r.code is ReasonCode.PACK_UNIT_AMBIGUOUS}
+    assert details == {
+        "line 1: a unit other than a count",
+        "line 1: measure in the text",
+        "line 3: container word in the text",
+    }
+
+
+def pack_details(movement: CandidateMovement, text: str) -> set[str]:
+    reasons = validate(movement, text, max_quantity=100)
+    return {reason.detail for reason in reasons if reason.code is ReasonCode.PACK_UNIT_AMBIGUOUS}
+
+
+@pytest.mark.parametrize("cable", ["drop cable", "drop-cable"])
+def test_a_measure_after_its_item_names_that_line_too(cable: str) -> None:
+    """ "drop cable 50 ft, 2 onts", the unit dropped by the extractor: answering the onts question alone must not
+    settle the cable line, or 50 ft is written as 50 of the part's unit. "drop-cable": the item text is not the
+    text's, so the line whose quantity is the measure's number gets it."""
+    lines = (LineItem("drop cable", Decimal(50)), LineItem("onts", Decimal(2)))
+    movement = take(line_items=lines, source_text="shop", destination_text="van 3")
+    details = pack_details(movement, f"took {cable} 50 ft and 2 onts from shop to van 3")
+    assert details == {"line 1: measure in the text", "line 2: measure in the text"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["took from shop to van 3:\ndrop cable 50 ft\nonts 2", "took drop cable 50ft onts 2 from shop to van 3",
+     'took drop cable 50" onts 2 from shop to van 3'],
+)  # fmt: skip
+def test_a_measure_ending_a_row_names_the_item_before_it(text: str) -> None:
+    lines = (LineItem("drop cable", Decimal(50)), LineItem("onts", Decimal(2)))
+    movement = take(line_items=lines, source_text="shop", destination_text="van 3")
+    assert "line 1: measure in the text" in pack_details(movement, text)
+
+
+@pytest.mark.parametrize("text", ['took 2 12"cable from shop to van 3', "took 50'cable and 2 onts from shop to van 3"])
+def test_a_quote_mark_measure_before_a_word_is_a_measure(text: str) -> None:
+    assert ReasonCode.PACK_UNIT_AMBIGUOUS in codes(breakers(item="cable"), text)
+
+
+def test_an_inch_mark_does_not_open_a_quoted_name() -> None:
+    lines = (LineItem("pipe", Decimal(2)), LineItem("flex", Decimal(10)))
+    movement = take(line_items=lines, source_text="shop", destination_text="van 3")
+    details = pack_details(movement, 'took 2 6"pipe and 10" flex from shop to van 3')
+    assert details == {"line 1: measure in the text", "line 2: measure in the text"}
+
+
+def test_a_container_names_a_line_whose_item_is_not_in_the_text() -> None:
+    """ "1 roll" of an item the extractor named "drop cable": answering the onts question must not settle it."""
+    lines = (LineItem("onts", Decimal(2)), LineItem("drop cable", Decimal(1)))
+    movement = take(line_items=lines, source_text="shop", destination_text="van 3")
+    details = pack_details(movement, "took 2 onts, 1 roll from shop to van 3")
+    assert "line 2: container word in the text" in details
+
+
+def test_a_measure_found_near_no_item_names_every_line() -> None:
+    lines = (LineItem("cat6 cable", Decimal(3)), LineItem("ont", Decimal(2)))
+    movement = take(line_items=lines, source_text="shop", destination_text="van 3")
+    details = pack_details(movement, "took 2 onts and some cable, 50 ft, from shop to van 3")
+    assert details == {"line 1: measure in the text", "line 2: measure in the text"}
+
+
+@pytest.mark.parametrize(
+    ("line", "detail"),
+    [(LineItem("breakers", Decimal(1), "box"), "a unit other than a count"),
+     (LineItem("breakers", Decimal(1), pack_size=Decimal(12)), "a pack size")],
+)  # fmt: skip
+def test_a_container_or_pack_size_on_one_line_of_several_names_its_line(line: LineItem, detail: str) -> None:
+    """A reason with no line in a movement of several lines is one no answer settles: the post would wait forever."""
+    movement = take(line_items=(LineItem("onts", Decimal(2)), line), source_text="shop", destination_text="van 3")
+    details = pack_details(movement, "took 2 onts and 1 breakers from shop to van 3")
+    assert details == {f"line 2: {detail}"}
+
+
+def test_a_quoted_name_is_not_a_measure() -> None:
+    assert ReasonCode.PACK_UNIT_AMBIGUOUS not in codes(take(), 'took 2 "Disc 40" from main stock to truck 1')
+    lines = (LineItem("patch cable", Decimal(12)), LineItem("drop cable", Decimal(6)))
+    movement = take(line_items=lines, source_text="shop", destination_text="van 3")
+    assert pack_details(movement, 'took 12" patch cable and 6" drop cable from shop to van 3') == {
+        "line 1: measure in the text",
+        "line 2: measure in the text",
+    }
+
+
+def test_a_length_in_an_item_name_is_not_a_quantity() -> None:
+    movement = take("Cat6 patch cables 3 ft", "4", destination_text="van 3")
+    assert codes(movement, "took 4 Cat6 patch cables 3 ft from main stock to van 3") == set()
+
+
 def test_a_digit_inside_a_word_is_not_a_quantity() -> None:
     # "van3" and "d40" hold digits, but neither says how many.
     assert ReasonCode.QUANTITY_NOT_IN_TEXT in codes(take("d40", quantity="3"), "loaded d40 on van3")
