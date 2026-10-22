@@ -1112,8 +1112,13 @@ lock before the write, reading the settings, the vehicles, the answers,
 the plan's state and its stored approver then; a plan no longer current
 is blocked, and a click whose clicker is no longer an approver counts for
 nothing. A post counts as answered when any of its questions was
-answered or the record applied an answer. Neither is called by the run
-loop yet: the policy's writes ship with the receipt and Undo (ADR 0004).
+answered or the record applied an answer. With writes on and a tested
+server, the run loop calls both: `Worker.approve_due` judges each plan a
+post's first dry run made, once (ADR 0019), and `Worker.work_due` writes
+what was approved. No write begins while an event waits in the queue
+(`Store.begin_attempt` checks it in the transaction that stores the
+intent), so an edit or deletion received during the reads before a write
+cancels it.
 
 ### The model cannot authorize a write
 
@@ -1479,8 +1484,12 @@ connector never has two InvenTree writes in flight and cannot race itself.
    instance lock could go stale. No write is begun with less than two
    InvenTree timeouts left, so a cut-off ends a read; a write cut off all
    the same is `unknown`. With writes off, requests left from a run with
-   writes on wait, and the log says how many. Nothing in the run loop
-   approves a plan yet, so nothing new is written.
+   writes on wait, and the log says how many. The policy approves a plan
+   in the run loop (`Worker.approve_due`, `run.policy_approver`, ADR 0019):
+   once, right after the reply that made it is recorded, and only the plan
+   a post's first dry run made; an outage puts the judgement off for at
+   most 10 minutes. A plan it does not approve waits for Apply, which is
+   not built yet.
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
 It takes the process's writer lock, and waits, nothing read and still

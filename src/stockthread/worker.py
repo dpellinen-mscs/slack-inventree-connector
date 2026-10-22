@@ -20,7 +20,8 @@ the waiting post asked least recently, so neither one slow call nor one post who
 others back. The reading is kept and its reply is posted in the next step, after the queue has been drained:
 an edit that came during the call makes the post read again.
 
-3. `work_due` runs the step of the apply protocol each request is due for, through `apply`, and `post_receipts`
+3. `approve_due` lets the policy judge, through `approve`, each plan a reply made (ADR 0004, 0019), `work_due` runs
+   the step of the apply protocol each request is due for, through `apply`, and `post_receipts`
    posts the receipt each plan is due in its thread, with an Undo button where an undo may be asked for.
 Nothing here writes to InvenTree but `apply` and an Undo click on a receipt, through `undo` (both None while writes
 are off). Message
@@ -100,6 +101,7 @@ from stockthread.core.requests import UNDOABLE, RequestState
 from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
 from stockthread.core.validate import photo_not_read, validate
+from stockthread.gate import Judgement
 from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.plan_record import NotRebuilt, plan_of
@@ -197,6 +199,9 @@ this time."""
 STUCK_RETRY_SECONDS = 60 * 60
 """A request or receipt the connector cannot act on (its record cannot be rebuilt, or is not what it should be) is
 logged as an error, and tried again only after this long."""
+APPROVE_FOR_SECONDS = 10 * 60
+"""A plan the policy could not judge (an outage) this long after its reply waits for Apply: a take-out is applied
+with no click only while its reply is fresh in the thread (ADR 0019)."""
 RECEIPT_TRIES = 5
 """Failed tries in a row of one receipt after which each further failure is logged as an error for an operator."""
 RECEIPT_CHECK_SECONDS = 5
@@ -311,6 +316,10 @@ Undoer = Callable[[RequestKey, MovementView, str], Applied]
 """(request, the movement its request was built from, the Slack user who asked) -> where `apply.undo_apply` left the
 request, run to the end (run.py gives it the InvenTree client, the writer lock and the instance lock's owner)."""
 
+Approver = Callable[[PostKey], Judgement | None]
+"""post -> `applier.approve_by_policy` of its current plan (run.py gives it the store, the instance lock's owner and
+what the gate reads now: the settings, the server's version check and the vehicles)."""
+
 Stepper = Callable[[RequestKey], Applied]
 """request -> where `applier.work_request` left it (run.py gives it the InvenTree client, the writer lock, the
 instance lock's owner, what the gate reads now and the settle time)."""
@@ -368,6 +377,12 @@ class Worker:
     apply: Stepper | None = None
     """Runs the step of the apply protocol a request is due for (`work_due`). None while writes are off: no request
     is written, read back or recovered."""
+    approve: Approver | None = None
+    """Approves a post's plan by the policy (`approve_due`). None while writes are off: no plan is approved."""
+    _to_approve: dict[PostKey, tuple[Decimal, int, Decimal]] = field(default_factory=dict)
+    """Posts whose reply made a plan in this process, until the policy has judged it: when it was made, the failed
+    judgements in a row, and the time before which it is not judged again. Kept in memory only: a plan not judged
+    before a restart waits for Apply (ADR 0019)."""
     _work_quiet_until: Decimal = Decimal(0)
     _held: dict[RequestKey | tuple[PostKey, int], tuple[int, Decimal]] = field(default_factory=dict)
     """Requests, and plans (post, revision) due a receipt, whose last try failed: the failures in a row, and the time
@@ -413,7 +428,14 @@ class Worker:
         done, empty = self.drain()
         if not empty:
             return done
-        return done + self.reply_due() + self.work_due() + self.post_receipts() + self.take_down_buttons()
+        return (
+            done
+            + self.reply_due()
+            + self.approve_due()
+            + self.work_due()
+            + self.post_receipts()
+            + self.take_down_buttons()
+        )
 
     def drain(self) -> tuple[int, bool]:
         """Handle pending events: how many, and whether the queue is empty now. An event put off after a transient
@@ -580,6 +602,53 @@ class Worker:
             return self._undo_told(click, EventStatus.DROPPED, "undo_refused", f"Not undone: {why}.")
         text = UNDO_FEEDBACK.get(applied.state, f"The undo ended as {applied.state}. Look at it in InvenTree.")
         return self._undo_told(click, EventStatus.DONE, applied.state.value, text)
+
+    def approve_due(self) -> int:
+        """Let the policy judge each plan a reply made in this process (`approve`; ADR 0004 and 0019): a clear
+        take-out is approved with no click, and `work_due` writes it. Returns how many plans were approved.
+
+        Each plan is judged once, as soon as no event waits in the queue (an edit or a deletion may stale it first),
+        whatever the verdict. Judged later, a plan could be written long after its reply said "Dry run", or after the
+        settings changed under it, so a plan is not judged again: one that was not approved waits for Apply. Only an
+        outage (InvenTree, the network, the disk) puts the judgement off, for WORK_RETRY_SECONDS doubled with each
+        failure in a row; after APPROVE_FOR_SECONDS from the reply the plan waits for Apply. So does one whose
+        judgement fails any other way, logged as an error an operator must see."""
+        if self.approve is None:
+            self._to_approve.clear()
+            return 0
+        done = 0
+        for post, (made, failures, not_before) in list(self._to_approve.items()):
+            now = self._now()
+            if self.stopping() or self.store.events_pending():
+                break
+            if now >= made + APPROVE_FOR_SECONDS:
+                self._to_approve.pop(post)
+                log.warning("post %s: the policy could not judge its plan in time; it waits for Apply", post.ts)
+                continue
+            if now < not_before:
+                continue
+            self.beat(now=True)  # the judgement reads the catalog and the server's version
+            try:
+                judgement = self.approve(post)
+            except LockLost:
+                raise
+            except Exception as error:
+                if _outage(error):
+                    wait = min(WORK_RETRY_SECONDS * 2 ** min(failures, 16), STUCK_RETRY_SECONDS)
+                    self._to_approve[post] = (made, failures + 1, self._now() + wait)
+                    log.warning("post %s: the policy's judgement failed (%s), tried again later", post.ts,
+                                type(error).__name__)  # fmt: skip
+                    break
+                self._to_approve.pop(post)
+                log.error("post %s: the policy's judgement failed (%s); the plan waits for Apply", post.ts,
+                          _described(error))  # fmt: skip
+                continue
+            self._to_approve.pop(post)
+            if judgement is None:
+                continue
+            log.info("post %s: plan %s (%s)", post.ts, judgement.verdict, judgement.why)
+            done += judgement.allowed
+        return done
 
     def work_due(self) -> int:
         """Run the step of the apply protocol each request is due for (`Store.requests_to_work`; design section 7)
@@ -1534,6 +1603,7 @@ class Worker:
             question=sent.question,
             plan=sent.plan,
         )
+        self._judge_later(key, sent.revision, sent.plan, now)
         if sent.outcome is DryRunOutcome.RETRACTED:
             log.info("post %s: revision %d notice posted", key.ts, sent.revision)
         elif sent.revision > 1:
@@ -1652,6 +1722,14 @@ class Worker:
             answers=answers,
             plan=plan,
         )
+        self._judge_later(key, revision, plan, self._now())
+
+    def _judge_later(self, key: PostKey, revision: int, plan: NewPlan | None, now: Decimal) -> None:
+        """The plan just made, if any, is the one `approve_due` judges when the post's first dry run made it; any
+        earlier one of the post is not judged (ADR 0019)."""
+        self._to_approve.pop(key, None)
+        if plan is not None and revision == 1 and self.approve is not None:
+            self._to_approve[key] = (now, 0, now)
 
     def _messages(
         self, key: PostKey, changes: int

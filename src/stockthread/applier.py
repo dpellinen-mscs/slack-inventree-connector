@@ -3,9 +3,10 @@ step of each request one is due for. Both act on the views rebuilt from the dry-
 (ADR 0016), and judge the gate with what is read now: the settings, the server's version check, the vehicles, the
 answers and the plan's own state.
 
-The worker runs `work_request` through `Worker.apply` (`Worker.work_due`), which `stockthread run` sets only when
-writes are on and the server is tested (`run.inventree_steps`). Nothing approves a plan in the run loop yet (neither
-the policy nor an Apply click), so no request is `approved` and nothing is written whatever the settings say.
+The worker runs `approve_by_policy` through `Worker.approve` once, right after the reply that made a plan is
+recorded (`Worker.approve_due`), and `work_request` through `Worker.apply` (`Worker.work_due`); `stockthread run`
+sets both only when writes are on and the server is tested (`run.inventree_steps`, `run.policy_approver`). There is
+no Apply button yet: a plan the policy does not approve is never written.
 
 Known gap: the dry-run record does not say which lines a person named the stock items for, so every line is held to
 the rule a pick without a person follows (`precondition.check` with no `chosen`). A person's pick that rule would
@@ -109,11 +110,24 @@ def approve_by_policy(store: Store, owner: str, post: PostKey, now: GateNow) -> 
     """Approve the post's current plan when the policy may approve it with no click (ADR 0004), and say why or why
     not. None when there is nothing to approve: no current plan, or one already approved or further on. Raises
     NotRebuilt when the plan's record cannot be acted on, and what `Store.approve_plan` raises when the plan moved on
-    in between."""
+    in between.
+
+    Only a plan its first dry run made is ever approved by the policy (ADR 0019): one made after an edit, a deletion,
+    a joined message or an answer waits for Apply even when the gate would allow it, so an edit after an undo never
+    writes the movement again unasked, and neither does an edit that turned chatter into a movement. The plan row's
+    revision is not enough: a post's first plan row may come from a later dry run."""
     plan = store.current_plan(post)
     if plan is None or any(row.state is not RequestState.PLANNED for row in plan.requests):
         return None
     judgement = judge_plan(plan_views(store, plan), now)
+    if judgement.allowed and plan.revision > 1:
+        return Judgement(
+            Verdict.WAITS, f"plan revision {plan.revision}: only a post's first plan applies with no click"
+        )
+    if judgement.allowed and (len(store.dry_run_history(post)) > 1 or store.post_has_revision(post)):
+        return Judgement(
+            Verdict.WAITS, "the post was edited or read again: only its first dry run applies with no click"
+        )
     if judgement.allowed:
         store.approve_plan(owner, post, plan.revision, actor=Actor.POLICY)
     return judgement

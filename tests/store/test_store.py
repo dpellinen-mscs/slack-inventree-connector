@@ -16,6 +16,8 @@ from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, IllegalTransition, RequestState
 from stockthread.core.write_request import write_notes
 from stockthread.store import (
+    EventStatus,
+    EventsWaiting,
     InstanceLocked,
     LockLost,
     SchemaTooNew,
@@ -288,6 +290,47 @@ def test_begin_attempt_stores_the_intent_and_returns_the_marker(store: Store, pa
         f'{{"items":[{{"pk":7,"quantity":"2"}}],"location":4,"notes":"{marker} U0SAM"}}',
         None,
     )
+
+
+def test_no_apply_begins_while_an_event_waits_in_the_queue(store: Store) -> None:
+    """Review #137 finding 1: an edit received during the reads before a write is in the queue when the attempt would
+    begin; it may take the approval back, so the attempt is refused in the transaction that would store it."""
+    plan(store)
+    approve(store, key())
+    assert store.enqueue_event("Ev1", "event", "{}")
+    with pytest.raises(EventsWaiting):
+        begin(store, key())
+    assert store.request(key()).state is S.APPROVED
+    assert store.markers(key()) == []
+    (claimed,) = store.claim_events(OWNER)
+    with pytest.raises(EventsWaiting):  # one being processed too
+        begin(store, key())
+    store.finish_event(OWNER, claimed.id, EventStatus.DONE)
+    begin(store, key())
+    assert store.request(key()).state is S.APPLYING
+
+
+def test_an_event_another_connection_stored_holds_the_apply_back(store: Store, path: Path) -> None:
+    """The Slack listener stores events through a connection of its own, as here."""
+    plan(store)
+    approve(store, key())
+    listener = Store.open(path)
+    try:
+        assert listener.enqueue_event("Ev1", "event", "{}")
+    finally:
+        listener.close()
+    with pytest.raises(EventsWaiting):
+        begin(store, key())
+    assert store.request(key()).state is S.APPROVED
+
+
+def test_an_undo_begins_while_an_event_waits_in_the_queue(store: Store) -> None:
+    """An undo is asked for by a click, an event being processed while it runs; an edit does not take it back."""
+    plan(store)
+    verified(store, key())
+    assert store.enqueue_event("Ev1", "event", "{}")
+    begin(store, key(), AttemptKind.UNDO, expected=S.VERIFIED, actor=A.HUMAN)
+    assert store.request(key()).state is S.UNDOING
 
 
 @pytest.mark.parametrize(

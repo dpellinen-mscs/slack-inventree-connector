@@ -6,7 +6,8 @@ follow [Semantic Versioning](https://semver.org/) from the first release.
 
 ## [Unreleased]
 
-Nothing is released yet. The connector cannot write stock in this state.
+Nothing is released yet. With `writes.enabled = true`, the connector writes clear take-outs only
+(`policy.auto_apply`); there is no Apply button yet for anything else.
 
 ### Fixed
 
@@ -20,6 +21,9 @@ Nothing is released yet. The connector cannot write stock in this state.
 
 ### Added
 
+- With writes on, the policy approves a clear take-out right after its dry run (ADR 0004, 0019): it is
+  written, read back, and gets a receipt with an Undo button. Each plan is judged once, and only the plan a
+  post's first dry run made: one made after an edit or a joined message waits for Apply.
 - `stockthread trail <message link>`: one post's dry runs with every review reason and who raised it, its
   questions with their answers and who gave them, and its audit log. It only reads the database, and prints
   ids and codes unless `--text` is given.

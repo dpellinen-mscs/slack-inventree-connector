@@ -287,13 +287,44 @@ def test_a_deletion_that_comes_during_one_apply_is_handled_before_the_next(store
 
     def slow(key: RequestKey) -> Applied:
         seen.append(key)
-        deletion(store, other if key.post == POST else POST)
+        if len(seen) == 1:
+            deletion(store, other if key.post == POST else POST)
         return step(key)
 
     running = worker(store, slow)
-    assert running.work_due() == 1
+    assert running.work_due() == 0
     assert len(seen) == 1  # the other request waits for the next step, which drains the deletion first
+    assert inventree.sent == []  # any event in the queue holds the write that was being read for back too
+    first = seen[0]
+    running.step()
     assert len(inventree.sent) == 1
+    assert store.request(first).state is S.VERIFIED
+    assert all(store.request(key).state is not S.APPROVED for key in (KEY, RequestKey(other, 1, 1)))
+
+
+def test_a_deletion_that_comes_during_the_reads_before_the_write_stops_the_write(store: Store) -> None:
+    """Review #137 finding 1: the queue was checked only before the step, whose reads take time. A deletion that came
+    during them is in the queue when the attempt would begin, so nothing is sent, and draining it takes the approval
+    back for good."""
+    approved(store)
+    inventree = FakeInvenTree()
+    read = inventree.stock_items
+
+    async def deleted_meanwhile(part: int, location: int) -> list[dict[str, Any]]:
+        if not store.events_pending():
+            deletion(store, POST)
+        return await read(part, location)
+
+    inventree.stock_items = deleted_meanwhile  # type: ignore[method-assign]
+    running = worker(store, stepper(store, inventree))
+    assert running.work_due() == 0
+    assert inventree.sent == []
+    assert store.request(KEY).state is S.APPROVED
+    assert store.markers(KEY) == []
+    running.step()  # drains the deletion first
+    assert store.request(KEY).state is S.CANCELLED
+    assert running.work_due() == 0
+    assert inventree.sent == []
 
 
 def test_an_outage_changes_nothing_and_pauses_every_step(store: Store) -> None:

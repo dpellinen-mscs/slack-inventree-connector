@@ -24,6 +24,7 @@ editing history.
 | [0016](0016-apply-reads-the-dry-run-record.md) | Apply acts on the dry-run record the thread was shown, never on a new reading | Accepted |
 | [0017](0017-undo-read-back-states.md) | An undo is read back against the stock it was built on, and its outcomes reuse the apply's states | Accepted |
 | [0018](0018-undo-recovery.md) | An unknown undo that never ran is `undo_failed`, and recovery compares with the undo's own snapshot | Accepted |
+| [0019](0019-policy-judges-the-first-plan-once.md) | The policy judges a post's first plan once, right after its reply | Accepted |
 
 ## Template
 
