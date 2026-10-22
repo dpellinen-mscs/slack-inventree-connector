@@ -85,7 +85,9 @@ Slack (workspace, users, bots) ──► connector ──► InvenTree REST API
   Stock Item together with "add", so the connector's token can also edit
   stock item fields. That is broader than the connector needs, and only
   the client's own path and method checks narrow it.
-- A security contact and disclosure process for `SECURITY.md`. This
-  depends on how and when the project goes public.
+- [`SECURITY.md`](../SECURITY.md) names GitHub's private vulnerability
+  reporting as the channel. It has to be turned on in the repository's
+  settings when the project goes public; until then nobody outside can
+  report.
 - Photo handling: what is stored, for how long, and what is sent to a
   vision model. Out of scope for v1.0 text-only extraction.

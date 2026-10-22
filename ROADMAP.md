@@ -45,7 +45,7 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [x] Fault proxy for delayed, dropped and failed responses (`tests/support/faultproxy.py`)
 - [x] InvenTree client: read-only, rejects every method except GET, with API version check at startup ([0007](docs/decisions/0007-inventree-read-client.md))
 - [x] Threat model, first version ([`docs/threat-model.md`](docs/threat-model.md))
-- [ ] `SECURITY.md` (needs a contact, see the threat model), `CONTRIBUTING.md` (done), `CHANGELOG.md` (done)
+- [x] `SECURITY.md` (GitHub private vulnerability reporting; turn it on when the repository goes public), `CONTRIBUTING.md`, `CHANGELOG.md`
 
 **DoD:** a contributor can clone, install and run the full gate with one
 documented command. Integration tests read the seeded catalog from a real
@@ -209,7 +209,7 @@ an inactive part or a deleted location is ignored and reported.
 - [ ] A 24-hour run on small hardware with forced disconnects
 - [ ] Upgrade and backup notes for the audit store
 - [ ] Supported version matrix for InvenTree and Slack transports
-- [ ] Prepublication audit: full-history leak scan, license headers, docs check
+- [ ] Prepublication audit: full-history leak scan, license headers, docs check, private vulnerability reporting on
 - [ ] Release process, without publishing until Dan says so
 - [x] Any unit but a count (feet, metres, a box) asks for the quantity in the part's stocking unit, and no request
   is built for a line that still has a unit (#151)
