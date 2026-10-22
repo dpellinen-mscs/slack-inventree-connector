@@ -233,3 +233,56 @@ async def test_recovery_of_an_unknown_undo_whose_item_was_deleted_concludes(
     assert recovered.state is RequestState.VERIFY_FAILED, recovered
     assert recovered.problems, recovered
     assert store.recorded_requests(POST)[0].attempts[-1].marker_found is landed
+
+
+@pytest.mark.anyio
+async def test_one_request_applied_ten_times_at_once_and_after_a_restart_moves_stock_once(
+    store: Store, scratch: Scratch, tmp_path: Path
+) -> None:
+    """M3 DoD: the same post applied 10 times, in parallel and across a restart, moves stock once. Each call has a
+    writer lock of its own, as 10 processes would: only the store's own refusals keep the write single."""
+    item = scratch.stock(5)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], "2")
+    outcomes: list[RequestState | str] = []
+
+    async def once(reader: InvenTreeReader, writer: InvenTreeWriter) -> None:
+        try:
+            applied = await apply_request(
+                KEY, movement, allowed(movement), store=store, reader=reader, writer=writer, lock=anyio.Lock(),
+                lock_owner=OWNER,
+            )  # fmt: skip
+            outcomes.append(applied.state)
+        except Exception as error:
+            outcomes.append(type(error).__name__)
+
+    async with (
+        InvenTreeReader(server(), token()) as reader,
+        InvenTreeWriter(server(), token()) as writer,
+        anyio.create_task_group() as group,
+    ):
+        for _ in range(10):
+            group.start_soon(once, reader, writer)
+    assert outcomes.count(RequestState.VERIFIED) == 1, outcomes
+    assert set(outcomes) - {RequestState.VERIFIED} <= {"StateConflict", "ValueError"}, outcomes  # refused, nothing sent
+    assert store.request(KEY).state is RequestState.VERIFIED
+    assert len(store.markers(KEY)) == 1
+
+    store.release_lock(OWNER)
+    store.close()
+    restarted = Store.open(tmp_path / "stockthread.db")
+    try:
+        restarted.acquire_lock("worker-it-restarted", stale_after=timedelta(seconds=60))
+        assert restarted.conclude_crashed_writes("worker-it-restarted") == []
+        async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(), token()) as writer:
+            with pytest.raises(ValueError, match="not approved"):
+                await apply_request(
+                    KEY, movement, allowed(movement), store=restarted, reader=reader, writer=writer,
+                    lock=anyio.Lock(), lock_owner="worker-it-restarted",
+                )  # fmt: skip
+        assert len(restarted.markers(KEY)) == 1
+    finally:
+        restarted.close()
+    moved = scratch.api.items(scratch.part, scratch.other)
+    assert sum(Decimal(str(row["quantity"])) for row in moved) == Decimal(2)
+    assert Decimal(str(scratch.item(item["pk"])["quantity"])) == Decimal(3)
