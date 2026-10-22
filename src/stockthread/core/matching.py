@@ -46,6 +46,8 @@ class PartRecord:
     active: bool = True
     template: bool = False
     virtual: bool = False
+    units: str = ""
+    """The stocking unit in InvenTree ("m", "ft"); "" when the part has none and is counted by the piece."""
 
 
 @dataclass(frozen=True)

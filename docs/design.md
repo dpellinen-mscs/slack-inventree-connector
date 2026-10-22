@@ -1155,9 +1155,11 @@ can also steer the gate by what it omits. These rules close that path:
   unit, so "300 ft" of cable needs a click at the default of 100. Any
   unit but a count (feet, metres, a box) is a reason too, whatever the
   quantity: a request carries the bare number in the part's stocking unit,
-  and the connector does not read that unit yet, so "50 ft" could be
-  written as 50 m. The quantity question asks for the number in the part's
-  stocking unit, and `plan_requests` refuses a line that still has a unit.
+  and no unit is converted, so "50 ft" could be written as 50 m. The
+  catalog reads each part's InvenTree `units`; the quantity question names
+  it ("in m", or "in pieces" when the part has none) when the line's part
+  is matched surely enough to write, and else asks for "the part's
+  stocking unit". `plan_requests` refuses a line that still has a unit.
 - **Matching is deterministic** and takes only the item text, the location
   text and the poster as input (section 10). The extraction prompt never
   contains catalog or alias data, so the model cannot learn part names to

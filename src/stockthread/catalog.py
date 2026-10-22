@@ -48,6 +48,7 @@ def _part(row: Mapping[str, Any]) -> PartRecord:
         active=_bool(row, "active", "part"),
         template=_bool(row, "is_template", "part"),
         virtual=_bool(row, "virtual", "part"),
+        units=_text(row, "units", "part", optional=True).strip(),
     )
 
 

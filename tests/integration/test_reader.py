@@ -67,6 +67,16 @@ async def test_the_matcher_catalog_holds_the_seeded_parts_and_locations(catalog:
     assert locations[catalog.locations["Warehouse"]].structural
 
 
+async def test_a_part_s_stocking_unit_is_read(api: RawApi) -> None:
+    """InvenTree's `units` is read as the matcher's `PartRecord.units`; a part with none reads as ""."""
+    tag = uuid.uuid4().hex[:8]
+    metres = api.create("/api/part/", {"name": f"Scratch cable {tag}", "description": "test", "units": "m"})
+    plain = api.create("/api/part/", {"name": f"Scratch plain {tag}", "description": "test"})
+    async with make_reader() as reader:
+        parts = {part.pk: part for part in (await load_catalog(reader)).parts}
+    assert (parts[int(metres["pk"])].units, parts[int(plain["pk"])].units) == ("m", "")
+
+
 async def test_stock_items_leave_out_sub_locations(scratch: Scratch) -> None:
     here = scratch.stock(4)
     scratch.stock(6, location=scratch.child)

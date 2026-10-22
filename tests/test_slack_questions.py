@@ -152,6 +152,33 @@ def test_each_kind_of_question_has_its_words(question: Question, expected: str) 
     assert len(buttons(body)) == len(choices(question))
 
 
+def test_a_length_question_names_the_matched_part_s_stocking_unit() -> None:
+    question = Question(Ask.QUANTITY, ReasonCode.PACK_UNIT_AMBIGUOUS, 0, 0)
+    body = question_message(question, (view(),), PARTS, LOCATIONS, ids(question), units={1: "m"})
+    assert text_of(body).startswith("How many “Disc 40”, in m (the stocking unit of *Norvane Disc 40 Access Point*)?")
+    # A part with no unit in InvenTree is stocked by the piece.
+    body = question_message(question, (view(),), PARTS, LOCATIONS, ids(question), units={1: ""})
+    assert text_of(body).startswith("How many “Disc 40”, in pieces (the stocking unit of")
+    # A unit is InvenTree text: it cannot become markup.
+    body = question_message(question, (view(),), PARTS, LOCATIONS, ids(question), units={1: "<!here>"})
+    assert "<!here>" not in text_of(body)
+    assert "&lt;!here&gt;" in text_of(body)
+
+
+def test_a_length_question_without_a_matched_part_names_no_unit() -> None:
+    question = Question(Ask.QUANTITY, ReasonCode.PACK_UNIT_AMBIGUOUS, 0, 0)
+    unmatched = MovementView(view().movement, (Match(MatchStatus.UNMATCHED),), EXACT, EXACT, ())
+    body = question_message(question, (unmatched,), PARTS, LOCATIONS, ids(question), units={1: "m"})
+    assert text_of(body).startswith("How many “Disc 40”, in the part's stocking unit?")
+    # A loose match may be the wrong part: its unit is not offered as the one to count in.
+    fuzzy = MovementView(view().movement, (Match(MatchStatus.MATCHED, MatchRule.FUZZY, 1),), EXACT, EXACT, ())
+    body = question_message(question, (fuzzy,), PARTS, LOCATIONS, ids(question), units={1: "m"})
+    assert text_of(body).startswith("How many “Disc 40”, in the part's stocking unit?")
+    # A part the catalog has no unit for (not read) names none either.
+    body = question_message(question, (view(),), PARTS, LOCATIONS, ids(question), units={})
+    assert text_of(body).startswith("How many “Disc 40”, in the part's stocking unit?")
+
+
 def test_an_unstated_place_is_asked_by_its_side() -> None:
     no_source = view(source_text=None)
     question = Question(Ask.NAME_LOCATION, ReasonCode.IMPLIED_SOURCE, 0, None, "source")

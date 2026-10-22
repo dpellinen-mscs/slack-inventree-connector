@@ -138,6 +138,17 @@ def _named(text: str | None, match: Match | None, names: Mapping[int, str], what
     return f"{written}: no {what} found"
 
 
+def _stocking_unit(view: MovementView, line: int | None, parts: Mapping[int, str], units: Mapping[int, str]) -> str:
+    """The unit a pack or length question asks the number in. Named only for a part matched surely enough to
+    write: a loose match may be another part, counted in another unit."""
+    match = view.items[line] if line is not None and line < len(view.items) else None
+    record = match.record if match is not None and match.can_authorize_a_write else None
+    if record is None or record not in units:
+        return "the part's stocking unit"
+    name = escape(parts.get(record, f"#{record}"))
+    return f"{escape(units[record]) or 'pieces'} (the stocking unit of *{name}*)"
+
+
 def _line(view: MovementView, index: int, parts: Mapping[int, str]) -> str:
     movement = view.movement
     item = movement.line_items[index]
@@ -307,9 +318,12 @@ def question_message(
     parts: Mapping[int, str],
     locations: Mapping[int, str],
     values: Sequence[str],
+    *,
+    units: Mapping[int, str] | None = None,
 ) -> dict[str, Any]:
     """The body of a question in a post's thread. `values` holds one stored button id per `choices(question)`,
-    in order; a question without choices is answered by a thread reply."""
+    in order; a question without choices is answered by a thread reply. `units`: each part's stocking unit
+    (`PartRecord.units`), named when a length or a box is asked about a line whose part is surely known."""
     buttons = choices(question)
     if len(values) != len(buttons) or not all(values):
         raise ValueError("one stored button id per choice")
@@ -342,8 +356,9 @@ def question_message(
     elif ask is Ask.CONFIRM_PART:
         text = f"Is {written or 'the item'} *{record}*?"
     elif ask is Ask.QUANTITY and question.reason is ReasonCode.PACK_UNIT_AMBIGUOUS:
+        stocked = _stocking_unit(view, question.line, parts, units or {})
         text = (
-            f"How many {written}, in the part's stocking unit? Reply in this thread with a number."
+            f"How many {written}, in {stocked}? Reply in this thread with a number."
             if written
             else "How many of each item, in each part's stocking unit? Reply in this thread with a number for each."
         )
