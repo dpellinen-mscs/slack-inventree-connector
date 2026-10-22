@@ -25,6 +25,8 @@ MINIMUM_ROLES: Mapping[str, frozenset[str]] = {
 """The documented minimum for the connector's user (design section 5, `test_char_restricted_user_can_adjust`)."""
 WRITE_ROLES: Mapping[str, frozenset[str]] = {"stock": frozenset({"add"})}
 """The part of the minimum that only writes need: with writes off, lacking it is a note, not an error."""
+ROLE_LABELS = {"part": "Part", "stock_location": "Stock Location", "stock": "Stock Item"}
+"""The names InvenTree's admin shows for the roles of MINIMUM_ROLES, as the README's quickstart lists them."""
 IMPLIED = {"stock": frozenset({"change"})}
 """Granted with "add" on Stock Item by the server itself: never reported as more than needed."""
 _NEEDED_FOR = {

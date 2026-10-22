@@ -36,8 +36,17 @@ install an app. About 15 minutes.
    `https://app.slack.com/client/T…/C…`. The `T…` part is the workspace id and the `C…` part is the
    channel id.
 
-4. **Create an InvenTree token.** In InvenTree, open your user settings and create an API token
-   for a user who can view parts and stock. This version only reads.
+4. **Create an InvenTree token.** A token carries all the permissions of its user, so create a
+   user just for the connector. In InvenTree's admin, give it a group with exactly these roles:
+
+   | Role | Permissions |
+   | --- | --- |
+   | Part | view |
+   | Stock Location | view |
+   | Stock Item | view |
+
+   Log in as that user, open its user settings and create an API token. This version only reads.
+   Writing stock later also needs *add* on *Stock Item*; `check-setup` (step 5) says so with a note.
 
 5. **Fill in `stockthread.toml`:** `workspace_id`, `app_id` and `channels` under `[slack]`, and `url`
    under `[inventree]`. Leave the rest as it is. Secrets go in the environment, never in the file:

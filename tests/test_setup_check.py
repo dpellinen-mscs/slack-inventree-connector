@@ -17,7 +17,17 @@ from stockthread.core.matching import Catalog, LocationRecord
 from stockthread.core.model import PostKey
 from stockthread.inventree import InvenTreeReader
 from stockthread.run import inventree_findings
-from stockthread.setup_check import Finding, Level, check_posters, check_roles, check_vehicles, exit_code
+from stockthread.setup_check import (
+    MINIMUM_ROLES,
+    ROLE_LABELS,
+    WRITE_ROLES,
+    Finding,
+    Level,
+    check_posters,
+    check_roles,
+    check_vehicles,
+    exit_code,
+)
 from stockthread.store import Store
 from stockthread.store.db import posters_seen
 
@@ -280,3 +290,15 @@ def test_with_writes_off_a_view_is_still_needed() -> None:
         (Level.OK, "roles: stock lacks add, needed only once writes are on (writes are off)"),
     ]
     assert exit_code(findings) == 1
+
+
+def test_the_quickstart_lists_exactly_the_roles_a_dry_run_needs() -> None:
+    """README step 4 is the minimum without the write roles, so check-setup passes for what it says (#152)."""
+    readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+    table = readme.split("| Role | Permissions |", 1)[1].split("\n\n", 1)[0]
+    rows = [line.strip("| ").split(" | ") for line in table.strip().splitlines()[1:]]
+    listed = {label: frozenset(perms.split(", ")) for label, perms in rows}
+    dry_run = {ROLE_LABELS[name]: perms - WRITE_ROLES.get(name, frozenset()) for name, perms in MINIMUM_ROLES.items()}
+    assert listed == dry_run
+    for name, perms in WRITE_ROLES.items():
+        assert all(f"*{perm}* on *{ROLE_LABELS[name]}*" in readme for perm in perms)
