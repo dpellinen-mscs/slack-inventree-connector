@@ -1,9 +1,10 @@
 """The setup check (`stockthread check-setup`): what an admin should fix before the first dry run (design section 5,
 "Locations" and "Least privilege").
 
-It reads only: the InvenTree version, the roles of the token's user, the stock locations, and which Slack users
-have posted in the watched channels (from the local database, ids only). Every finding is a fixed sentence about
-settings, roles or paths; nothing of a message is read or printed.
+It reads only: the InvenTree version, the roles of the token's user, the parts and stock locations, which Slack
+users have posted in the watched channels, and the stored aliases (from the local database, ids only). Every finding
+is a fixed sentence about settings, roles, paths or record ids; nothing of a message is printed, not even an alias's
+text.
 
 Pure: facts in, findings out. `run.check_setup` gathers the facts.
 """
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from stockthread.core.matching import Catalog
+from stockthread.store import AliasKind, StoredAlias
 
 MINIMUM_ROLES: Mapping[str, frozenset[str]] = {
     "part": frozenset({"view"}),
@@ -141,6 +143,42 @@ def check_posters(posters: Sequence[str] | None, vehicles: Collection[str]) -> l
             ' (fine for anyone who never says "my truck")',
         )
     ]
+
+
+def check_aliases(catalog: Catalog, aliases: Sequence[StoredAlias]) -> list[Finding]:
+    """Each stored alias whose part or location cannot be matched now: the matcher ignores it
+    (`matching.stale_aliases`), so its words are asked about again. A warning, with the id to remove it by."""
+    parts = {part.pk: part for part in catalog.parts}
+    locations = {location.pk: location for location in catalog.locations}
+    found = []
+    for alias in aliases:
+        if alias.kind is AliasKind.PART:
+            part = parts.get(alias.record)
+            if part is not None and part.active and not part.template and not part.virtual:
+                continue
+            if part is None or not part.active:
+                why = "is not an active part in InvenTree (made inactive, or deleted)"
+            else:
+                why = f"is a {'template' if part.template else 'virtual'} part (it holds no stock)"
+        else:
+            location = locations.get(alias.record)
+            if location is not None and not location.structural:
+                continue
+            why = (
+                "is a structural location (it cannot hold stock)"
+                if location
+                else "is not a stock location in InvenTree"
+            )
+        found.append(
+            Finding(
+                Level.WARN,
+                f"aliases: alias {alias.id} names {alias.kind.value} {alias.record}, which {why}: it is ignored"
+                f" (`stockthread aliases remove {alias.id}` forgets it)",
+            )
+        )
+    if aliases and not found:
+        found.append(Finding(Level.OK, f"aliases: every one of the {len(aliases)} names a record that can be matched"))
+    return found
 
 
 def exit_code(findings: Sequence[Finding]) -> int:
