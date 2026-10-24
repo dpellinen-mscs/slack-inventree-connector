@@ -145,6 +145,7 @@ async def work_request(
     lock: anyio.Lock,
     lock_owner: str,
     gate_now: Callable[[], GateNow],
+    expired: Callable[[PostKey], bool],
     settle: timedelta,
     send_by: float | None = None,
 ) -> Applied:
@@ -154,15 +155,26 @@ async def work_request(
     one (`apply.readback_request`), the recovery of an `unknown` one (`apply.recover_request`), or that of an
     `undo_unknown` one (`apply.recover_undo`). `send_by`: as `apply.apply_request`'s.
 
+    `expired(post)` (`plan_expired`, now): a plan that expired before its first write began goes back to review,
+    however it was approved, and is never written; so does one that expires while it is judged again under the lock,
+    or during the reads before the write (asked again right before the attempt is begun).
+    A plan whose first write began is finished: half a movement in InvenTree is worse than a late one, and each
+    write still checks the stock first.
+
     Raises NotRebuilt, and changes nothing, when the plan's record cannot be acted on; ValueError for a request in any
     other state; and what the step raises."""
     rebuilt = plan_views(store, store.plan(key.post, key.revision))
     view = rebuilt.views[key.sequence - 1]
     state = store.request(key).state
     if state is RequestState.APPROVED:
+        if not _plan_began(rebuilt.plan) and expired(key.post):
+            store.transition(key, expected=RequestState.APPROVED, target=RequestState.PLANNED, actor=Actor.APPLIER)
+            return Applied(RequestState.PLANNED, "back to review: the plan expired before it was written")
 
         def rejudge(marker: Marker) -> Judgement:
             fresh = plan_views(store, store.plan(key.post, key.revision))
+            if not _plan_began(fresh.plan) and expired(key.post):
+                return Judgement(Verdict.BLOCKED, "the plan expired")
             clicked_by = fresh.plan.approved_by
             judgement = judge_plan(fresh, gate_now(), clicked_by=clicked_by, marker=marker)
             if clicked_by is not None and judgement.allowed and judgement.approved_by != clicked_by:
@@ -170,9 +182,15 @@ async def work_request(
                 return Judgement(Verdict.WAITS, "the approver who clicked Apply is no longer an approver")
             return judgement
 
+        def too_late() -> str | None:
+            # Asked again after the reads: they may cross the expiry (review #141).
+            if not _plan_began(store.plan(key.post, key.revision)) and expired(key.post):
+                return "the plan expired before it was written"
+            return None
+
         return await apply_request(
             key, view, rejudge, store=store, reader=reader, writer=writer, lock=lock, lock_owner=lock_owner,
-            send_by=send_by,
+            send_by=send_by, too_late=too_late,
         )  # fmt: skip
     if state is RequestState.APPLIED:
         return await readback_request(key, view, store=store, reader=reader, lock=lock)
@@ -181,6 +199,20 @@ async def work_request(
     if state is RequestState.UNDO_UNKNOWN:
         return await recover_undo(key, view, store=store, reader=reader, lock=lock, settle=settle)
     raise ValueError(f"request {key} is {state}: no step of the apply protocol is due")
+
+
+def plan_expired(store: Store, post: PostKey, at: Decimal, expiry_hours: float) -> bool:
+    """Whether the post's plan expired at `at` (Slack time): `expiry_hours` after the time `Store.plan_expires_from`
+    gives, as the worker counts it. A post with no such time counts as expired."""
+    expires_from = store.plan_expires_from(post)
+    return expires_from is None or at - seconds(expires_from) > Decimal(str(expiry_hours)) * 3600
+
+
+def _plan_began(plan: PlanRow) -> bool:
+    """Whether a write of the plan began: any request of it is past `approved`, other than one a person rejected."""
+    return any(
+        row.state not in (RequestState.PLANNED, RequestState.APPROVED, RequestState.REJECTED) for row in plan.requests
+    )
 
 
 def approve_by_click(
@@ -212,8 +244,7 @@ def approve_by_click(
     if store.undone_before(post, revision):
         # An edit that changed nothing makes the plan again after its undo: the receipt above says it was undone.
         return Judgement(Verdict.BLOCKED, "this movement was undone; post it again to move the stock again")
-    expires_from = store.plan_expires_from(post)
-    if expires_from is None or at - seconds(expires_from) > expiry_hours * 3600:
+    if plan_expired(store, post, at, expiry_hours):
         return Judgement(Verdict.BLOCKED, "the plan expired")
     judgement = judge_plan(plan_views(store, plan), now, clicked_by=user)
     if judgement.allowed:

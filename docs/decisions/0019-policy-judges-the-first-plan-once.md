@@ -61,7 +61,11 @@ cases make "judge every current plan on every step" unsafe:
   plan can age out to "waits for Apply" without being judged; that fails
   closed, and the log says so for each plan.
 - Once approved, the write itself is retried through outages by the apply
-  step, with no 10-minute limit; an edit or deletion before the write
+  step, with no 10-minute limit, but never past the plan's expiry
+  (`slack.plan_expiry_hours`): a plan that expired before its first write
+  began goes back to review, however it was approved, and an Apply click
+  on it is refused. A plan whose first write began is finished, since half
+  a movement is worse than a late one; an edit or deletion before the write
   begins still cancels it: `Store.begin_attempt` refuses to start an
   apply while any event waits in the queue, checked in the transaction
   that stores the intent, so an edit received during the reads before

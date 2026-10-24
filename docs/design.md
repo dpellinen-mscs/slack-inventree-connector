@@ -1503,6 +1503,9 @@ connector never has two InvenTree writes in flight and cannot race itself.
    may be one a later dry run made again from the same reading
    (`Worker._handle_apply`, `applier.approve_by_click`, `run.click_approver`).
    A click that fails is not tried again: the clicker is told to try again.
+   An approved plan is written only before it expires: one that expired
+   before its first write began goes back to review (`applier.work_request`,
+   `applier.plan_expired`); one whose first write began is finished.
    An approver approves only what the reply showed (ADR 0016): a reply cut
    to Slack's limits (`replies.shows_everything`: a section over 2,900
    characters or more than 20 movements) carries no Apply button and says

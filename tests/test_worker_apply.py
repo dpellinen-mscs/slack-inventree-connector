@@ -23,6 +23,7 @@ from stockthread import worker as worker_module
 from stockthread.applier import GateNow, approve_by_policy, work_request
 from stockthread.apply import Applied, undo_apply
 from stockthread.config import Settings, parse_settings
+from stockthread.core.grouping import seconds
 from stockthread.core.matching import Catalog
 from stockthread.core.model import Extraction, MovementType, PostKey, RequestKey
 from stockthread.core.requests import RequestState
@@ -145,6 +146,7 @@ def stepper(store: Store, inventree: FakeInvenTree) -> Stepper:
                 lock=inventree.lock,
                 lock_owner=OWNER,
                 gate_now=lambda: ON,
+                expired=lambda _: False,
                 settle=timedelta(0),
             )
 
@@ -759,7 +761,9 @@ class Connected(FakeInvenTree):
             return await super().send(request)
 
 
-def steps(store: Store, fake: Connected, catalog: Any = None, limit: float | None = None) -> tuple[Stepper, Undoer]:
+def steps(
+    store: Store, fake: Connected, catalog: Any = None, limit: float | None = None, clock: Any = None
+) -> tuple[Stepper, Undoer]:
     @asynccontextmanager
     async def connect() -> AsyncIterator[tuple[Any, Any]]:
         fake.opened += 1
@@ -767,9 +771,11 @@ def steps(store: Store, fake: Connected, catalog: Any = None, limit: float | Non
 
     beats.clear()
     vehicles = catalog or (lambda: Catalog(parts=(), locations=(), vehicles={SAM: DESTINATION}))
+    at = clock or Clock()
     return inventree_steps(
-        settings(writes=True), vehicles, store, OWNER, beat=lambda: beats.append(1), connect=connect, limit=limit
-    )
+        settings(writes=True), vehicles, store, OWNER, beat=lambda: beats.append(1), connect=connect, limit=limit,
+        clock=at,
+    )  # fmt: skip
 
 
 beats: list[int] = []
@@ -783,6 +789,18 @@ def test_the_run_loops_step_writes_once_and_reads_back_with_a_client_of_its_own(
     assert len(fake.sent) == 1
     assert fake.opened == 1
     assert beats == [1]  # after the catalog read, before the step
+
+
+def test_the_run_loops_step_sends_an_expired_plan_back_to_review(store: Store) -> None:
+    approved(store)
+    fake = Connected()
+    late = Clock()
+    late.now = float(seconds(store.plan_expires_from(POST) or "")) + 24 * 3600 + 1
+    step, _ = steps(store, fake, clock=late)
+    applied = step(KEY)
+    assert applied.state is S.PLANNED
+    assert applied.why == "back to review: the plan expired before it was written"
+    assert fake.sent == []
 
 
 def test_a_server_no_longer_tested_blocks_the_run_loops_apply_and_undo(store: Store) -> None:

@@ -172,6 +172,7 @@ async def apply_request(
     lock_owner: str,
     chosen: Collection[int] = (),
     send_by: float | None = None,
+    too_late: Callable[[], str | None] = lambda: None,
 ) -> Applied:
     """Run the apply protocol (design section 7) once for the `approved` request `key`, whose movement is `view`.
 
@@ -179,7 +180,9 @@ async def apply_request(
     the request sent is its `requests[key.sequence - 1]`. `chosen`: the lines (from 0) a person named the stock items
     for (`precondition.check`). `lock` is the process's one writer lock: steps 2 to 6 run under it, so the connector
     never has two writes in flight. `send_by` (`anyio.current_time()`): no attempt is begun after it, so a caller that
-    cuts the step off cuts a read off, not a write; the request then stays `approved`.
+    cuts the step off cuts a read off, not a write; the request then stays `approved`. `too_late()`, asked after the
+    reads, right before the attempt is begun: a reason the request may no longer be written (the plan expired during
+    the reads); it then goes back to review, nothing written.
 
     Each outcome is a state of the request: still `approved` when it waits for another request of the post
     (`Store.apply_waits_for`), the gate blocks it now (nothing read or written) or an event came into the queue
@@ -235,6 +238,8 @@ async def apply_request(
             return Applied(RequestState.PLANNED, f"back to review: {snapshot.why}")
         if send_by is not None and anyio.current_time() > send_by:
             return Applied(RequestState.APPROVED, "not written yet: the reads took too long to send it in this step")
+        if late := too_late():
+            return _back_to_review(store, key, late)
         try:
             attempt = store.begin_attempt(
                 key,

@@ -6,9 +6,11 @@ follow [Semantic Versioning](https://semver.org/) from the first release.
 
 ## [Unreleased]
 
-Nothing is released yet. With `writes.enabled = true`, the connector writes clear take-outs with no click
-(`policy.auto_apply`), and any other movement the gate allows once an approver clicks Apply on its dry-run reply
-(returns, receipts, counts and the rest). A reply too long to show in full carries no Apply button.
+Nothing is released yet. With `writes.enabled = true`, the connector writes clear movements of the types in
+`policy.auto_apply` with no click (by default take-outs to a vehicle or a site), and any other movement the gate
+allows once an approver clicks Apply on its dry-run reply (by default returns, receipts, counts and the rest). A
+reply too long to show in full carries no Apply button. An approved plan is never written once it has expired
+(`slack.plan_expiry_hours`): it goes back to review; a plan whose first write began is finished.
 
 ### Fixed
 
@@ -31,7 +33,8 @@ Nothing is released yet. With `writes.enabled = true`, the connector writes clea
   alias yet.
 - `stockthread aliases list | export | remove <id>`: the stored aliases with the post each was learned from, as text
   or JSON, and their removal (audited as the admin's; the matcher stops using it at its next catalog read).
-- With writes on, the policy approves a clear take-out right after its dry run (ADR 0004, 0019): it is
+- With writes on, the policy approves a clear movement of a type in `policy.auto_apply` (by default a
+  take-out) right after its dry run (ADR 0004, 0019): it is
   written, read back, and gets a receipt with an Undo button. Each plan is judged once, and only the plan a
   post's first dry run made: one made after an edit or a joined message waits for Apply.
 - `stockthread trail <message link>`: one post's dry runs with every review reason and who raised it, its
