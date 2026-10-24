@@ -1,0 +1,85 @@
+# Operations: the database, backups and upgrades
+
+The connector keeps everything it knows in one SQLite file: the Slack events it accepted, each
+post's dry runs, the questions and answers, plans and requests with their states, receipts, learned
+aliases, and the append-only audit log. InvenTree holds the stock. This page covers how to back the
+file up, restore it, and upgrade the connector over it.
+
+## Where the database is
+
+`storage.database` in `stockthread.toml` (default `stockthread.db`). A relative path is taken from the
+directory the connector is started in, which in the quickstart is the checkout that holds
+`stockthread.toml`.
+
+- The file is created readable by its owner only (mode 0600), because it holds every accepted post in
+  full. An existing file keeps its mode: keep a restored copy at 0600 too.
+- It runs in WAL mode. While the connector runs, `stockthread.db-wal` and `stockthread.db-shm` sit
+  next to it, and the newest changes may be in the `-wal` file only. **Copying `stockthread.db` alone
+  while the connector runs can give a backup without its newest changes, or a broken one.**
+- Message text is blanked `storage.retention_days` days after a post is done with. Ids, states and the
+  audit log stay. A backup holds whatever text the live file held when it was made.
+- One connector runs on one database: a second one started on the same file refuses to run while the
+  first one's heartbeat is fresh.
+
+## Backup
+
+Use SQLite's online backup. It gives a consistent copy, the `-wal` file included, while the
+connector keeps running. From the directory that holds the database:
+
+```sh
+(umask 077; .venv/bin/python -c "import sqlite3; sqlite3.connect('stockthread.db').backup(sqlite3.connect('stockthread-backup.db'))")
+```
+
+`umask 077` keeps the copy readable by you only. Store backups like the database itself: they hold
+Slack message text. If you have the `sqlite3` command-line tool,
+`sqlite3 stockthread.db ".backup stockthread-backup.db"` does the same.
+
+Alternatively, stop the connector, then copy `stockthread.db` together with any `-wal` and `-shm`
+files next to it.
+
+`stockthread aliases export` prints the learned aliases as JSON. That export is readable without the
+connector, but it is not a backup of the database.
+
+## Restore
+
+1. Stop the connector.
+2. Move `stockthread.db` and any `stockthread.db-wal` and `stockthread.db-shm` next to it out of the
+   way. A `-wal` file left from the old database must not meet the restored one.
+3. Copy the backup to `stockthread.db`, then run `chmod 600 stockthread.db`.
+4. Start the connector.
+
+What happens after a restore:
+
+- Stock moved after the backup was made is not undone. InvenTree keeps it. The restored database just
+  does not know about those writes: `trail` won't show them, and an Undo click on their receipts
+  changes nothing. Undo them in InvenTree if needed.
+- A request the backup still shows as approved or in flight is checked against InvenTree before
+  anything is written. Every write leaves its marker in the notes of the stock adjustment it makes,
+  and the marker check finds a write that already happened ([design](design.md) section 7). So a
+  restore does not write a movement twice.
+- Plans in the backup that nobody acted on have most likely expired by now, and an Apply click on
+  them is refused as expired.
+- Text the live file had already blanked comes back from the backup. The next hourly retention pass
+  blanks it again once it is old enough.
+- The instance lock in the backup names the old process. Its heartbeat is stale, so the new start
+  takes the lock over.
+
+## Upgrade
+
+1. Make a backup (above).
+2. Stop the connector.
+3. Install the new version into the same virtual environment. From an updated checkout:
+   `.venv/bin/pip install .`
+4. Read the new [CHANGELOG](../CHANGELOG.md) entries for settings that changed, then run
+   `.venv/bin/stockthread check-config`.
+5. Start the connector. It upgrades the database schema at start, one migration at a time. Each
+   migration runs in its own transaction, so a migration that fails is rolled back and the connector
+   stops with the error. Fix the cause and start it again.
+
+Until the connector has started once on the new version, `stockthread trail` and the alias commands
+refuse to read the old schema ("start the connector once to upgrade it").
+
+**Going back to an older version.** Migrations only go forward. An older version refuses to open a
+database whose schema is newer than it knows ("the database has schema version N; this version knows
+M"). To go back, stop the connector, install the older version, and restore the backup you made in
+step 1. Anything recorded since that backup is lost from the database, as described under Restore.
