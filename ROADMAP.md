@@ -218,6 +218,7 @@ an inactive part or a deleted location is ignored and reported.
 - [x] Read each part's InvenTree unit; the quantity question names it ("in m"), or pieces when the part has
   none, for a part matched surely enough to write
 - [ ] A length in the part's own unit ("50 m" of a part stocked in metres) needs no question
+- [x] Retention: stored message text is blanked `storage.retention_days` after a post is done with (T10, #153)
 
 **DoD:** a fresh admin completes the quickstart in about 15 minutes without
 help. No issue labeled `agent-backlog` with high severity is open. Dan has

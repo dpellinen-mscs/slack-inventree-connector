@@ -24,6 +24,9 @@ Nothing is released yet. With `writes.enabled = true`, the connector writes clea
 
 ### Added
 
+- Retention (design section 6, threat model T10): `storage.retention_days` (30) after a post is done with,
+  the worker blanks its stored message text, the raw Slack events and dry-run results, keeping the rows, ids,
+  states and audit log. Text a write, a read-back or an undo may still need is kept. Each expiry is audited.
 - Confirmed aliases are stored (migration 0021, `Store.learn_alias`, only from a verified request) and the run loop
   matches with the aliases stored now (`catalog.with_aliases`). A learned alias is asked again when a record its text
   did not fit when it was confirmed fits now ("Disc 40" once a "Disc 40 Pro" exists; ADR 0012). Nothing learns an

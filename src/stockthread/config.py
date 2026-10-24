@@ -133,6 +133,10 @@ class UndoSettings(_Section):
 
 class StorageSettings(_Section):
     database: str = Field(default="stockthread.db", min_length=1)
+    retention_days: int = Field(default=30, ge=1, le=10 * 365)
+    """Message text (raw Slack events, dry-run results) is blanked this long after a post no longer needs it. Ids,
+    states and the audit log are kept. Must be longer than `slack.plan_expiry_hours`,
+    `slack.catch_up_hours` and `undo.max_age_hours`."""
 
 
 class LLMSettings(_Section):
@@ -176,6 +180,12 @@ class Settings(_Section):
             raise ValueError("HTTP mode needs SLACK_SIGNING_SECRET")
         if self.apply.settle_seconds <= self.inventree.timeout_seconds:
             raise ValueError("apply.settle_seconds must be longer than inventree.timeout_seconds")
+        longest = max(self.slack.plan_expiry_hours, self.slack.catch_up_hours, self.undo.max_age_hours)
+        if self.storage.retention_days * 24 <= longest:
+            raise ValueError(
+                "storage.retention_days must be longer than slack.plan_expiry_hours, slack.catch_up_hours"
+                " and undo.max_age_hours"
+            )
         if self.llm is not None:
             problem = None
             try:

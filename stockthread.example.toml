@@ -51,6 +51,9 @@ max_age_hours = 168
 
 [storage]
 database = "stockthread.db"
+# Days after which stored message text is blanked. Longer than plan_expiry_hours,
+# catch_up_hours and undo.max_age_hours.
+retention_days = 30
 
 # Whose vehicle "my truck" is: Slack user id = the stock location's path in
 # InvenTree, exactly as shown there. Create one location per vehicle first.

@@ -51,6 +51,7 @@ from stockthread.store import (
     MAX_EVENT_ATTEMPTS,
     Answered,
     DryRunOutcome,
+    ExpiredText,
     LockLost,
     NewPlan,
     NewQuestion,
@@ -4740,3 +4741,24 @@ def test_a_drain_cut_off_by_an_error_leaves_no_event_claimed(
     assert worker.drain() == (2, True)
     assert statuses(path) == [("done", None), ("done", None)]
     assert audit(path) == []  # no post was due while its messages were left processing
+
+
+def test_the_worker_expires_old_text_at_most_once_an_hour(
+    worker: Worker, store: Store, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retention (design section 6, "Privacy"): each pass blanks the text older than `storage.retention_days`."""
+    passes: list[datetime] = []
+
+    def expire_text(owner: str, before: datetime) -> ExpiredText:
+        assert owner == OWNER
+        passes.append(before)
+        return ExpiredText(posts=1, events=2)
+
+    monkeypatch.setattr(store, "expire_text", expire_text)
+    assert worker.step() == 3
+    clock.at("1790003599.000000")
+    assert worker.step() == 0
+    clock.at("1790003600.000000")
+    assert worker.step() == 3
+    start = datetime.fromtimestamp(1790000000, UTC)
+    assert passes == [start - timedelta(days=30), start + timedelta(hours=1) - timedelta(days=30)]
