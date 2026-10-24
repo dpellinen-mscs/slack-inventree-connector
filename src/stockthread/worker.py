@@ -100,7 +100,7 @@ from stockthread.core.questions import (
 from stockthread.core.requests import UNDOABLE, RequestState
 from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
-from stockthread.core.validate import photo_not_read, validate
+from stockthread.core.validate import in_stocking_unit, photo_not_read, validate
 from stockthread.gate import Judgement
 from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
@@ -1254,7 +1254,7 @@ class Worker:
                         continue  # not an answer, or not from someone who may answer: read with the post
                     answers = self.store.post_answers_through(key)
                     effects = self._replay(key, history, reading, answers, views, answering, catalog, poster)
-                views = self._answered(views, effects, extraction, all_messages, late)
+                views = self._answered(views, effects, extraction, all_messages, late, catalog)
             except LockLost:
                 raise
             except Exception as error:
@@ -1483,7 +1483,7 @@ class Worker:
         """Whether the candidate message reads cleanly as the answer to its question, judged on the reading that
         stands with the answers given so far, and was recorded as that answer."""
         item, message, question, allowed = candidate
-        answered = self._answered(views, effects, extraction, messages, late)
+        answered = self._answered(views, effects, extraction, messages, late, catalog)
         if not 0 <= question.movement < len(answered):
             return False
         movement = answered[question.movement].movement
@@ -1525,13 +1525,17 @@ class Worker:
         extraction: Extraction,
         messages: Sequence[MessageInput],
         late: bool,
+        catalog: Catalog,
     ) -> list[MovementView]:
         """The views with the answers' effects: a picked type is validated again, a picked or confirmed record
         replaces its match, and a cleared reason is left out. A quantity or serials typed in the thread replace the
-        line's own; validation then runs again on that movement, with the answer messages' text in the post."""
+        line's own; validation then runs again on that movement, with the answer messages' text in the post. So it
+        does when a picked or confirmed part changes the units a line may be stocked in (`_stocking`)."""
         found = []
         for n, view in enumerate(views):
             movement, reasons = view.movement, view.reasons
+            items = [effects.parts.get((n, line), match) for line, match in enumerate(view.items)]
+            stocking = _stocking(items, catalog)
             if n in effects.types:
                 movement = replace(movement, movement_type=effects.types[n])
             if n in effects.retyped:
@@ -1541,12 +1545,12 @@ class Worker:
                         _typed_line(effects, n, line, item) for line, item in enumerate(movement.line_items)
                     ),
                 )
-            if n in effects.types or n in effects.retyped:
-                reasons = self._reasons(movement, extraction, messages, late)
+            if n in effects.types or n in effects.retyped or stocking != _stocking(view.items, catalog):
+                reasons = self._reasons(movement, extraction, messages, late, stocking)
             found.append(
                 MovementView(
                     movement=movement,
-                    items=[effects.parts.get((n, line), match) for line, match in enumerate(view.items)],
+                    items=items,
                     source=effects.places.get((n, "source"), view.source),
                     destination=effects.places.get((n, "destination"), view.destination),
                     reasons=tuple(
@@ -1556,6 +1560,7 @@ class Worker:
                         and (n, reason_line(reason, movement), reason.code) not in effects.settled
                     ),
                     named={key[1]: text for key, text in effects.named.items() if key[0] == n},
+                    units=_own_units(movement, stocking),
                 )
             )
         return found
@@ -1736,16 +1741,21 @@ class Worker:
         catalog: Catalog,
         late: bool,
     ) -> list[MovementView]:
-        return [
-            MovementView(
-                movement=movement,
-                items=[_part(item.item_text, catalog, poster) for item in movement.line_items],
-                source=_location(movement.source_text, catalog, poster),
-                destination=_location(movement.destination_text, catalog, poster),
-                reasons=self._reasons(movement, extraction, messages, late),
+        views = []
+        for movement in extraction.movements:
+            items = [_part(item.item_text, catalog, poster) for item in movement.line_items]
+            stocking = _stocking(items, catalog)
+            views.append(
+                MovementView(
+                    movement=movement,
+                    items=items,
+                    source=_location(movement.source_text, catalog, poster),
+                    destination=_location(movement.destination_text, catalog, poster),
+                    reasons=self._reasons(movement, extraction, messages, late, stocking),
+                    units=_own_units(movement, stocking),
+                )
             )
-            for movement in extraction.movements
-        ]
+        return views
 
     def _read_stock(self, views: Sequence[MovementView]) -> Mapping[tuple[int, int], Sequence[StockItem]]:
         """The stock items of every (part, location) pair a settled line acts on (`_stock_lines`)."""
@@ -1757,8 +1767,15 @@ class Worker:
         return found
 
     def _reasons(
-        self, movement: CandidateMovement, extraction: Extraction, messages: Sequence[MessageInput], late: bool
+        self,
+        movement: CandidateMovement,
+        extraction: Extraction,
+        messages: Sequence[MessageInput],
+        late: bool,
+        stocking: Sequence[str | None] = (),
     ) -> tuple[ReviewReason, ...]:
+        """The movement's reasons. `stocking`: the units of each line's part, for a part that can authorize a write
+        (`_stocking`)."""
         text = "\n".join(message.text for message in messages if not message.deleted)
         lateness = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if late else ()
         # No extractor sees a photo's pixels (design section 13): the photo may show other items, another
@@ -1767,7 +1784,13 @@ class Worker:
         return (
             lateness
             + unread
-            + validate(movement, text, max_quantity=self.settings.policy.max_quantity, post_flags=extraction.post_flags)
+            + validate(
+                movement,
+                text,
+                max_quantity=self.settings.policy.max_quantity,
+                post_flags=extraction.post_flags,
+                stocking=stocking,
+            )
         )
 
     def _post_failed(self, key: PostKey, now: Decimal, error: Exception, sent: _Sent) -> None:
@@ -1973,6 +1996,24 @@ def _part(text: str | None, catalog: Catalog, poster: str) -> Match:
     return match_part(text, catalog, poster) if text else Match(MatchStatus.UNMATCHED)
 
 
+def _stocking(items: Sequence[Match], catalog: Catalog) -> tuple[str | None, ...]:
+    """The units of each line's part (`Part.units`), for a part matched so that it can authorize a write, else None:
+    what validate may spare a length in the part's own unit for. A guessed part's units are never trusted."""
+    units = {part.pk: part.units for part in catalog.parts}
+    return tuple(
+        units.get(match.record) if match.can_authorize_a_write and match.record is not None else None for match in items
+    )
+
+
+def _own_units(movement: CandidateMovement, stocking: Sequence[str | None]) -> tuple[str | None, ...]:
+    """`MovementView.units`: the part's units for each line in its part's own length unit, else None; () for none."""
+    units = tuple(
+        found if in_stocking_unit(item.unit, found) else None
+        for item, found in zip(movement.line_items, stocking, strict=True)
+    )
+    return units if any(unit is not None for unit in units) else ()
+
+
 def _location(text: str | None, catalog: Catalog, poster: str) -> Match | None:
     return match_location(text, catalog, poster) if text else None
 
@@ -2103,9 +2144,17 @@ def _record(
                         **({"named": view.named[line]} if line in view.named else {}),
                         # Only once stock was read: a record without it digests as records did before.
                         **({"stock": None if pick is None else _picked(pick)} if view.stock else {}),
+                        # Only for a length in its part's own unit (`MovementView.units`), likewise.
+                        **({"part_units": units} if units is not None else {}),
                     }
-                    for line, (item, part, pick) in enumerate(
-                        zip(view.movement.line_items, view.items, view.stock or [None] * len(view.items), strict=True)
+                    for line, (item, part, pick, units) in enumerate(
+                        zip(
+                            view.movement.line_items,
+                            view.items,
+                            view.stock or [None] * len(view.items),
+                            view.units or [None] * len(view.items),
+                            strict=True,
+                        )
                     )
                 ],
                 "reasons": [

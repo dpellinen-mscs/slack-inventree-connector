@@ -4,8 +4,10 @@ of work").
 Nothing here writes. `plan_requests` refuses a plan that is not decided in full rather than leave a movement out:
 a plan is applied whole or not at all. Decided means what the dry run shows as "could apply" (no reason from
 `gate_reasons`) and, checked here again, what the requests are built from: an operation, the one record of every
-place the operation acts at, and for every line a count (no unit but "each" or the like, no pack size: the
-request carries the bare quantity) with a pick without reasons whose takes add up to the line's quantity.
+place the operation acts at, and for every line a count with a pick without reasons whose takes add up to the
+line's quantity. A count has no pack size and no unit but "each" or the like, or a length in its part's own unit
+(`in_stocking_unit` of the view's `units`): the request carries the bare quantity, as a number of the part's
+unit. The part's units are read again before the write (`precondition.check`).
 The switch and the policy are the other two thirds of the write gate (design section 6), checked by the caller.
 
 Not checked here: that each pick was read for its line's part at the place the operation acts at. The views come
@@ -21,7 +23,7 @@ from decimal import Decimal
 from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.model import Match, Operation, operation_for
 from stockthread.core.resolve import Take
-from stockthread.core.validate import counts_pieces
+from stockthread.core.validate import counts_pieces, in_stocking_unit
 from stockthread.core.write_request import WriteRequest, build_request
 from stockthread.slack.replies import MovementView, gate_reasons
 
@@ -78,7 +80,8 @@ def _request(number: int, view: MovementView, marker: Marker, user: str, link: s
     ):
         if _record(part) is None or item.quantity is None:
             raise refuse(f"line {line} has no part or no quantity")
-        if not counts_pieces(item.unit) or item.pack_size is not None:
+        units = view.units[line - 1] if view.units else None
+        if item.pack_size is not None or not (counts_pieces(item.unit) or in_stocking_unit(item.unit, units)):
             raise refuse(f"line {line} is not a count: the request would drop its unit")
         if pick is None or not pick.decided:
             raise refuse(f"line {line} has no decided stock")

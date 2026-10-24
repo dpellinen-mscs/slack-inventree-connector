@@ -592,3 +592,29 @@ async def test_item_entries_refuses_a_pk_that_is_not_one_without_asking(pk: obje
         with pytest.raises(ValueError, match="positive number"):
             await client.item_entries(pk)  # type: ignore[arg-type]
     assert recorder.requests == []
+
+
+@pytest.mark.parametrize(("units", "read"), [("m", "m"), (" ft ", "ft"), ("", ""), (None, "")])
+async def test_part_units_reads_the_parts_units_now(units: object, read: str) -> None:
+    client, recorder = reader(respond(body={"pk": 3, "name": "Drop cable", "units": units}))
+    async with client:
+        assert await client.part_units(3) == read
+    assert [request.url.path.endswith("/api/part/3/") for request in recorder.requests] == [True]
+
+
+@pytest.mark.parametrize(
+    "body", [{"pk": 4, "units": "m"}, {"pk": "3", "units": "m"}, {"pk": True, "units": "m"}, {"pk": 3},
+             {"pk": 3, "units": 1}, [{"pk": 3, "units": "m"}], None],
+)  # fmt: skip
+async def test_part_units_refuse_anything_but_that_part_with_text_or_null_units(body: object) -> None:
+    client, _ = reader(respond(body=body))
+    async with client:
+        with pytest.raises(InvenTreeError):
+            await client.part_units(3)
+
+
+async def test_part_units_refuse_a_pk_that_is_not_a_part_pk() -> None:
+    client, _ = reader(respond(body={"pk": 3, "units": "m"}))
+    async with client:
+        with pytest.raises(ValueError, match="positive"):
+            await client.part_units(0)

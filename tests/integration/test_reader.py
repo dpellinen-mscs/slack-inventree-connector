@@ -77,6 +77,15 @@ async def test_a_part_s_stocking_unit_is_read(api: RawApi) -> None:
     assert (parts[int(metres["pk"])].units, parts[int(plain["pk"])].units) == ("m", "")
 
 
+async def test_a_part_s_units_are_read_again_for_a_write(api: RawApi) -> None:
+    """`part_units`, which a write that carries a length bare reads right before it (`precondition.check`)."""
+    tag = uuid.uuid4().hex[:8]
+    metres = api.create("/api/part/", {"name": f"Scratch drop {tag}", "description": "test", "units": "m"})
+    plain = api.create("/api/part/", {"name": f"Scratch bare {tag}", "description": "test"})
+    async with make_reader() as reader:
+        assert (await reader.part_units(int(metres["pk"])), await reader.part_units(int(plain["pk"]))) == ("m", "")
+
+
 async def test_stock_items_leave_out_sub_locations(scratch: Scratch) -> None:
     here = scratch.stock(4)
     scratch.stock(6, location=scratch.child)

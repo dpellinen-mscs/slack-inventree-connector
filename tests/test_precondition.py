@@ -219,3 +219,37 @@ def test_the_history_of_every_stock_item_the_request_names_is_part_of_the_snapsh
     assert snapshot.as_json()["history"] == {"57": [1, 3]}
     with pytest.raises(ValueError, match="history of a stock item the request names"):
         check(view(), read, history={58: [9]})
+
+
+def length(units: str = "m") -> MovementView:
+    """2 m of part 1 at the source, in the unit the part was stocked in at the plan (`units`)."""
+    given = view()
+    line = replace(given.movement.line_items[0], unit="m")
+    return replace(given, movement=replace(given.movement, line_items=(line,)), units=(units,))
+
+
+LENGTH_READ = {(1, SOURCE): [item(57, "5")], (1, DESTINATION): []}
+
+
+@pytest.mark.parametrize("now", ["m", "meters", " metre "])
+def test_a_length_still_in_its_parts_unit_holds(now: str) -> None:
+    assert isinstance(check(length(), LENGTH_READ, units={1: now}), Snapshot)
+
+
+@pytest.mark.parametrize("now", ["ft", "", "M", "box", "cm"])
+def test_a_part_stocked_in_another_unit_since_the_plan_is_stale(now: str) -> None:
+    assert check(length(), LENGTH_READ, units={1: now}) == Stale("line 1: part 1 is not stocked in the line's unit now")
+
+
+def test_a_length_whose_parts_units_were_not_read_is_an_error() -> None:
+    with pytest.raises(ValueError, match="the units of part 1 were not read"):
+        check(length(), LENGTH_READ)
+    with pytest.raises(ValueError, match="the units of part 1 were not read"):
+        check(length(), LENGTH_READ, units={2: "m"})
+
+
+def test_a_line_that_is_neither_a_count_nor_in_its_parts_unit_is_an_error() -> None:
+    (request,) = plan_requests([length()], [Marker(new_marker_id(), AttemptKind.APPLY, 1)], user="U0SAM0001")
+    bare = replace(length(), units=())
+    with pytest.raises(ValueError, match="counts every line"):
+        check_with(bare, request, LENGTH_READ, history={57: (570,)}, units={1: "m"})

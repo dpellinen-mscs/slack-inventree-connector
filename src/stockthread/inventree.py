@@ -264,6 +264,21 @@ class InvenTreeReader:
     async def parts(self) -> list[dict[str, Any]]:
         return await self.list_all("/api/part/", {"active": True})
 
+    async def part_units(self, pk: int) -> str:
+        """The units part `pk` is stocked in now (`Part.units`, stripped; "" for none), read for the write that
+        carries a length as a bare quantity (`precondition.check`). Anything but that part with a text or null
+        `units` raises."""
+        if type(pk) is not int or pk < 1:
+            raise ValueError("a part pk is a positive number")
+        path = f"/api/part/{pk}/"
+        part = await self.get(path)
+        if not isinstance(part, dict) or part.get("pk") != pk or type(part.get("pk")) is not int:
+            raise InvenTreeError(f"GET {path} did not return that part")
+        units = part.get("units", False)
+        if units is not None and not isinstance(units, str):
+            raise InvenTreeError(f"GET {path} returned a part without valid units")
+        return (units or "").strip()
+
     async def stock_items(self, part: int, location: int) -> list[dict[str, Any]]:
         """Stock items of one part in one location, without its sub-locations, by pk: those in stock and those
         depleted to zero that would be in stock but for their quantity (`in_stock_but_empty`). An add or a count acts

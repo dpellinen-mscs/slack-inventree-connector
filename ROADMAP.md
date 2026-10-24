@@ -218,7 +218,8 @@ an inactive part or a deleted location is ignored and reported.
   is built for a line that still has a unit (#151)
 - [x] Read each part's InvenTree unit; the quantity question names it ("in m"), or pieces when the part has
   none, for a part matched surely enough to write
-- [ ] A length in the part's own unit ("50 m" of a part stocked in metres) needs no question
+- [x] A length in the part's own unit ("50 m" of a part stocked in metres) needs no question; the part's units are
+  read again right before the write
 - [x] Retention: stored message text is blanked `storage.retention_days` after a post is done with (T10, #153)
 
 **DoD:** a fresh admin completes the quickstart in about 15 minutes without
