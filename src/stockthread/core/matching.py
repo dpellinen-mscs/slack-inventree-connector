@@ -70,6 +70,9 @@ class Alias:
     text: str
     record: int
     user: str | None = None
+    rivals: frozenset[int] | None = None
+    """The records the whole-word and fuzzy rules fitted when the alias was confirmed (ADR 0012); a record that fits
+    now and is not one of them makes the alias ambiguous. None for an alias an admin typed: never rechecked."""
 
 
 @dataclass(frozen=True)
@@ -171,15 +174,42 @@ def _match(
     normalized = (pk for pk, names in records.items() if any(_same(wanted, _text_words(name)) for name in names))
     if decided := _decide(normalized, MatchRule.NORMALIZED):
         return decided
-    by_alias = (alias.record for alias in aliases if alias.record in records and _same(wanted, _text_words(alias.text)))
-    if decided := _decide(by_alias, MatchRule.ALIAS):
-        return decided
+    used = [alias for alias in aliases if alias.record in records and _same(wanted, _text_words(alias.text))]
     loose = _text_words(stripped, loose=True)
+    if decided := _decide((alias.record for alias in used), MatchRule.ALIAS):
+        return _rechecked(decided, used, _fits(loose, records, vocabulary, typos=True))
     for rule, typos in ((MatchRule.WORDS, False), (MatchRule.FUZZY, True)):
-        hits = (pk for pk in records if all(_found(forms, vocabulary(pk), typos) for forms in loose))
-        if decided := _decide(hits, rule):
+        if decided := _decide(_fits(loose, records, vocabulary, typos=typos), rule):
             return decided
     return Match(MatchStatus.UNMATCHED)
+
+
+def _fits(
+    loose: list[set[str]], records: Iterable[int], vocabulary: Callable[[int], set[str]], *, typos: bool
+) -> list[int]:
+    """Rule 4 (rule 5 with `typos`, which finds every record rule 4 finds and more)."""
+    return [pk for pk in records if all(_found(forms, vocabulary(pk), typos) for forms in loose)]
+
+
+def same_words(a: str, b: str) -> bool:
+    """Whether the alias rule takes text `a` for text `b`: the same words, plurals folded ("patch cables" is
+    "patch cable"). One alias per such text (`Store.learn_alias`)."""
+    return _same(_text_words(a), _text_words(b))
+
+
+def _rechecked(decided: Match, used: list[Alias], fits: Iterable[int]) -> Match:
+    """An alias match is ambiguous when a record fits its text now by the whole-word or fuzzy rule that fitted none
+    of the records it was confirmed against (ADR 0012): "Disc 40" is asked again once a "Disc 40 Pro" exists.
+
+    An alias an admin typed (no `rivals`) is not rechecked, and when one is among the aliases that hit, none is: the
+    admin vouched for that text. Otherwise the records any hitting alias was confirmed against count as known."""
+    if decided.record is None or any(alias.rivals is None for alias in used):
+        return decided
+    known = {pk for alias in used for pk in alias.rivals or ()}
+    new = set(fits) - known - {decided.record}
+    if not new:
+        return decided
+    return Match(MatchStatus.AMBIGUOUS, rule=MatchRule.ALIAS, candidates=tuple(sorted({decided.record, *new})))
 
 
 def _names(*texts: str) -> tuple[str, ...]:
@@ -195,11 +225,9 @@ def stale_aliases(catalog: Catalog) -> list[Alias]:
     ]
 
 
-def match_part(text: str, catalog: Catalog, poster: str | None = None) -> Match:
-    """Match item text to a part. Inactive, template and virtual parts are never a match.
-
-    Aliases of a user other than `poster` do not apply.
-    """
+def _part_rules(
+    catalog: Catalog, poster: str | None
+) -> tuple[dict[int, tuple[str, ...]], list[Alias], Callable[[int], set[str]]]:
     parts = {p.pk: p for p in catalog.parts if p.active and not p.template and not p.virtual}
     aliases = [a for a in catalog.part_aliases if a.user is None or a.user == poster]
     alias_texts = {pk: [a.text for a in aliases if a.record == pk] for pk in parts}
@@ -208,7 +236,37 @@ def match_part(text: str, catalog: Catalog, poster: str | None = None) -> Match:
         part = parts[pk]
         return _vocabulary([part.name, part.keywords, *alias_texts[pk]])
 
-    return _match(text, {pk: _names(p.ipn, p.name) for pk, p in parts.items()}, aliases, vocabulary)
+    return {pk: _names(p.ipn, p.name) for pk, p in parts.items()}, aliases, vocabulary
+
+
+def match_part(text: str, catalog: Catalog, poster: str | None = None) -> Match:
+    """Match item text to a part. Inactive, template and virtual parts are never a match.
+
+    Aliases of a user other than `poster` do not apply.
+    """
+    return _match(text, *_part_rules(catalog, poster))
+
+
+def part_rivals(text: str, catalog: Catalog, poster: str | None = None) -> frozenset[int]:
+    """The parts the whole-word or fuzzy rule fits `text` to now: the `rivals` to store with an alias confirmed now,
+    the same set `_rechecked` compares with later."""
+    records, _, vocabulary = _part_rules(catalog, poster)
+    return frozenset(_fits(_text_words(text.strip(), loose=True), records, vocabulary, typos=True))
+
+
+def _location_rules(
+    catalog: Catalog, poster: str
+) -> tuple[dict[int, LocationRecord], dict[int, tuple[str, ...]], list[Alias], Callable[[int], set[str]]]:
+    locations = {loc.pk: loc for loc in catalog.locations if not loc.structural}
+    aliases = [a for a in catalog.location_aliases if a.user is None or a.user == poster]
+    alias_texts = {pk: [a.text for a in aliases if a.record == pk] for pk in locations}
+
+    def vocabulary(pk: int) -> set[str]:
+        location = locations[pk]
+        return _vocabulary([location.path.replace("/", " "), location.description, *alias_texts[pk]])
+
+    names = {pk: _names(loc.path, loc.name) for pk, loc in locations.items()}
+    return locations, names, aliases, vocabulary
 
 
 def match_location(text: str, catalog: Catalog, poster: str) -> Match:
@@ -219,14 +277,7 @@ def match_location(text: str, catalog: Catalog, poster: str) -> Match:
     the other rules. Aliases of other users do not apply. Structural locations are never a match,
     because they cannot hold stock.
     """
-    locations = {loc.pk: loc for loc in catalog.locations if not loc.structural}
-    aliases = [a for a in catalog.location_aliases if a.user is None or a.user == poster]
-    alias_texts = {pk: [a.text for a in aliases if a.record == pk] for pk in locations}
-
-    def vocabulary(pk: int) -> set[str]:
-        location = locations[pk]
-        return _vocabulary([location.path.replace("/", " "), location.description, *alias_texts[pk]])
-
+    locations, names, aliases, vocabulary = _location_rules(catalog, poster)
     if mine := MY_VEHICLE.match(" ".join(words(text))):
         vehicle = catalog.vehicles.get(poster)
         if vehicle not in locations:
@@ -234,5 +285,10 @@ def match_location(text: str, catalog: Catalog, poster: str) -> Match:
         if _forms(mine.group(1)) & vocabulary(vehicle):
             return Match(MatchStatus.MATCHED, rule=MatchRule.ALIAS, record=vehicle)
 
-    names = {pk: _names(loc.path, loc.name) for pk, loc in locations.items()}
     return _match(text, names, aliases, vocabulary)
+
+
+def location_rivals(text: str, catalog: Catalog, poster: str) -> frozenset[int]:
+    """As `part_rivals`, for stock locations."""
+    _, names, _, vocabulary = _location_rules(catalog, poster)
+    return frozenset(_fits(_text_words(text.strip(), loose=True), names, vocabulary, typos=True))

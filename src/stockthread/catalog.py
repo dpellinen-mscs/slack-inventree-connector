@@ -1,19 +1,20 @@
 """The catalog snapshot the matcher works on, read from InvenTree (design section 10).
 
 The snapshot is all or nothing: a record with a missing or mistyped field fails the whole load, because a
-partial catalog would make a part or a location look unknown. Aliases are not read from InvenTree; they
-come with alias learning (M4). Vehicle assignments come from the `[vehicles]` settings and are resolved
+partial catalog would make a part or a location look unknown. Aliases are not read from InvenTree: the store
+keeps them (`with_aliases`, ADR 0012). Vehicle assignments come from the `[vehicles]` settings and are resolved
 against every snapshot (`assign_vehicles`).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.inventree import InvenTreeError, InvenTreeReader
+from stockthread.store import AliasKind, Store
 
 
 async def load_catalog(reader: InvenTreeReader) -> Catalog:
@@ -21,6 +22,18 @@ async def load_catalog(reader: InvenTreeReader) -> Catalog:
     parts = tuple(_part(row) for row in await reader.parts())
     locations = tuple(_location(row) for row in await reader.locations())
     return Catalog(parts=parts, locations=locations)
+
+
+def with_aliases(load: Callable[[], Catalog], store: Store) -> Callable[[], Catalog]:
+    """Each snapshot `load` gives, with the aliases in the store now: one learned since the last catalog read is
+    matched by the next post, not after the next read."""
+
+    def read() -> Catalog:
+        return replace(
+            load(), part_aliases=store.aliases(AliasKind.PART), location_aliases=store.aliases(AliasKind.LOCATION)
+        )
+
+    return read
 
 
 def assign_vehicles(catalog: Catalog, vehicles: Mapping[str, str]) -> tuple[Catalog, tuple[str, ...]]:

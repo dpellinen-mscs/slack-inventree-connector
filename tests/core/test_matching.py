@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from stockthread.core.matching import (
     Alias,
     Catalog,
     LocationRecord,
     PartRecord,
+    location_rivals,
     match_location,
     match_part,
+    part_rivals,
     stale_aliases,
     words,
 )
@@ -190,3 +194,76 @@ def test_part_aliases_of_another_user_do_not_apply() -> None:
 
 def test_aliases_to_records_that_cannot_match_are_reported() -> None:
     assert stale_aliases(CATALOG) == [Alias("old kit", 4)]
+
+
+# --- learned aliases are asked again when the catalog grows a rival (ADR 0012) ---
+
+PRO = PartRecord(7, "AP-NV-D40P", "Norvane Disc 40 Pro", "ap wifi")
+
+
+def test_a_learned_alias_is_ambiguous_once_a_new_record_fits_its_text() -> None:
+    learned = Alias("disc 40", 1, rivals=frozenset({1}))
+    before = Catalog(parts=PARTS, locations=LOCATIONS, part_aliases=(learned,))
+    assert match_part("disc 40", before) == matched(1, MatchRule.ALIAS)
+    grown = Catalog(parts=(*PARTS, PRO), locations=LOCATIONS, part_aliases=(learned,))
+    assert match_part("Disc 40", grown) == Match(MatchStatus.AMBIGUOUS, rule=MatchRule.ALIAS, candidates=(1, 7))
+
+
+def test_a_learned_alias_confirmed_against_a_record_stays_matched() -> None:
+    learned = Alias("disc 40", 1, rivals=frozenset({1, 7}))
+    grown = Catalog(parts=(*PARTS, PRO), locations=LOCATIONS, part_aliases=(learned,))
+    assert match_part("disc 40", grown) == matched(1, MatchRule.ALIAS)
+
+
+def test_a_rival_found_only_by_the_fuzzy_rule_counts() -> None:
+    learned = Alias("norvane disc", 1, rivals=frozenset({1, 2}))
+    typo = PartRecord(8, "AP-NR-DSC", "Norvana Disc Mount", "")
+    grown = Catalog(parts=(*PARTS, typo), locations=LOCATIONS, part_aliases=(learned,))
+    assert match_part("norvane disc", grown) == Match(MatchStatus.AMBIGUOUS, rule=MatchRule.ALIAS, candidates=(1, 8))
+
+
+def test_an_alias_an_admin_typed_is_not_rechecked() -> None:
+    typed = Alias("disc 40", 1)
+    grown = Catalog(parts=(*PARTS, PRO), locations=LOCATIONS, part_aliases=(typed,))
+    assert match_part("disc 40", grown) == matched(1, MatchRule.ALIAS)
+
+
+def test_a_learned_location_alias_is_rechecked_too() -> None:
+    learned = Alias("truck", 11, rivals=frozenset({11, 12}))
+    grown = Catalog(
+        parts=PARTS, locations=(*LOCATIONS, LocationRecord(14, "Vehicles/Truck 3", "")), location_aliases=(learned,)
+    )
+    assert match_location("truck", grown, poster="U0SAM") == Match(
+        MatchStatus.AMBIGUOUS, rule=MatchRule.ALIAS, candidates=(11, 14)
+    )
+
+
+def test_an_admin_alias_among_the_hits_vouches_for_the_text() -> None:
+    aliases = (Alias("disc 40", 1), Alias("disc 40", 1, user="U0SAM", rivals=frozenset({1})))
+    grown = Catalog(parts=(*PARTS, PRO), locations=LOCATIONS, part_aliases=aliases)
+    assert match_part("disc 40", grown, poster="U0SAM") == matched(1, MatchRule.ALIAS)
+
+
+def test_only_the_poster_s_learned_aliases_are_rechecked() -> None:
+    mine = Alias("disc 40", 1, user="U0SAM", rivals=frozenset({1}))
+    grown = Catalog(parts=(*PARTS, PRO), locations=LOCATIONS, part_aliases=(mine,))
+    assert match_part("disc 40", grown, poster="U0SAM").status is MatchStatus.AMBIGUOUS
+    assert match_part("disc 40", grown, poster="U0MIKE").rule is MatchRule.WORDS  # not Sam's alias: ambiguous words
+    assert match_part("disc 40", grown, poster="U0MIKE").status is MatchStatus.AMBIGUOUS
+
+
+def test_rivals_are_what_the_whole_word_and_fuzzy_rules_fit_now() -> None:
+    typo = PartRecord(8, "AP-NR-DSC", "Norvana Disc Mount", "")
+    catalog = Catalog(parts=(*PARTS, typo), locations=LOCATIONS)
+    assert part_rivals("norvane disc", catalog) == {1, 2, 8}  # 8 by the fuzzy rule; 4 is inactive
+    learned = Alias("norvane disc", 1, rivals=part_rivals("norvane disc", catalog))
+    assert match_part("norvane disc", replace(catalog, part_aliases=(learned,))) == matched(1, MatchRule.ALIAS)
+    assert location_rivals("truck", CATALOG, "U0SAM") == {11, 12}  # 10 is structural
+
+
+def test_a_record_that_could_not_match_when_confirmed_is_a_new_rival_once_it_can() -> None:
+    inactive = PartRecord(7, "AP-NV-D40P", "Norvane Disc 40 Pro", "", active=False)
+    then = Catalog(parts=(*PARTS, inactive), locations=LOCATIONS)
+    learned = Alias("disc 40", 1, rivals=part_rivals("disc 40", then))
+    now = Catalog(parts=(*PARTS, PRO), locations=LOCATIONS, part_aliases=(learned,))
+    assert match_part("disc 40", now).candidates == (1, 7)

@@ -37,6 +37,7 @@ from stockthread.store import (
     Store,
     WriteBlocked,
 )
+from stockthread.store.db import _migrations
 from stockthread.worker import _record
 from stockthread.writer import Outcome
 
@@ -644,18 +645,25 @@ def test_only_the_lock_holder_records_a_receipt(store: Store) -> None:
     assert store.receipts_due() == [(POST, 1)]
 
 
+def drop_aliases(db: sqlite3.Connection) -> None:
+    """Undo migration 0021, the one after the schema a test goes back to."""
+    db.execute("DROP TABLE aliases")
+    db.execute("ALTER TABLE audit_log DROP COLUMN alias_id")
+
+
 def test_writes_concluded_before_receipts_existed_are_not_reported(store: Store, tmp_path: Path) -> None:
     reply(store, record(TAKE))
     store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
     write(store, KEY, S.VERIFIED)
     store.close()
     db = sqlite3.connect(tmp_path / "stockthread.db", isolation_level=None)  # back to schema 18, as 0018 left it
+    drop_aliases(db)
     db.execute("ALTER TABLE plans DROP COLUMN receipt_ts")
     db.execute("ALTER TABLE requests DROP COLUMN receipt_state")
     db.execute("PRAGMA user_version = 18")
     db.close()
     reopened = Store.open(tmp_path / "stockthread.db")
-    assert reopened.schema_version == 20
+    assert reopened.schema_version == len(_migrations())
     assert reopened.request(KEY).receipt_state is S.VERIFIED
     assert reopened.receipts_due() == []
     reopened.close()
@@ -729,6 +737,7 @@ def test_an_undo_of_one_movement_reports_the_whole_plan(store: Store) -> None:
 def downgrade_to_19(path: Path, reported: dict[int, str | None]) -> None:
     """Put the database back to schema 19, as 0019 left it: `receipt_state` takes the 3 apply outcomes only."""
     db = sqlite3.connect(path, isolation_level=None)
+    drop_aliases(db)
     db.execute("ALTER TABLE requests DROP COLUMN receipt_state")
     db.execute(
         "ALTER TABLE requests ADD COLUMN receipt_state TEXT CHECK ("
@@ -750,7 +759,7 @@ def test_undos_concluded_before_receipts_reported_them_are_not_reported(store: S
     store.close()
     downgrade_to_19(tmp_path / "stockthread.db", {first: "verified", second: "verified"})  # schema 19 kept these
     reopened = Store.open(tmp_path / "stockthread.db")
-    assert reopened.schema_version == 20
+    assert reopened.schema_version == len(_migrations())
     assert [reopened.request(key).receipt_state for key in (KEY, SECOND)] == [S.VERIFIED, S.UNDONE]
     assert reopened.receipts_due() == []
     reopened.close()

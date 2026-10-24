@@ -2,6 +2,7 @@
 
 from stockthread.store.db import (
     MAX_EVENT_ATTEMPTS,
+    AliasKind,
     Answered,
     AppliedAttempt,
     Attempt,
@@ -33,6 +34,7 @@ from stockthread.store.db import (
 
 __all__ = [
     "MAX_EVENT_ATTEMPTS",
+    "AliasKind",
     "Answered",
     "AppliedAttempt",
     "Attempt",

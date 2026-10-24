@@ -21,6 +21,10 @@ Nothing is released yet. With `writes.enabled = true`, the connector writes clea
 
 ### Added
 
+- Confirmed aliases are stored (migration 0021, `Store.learn_alias`, only from a verified request) and the run loop
+  matches with the aliases stored now (`catalog.with_aliases`). A learned alias is asked again when a record its text
+  did not fit when it was confirmed fits now ("Disc 40" once a "Disc 40 Pro" exists; ADR 0012). Nothing learns an
+  alias yet.
 - With writes on, the policy approves a clear take-out right after its dry run (ADR 0004, 0019): it is
   written, read back, and gets a receipt with an Undo button. Each plan is judged once, and only the plan a
   post's first dry run made: one made after an edit or a joined message waits for Apply.

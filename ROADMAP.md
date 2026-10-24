@@ -161,6 +161,8 @@ payloads whose channel or message does not fit the stored id.
 - [ ] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
 - [x] Instance lock: one connector per database (`Store.acquire_lock`, heartbeat, `run.run`; `test_run.py`)
 - [ ] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word matches, fuzzy matches and picked candidates as aliases, for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo offers to forget the alias
+  - [x] Storage (migration 0021, `Store.learn_alias` from a verified request only, `Store.aliases`), read into the run loop's catalog (`catalog.with_aliases`), a learned alias rechecked against new rivals (`matching._rechecked`)
+  - [ ] Learning: a verified plan stores its whole-word, fuzzy and picked matches; the receipt names them; undo offers to forget them
 
 **DoD:** integration tests against every pinned InvenTree version, with one
 job on PostgreSQL, prove each line below.
