@@ -99,7 +99,9 @@ What to expect in this version:
 - Posts made while the connector was stopped are read from the channel history when it starts
   again, up to `catch_up_hours` back (a day at most gets a reply), and their dry run says it was
   read late. Posts from before the very first start are left alone.
-- The database is one file, `stockthread.db`, next to the settings. It holds the raw Slack events.
+- The database is one file, `stockthread.db`, next to the settings, readable by its owner only. It
+  holds the raw Slack events. Message text is blanked `storage.retention_days` (30) days after a post
+  is done with; ids, states and the audit log stay, so `trail` still shows what happened.
 - To see why a post got the reply it did, copy the link of any of its messages (*Copy link* in
   Slack) and run `.venv/bin/stockthread trail '<link>'`. It prints each dry run with every reason it
   needs a person, the question asked, who answered and with what, and the audit log. It only reads

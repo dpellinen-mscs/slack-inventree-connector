@@ -1208,8 +1208,14 @@ prompt-injection cases, and any deviation on them is a hard failure.
   and the append-only audit log carry ids, not text.
 - Message text never goes into InvenTree. The notes of a stock adjustment
   hold the marker, a link to the Slack message and the Slack user id.
-- Retention covers every table that repeats message text: raw events,
-  extractions, candidates, review answers and stored API calls.
+- Retention covers every table that repeats message text: the raw events
+  and the dry-run results (extractions, candidates and matches). Questions,
+  answers and stored API calls hold ids and codes, never text, and aliases
+  are kept until an admin removes them. `storage.retention_days` (30, and
+  longer than the plan expiry, the catch-up window and the undo age limit) after a post is done
+  with, the worker blanks its text and audits each expiry by id. A post
+  keeps its text while a request of it may still be written, read back,
+  recovered or reported in a receipt.
 - Photos are not downloaded in v1.0. No extractor sees a photo, so every
   movement of a post that has one carries the review reason
   `photo_not_read`: the photo may show other items, another quantity or

@@ -212,6 +212,8 @@ logged as an error, and tried again only after this long."""
 APPROVE_FOR_SECONDS = 10 * 60
 """A plan the policy could not judge (an outage) this long after its reply waits for Apply: a take-out is applied
 with no click only while its reply is fresh in the thread (ADR 0019)."""
+RETENTION_EVERY_SECONDS = 60 * 60
+"""Stored message text older than `storage.retention_days` is expired at most this often."""
 RECEIPT_TRIES = 5
 """Failed tries in a row of one receipt after which each further failure is logged as an error for an operator."""
 RECEIPT_CHECK_SECONDS = 5
@@ -446,6 +448,8 @@ class Worker:
     """(channel, ts): thread replies whose author was told they may not answer."""
     _take_down_quiet_until: Decimal = Decimal(0)
     """No buttons are taken down before this time."""
+    _expire_at: Decimal = Decimal(0)
+    """No stored text is expired before this time."""
 
     def beat(self, *, now: bool = False) -> None:
         """Beat the instance lock's heartbeat, at most every HEARTBEAT_SECONDS unless `now`. Raises LockLost."""
@@ -465,6 +469,7 @@ class Worker:
             + self.work_due()
             + self.post_receipts()
             + self.take_down_buttons()
+            + self.expire_text()
         )
 
     def drain(self) -> tuple[int, bool]:
@@ -951,6 +956,20 @@ class Worker:
         except Exception as error:
             _log_failure(what, event_id, error)
             self._notes_quiet_until = now + NOTE_QUIET_SECONDS
+
+    def expire_text(self) -> int:
+        """Blank the message text stored more than `storage.retention_days` ago, of every post that no longer needs
+        it (`Store.expire_text`; design section 6, "Privacy"), at most every RETENTION_EVERY_SECONDS. Returns how
+        many posts and events it blanked. A pass that fails is tried again only at the next one."""
+        now = self._now()
+        if now < self._expire_at:
+            return 0
+        self._expire_at = now + RETENTION_EVERY_SECONDS
+        before = self.clock() - timedelta(days=self.settings.storage.retention_days)
+        expired = self.store.expire_text(self.owner, before)
+        if expired.posts or expired.events:
+            log.info("retention: expired the text of %d posts and %d events", expired.posts, expired.events)
+        return expired.posts + expired.events
 
     def take_down_buttons(self) -> int:
         """Take a question out of the reply it was asked in, once it is answered, a newer reply replaced it, or its

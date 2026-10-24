@@ -332,6 +332,16 @@ class Button:
 
 
 @dataclass(frozen=True)
+class ExpiredText:
+    """What one pass of retention blanked (`Store.expire_text`)."""
+
+    posts: int
+    """Posts whose dry-run results were expired."""
+    events: int
+    """Slack events whose raw body was expired."""
+
+
+@dataclass(frozen=True)
 class QueuedEvent:
     id: int
     key: str
@@ -2162,6 +2172,70 @@ class Store:
         if row is None:
             raise KeyError(event_id)
         return EventStatus(row[0]), int(row[1]), row[2]
+
+    # Retention (design section 6, "Privacy"; threat model T10)
+
+    def expire_text(self, owner: str, before: datetime) -> ExpiredText:
+        """Blank the message text stored before `before`: the raw body of each finished Slack event, and the result
+        of each dry run (first or revision), which quotes words of the post. The rows stay, with their ids, states
+        and times; `audit_log` holds no text and is never touched. Each expiry is audited by id.
+
+        A post's text is kept while it may still be needed: while the post, any of its dry runs, or any change to one
+        of its requests is newer than `before`, and while any request may have a write in flight (`UNSETTLED`) or is
+        still to be written or read back (`approved`, `applied`) or due a receipt, whatever its age. A `planned` request
+        does not keep it: nothing moves an unacted plan on, and once its last change is older than `before` its plan has
+        expired, so any click on it is refused before it reads the text. An
+        event's body is kept with its post's text when the event is a message of that post, or an edit or deletion of
+        one. Settings make `before` older than any plan's expiry, the catch-up window and undo's age limit
+        (`StorageSettings.retention_days`)."""
+        busy = json.dumps(sorted(UNSETTLED | {S.APPROVED, S.APPLIED}))
+        concluded = json.dumps(sorted(RECEIPT_STATES))
+        kept = (  # the posts whose text is kept; a constant, never built from input
+            "WITH kept(id) AS (SELECT id FROM posts o WHERE o.created_at >= ?1"
+            " OR EXISTS (SELECT 1 FROM dry_runs d WHERE d.post_id = o.id AND d.created_at >= ?1)"
+            " OR EXISTS (SELECT 1 FROM dry_run_revisions d WHERE d.post_id = o.id AND d.created_at >= ?1)"
+            " OR EXISTS (SELECT 1 FROM plans p JOIN requests r ON r.plan_id = p.id WHERE p.post_id = o.id"
+            " AND (r.updated_at >= ?1 OR r.state IN (SELECT value FROM json_each(?2))"
+            " OR (r.state IN (SELECT value FROM json_each(?3)) AND r.receipt_state IS NOT r.state))))"
+        )
+        with self._transaction():
+            self._check_lock(owner)
+            posts = [
+                int(post_id)
+                for (post_id,) in self._db.execute(
+                    kept + " SELECT id FROM posts o WHERE id NOT IN (SELECT id FROM kept) AND ("  # noqa: S608
+                    " EXISTS (SELECT 1 FROM dry_runs d WHERE d.post_id = o.id AND d.result IS NOT NULL)"
+                    " OR EXISTS (SELECT 1 FROM dry_run_revisions d WHERE d.post_id = o.id AND d.result IS NOT NULL))"
+                    " ORDER BY id",
+                    (self._stamp(before), busy, concluded),
+                ).fetchall()
+            ]
+            for post_id in posts:
+                self._db.execute(
+                    "UPDATE dry_runs SET result = NULL WHERE post_id = ? AND result IS NOT NULL", (post_id,)
+                )
+                self._db.execute(
+                    "UPDATE dry_run_revisions SET result = NULL WHERE post_id = ? AND result IS NOT NULL", (post_id,)
+                )
+                self._audit("retention", "text_expired", post_id=post_id)
+            events = [
+                int(event_id)
+                for (event_id,) in self._db.execute(
+                    kept + " SELECT e.id FROM slack_events e WHERE e.body IS NOT NULL AND e.received_at < ?1"  # noqa: S608
+                    " AND e.status IN ('done', 'dropped', 'failed')"
+                    " AND NOT EXISTS (SELECT 1 FROM post_messages m WHERE m.slack_event_id = e.id"
+                    " AND m.post_id IN (SELECT id FROM kept))"
+                    " AND NOT EXISTS (SELECT 1 FROM revised_messages v JOIN post_messages m"
+                    " ON m.workspace_id = v.workspace_id AND m.channel_id = v.channel_id AND m.ts = v.ts"
+                    " WHERE v.slack_event_id = e.id AND m.post_id IN (SELECT id FROM kept))"
+                    " ORDER BY e.id",
+                    (self._stamp(before), busy, concluded),
+                ).fetchall()
+            ]
+            for event_id in events:
+                self._db.execute("UPDATE slack_events SET body = NULL WHERE id = ?", (event_id,))
+                self._audit("retention", "body_expired", slack_event_id=event_id)
+        return ExpiredText(posts=len(posts), events=len(events))
 
     # Catch-up after downtime
 

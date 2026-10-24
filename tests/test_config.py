@@ -66,6 +66,7 @@ def test_minimal_file_uses_safe_defaults(tmp_path: Path) -> None:
     assert settings.policy.auto_apply == ("take_to_vehicle", "take_to_site")
     assert settings.policy.default_source == {}
     assert settings.apply.settle_seconds > settings.inventree.timeout_seconds
+    assert settings.storage.retention_days == 30
 
 
 FULL = """
@@ -96,6 +97,7 @@ max_age_hours = 48
 
 [storage]
 database = "/data/stockthread.db"
+retention_days = 7
 """
 
 
@@ -110,6 +112,7 @@ def test_full_file(tmp_path: Path) -> None:
     assert settings.apply.settle_seconds == 180
     assert settings.undo.max_age_hours == 48
     assert settings.storage.database == "/data/stockthread.db"
+    assert settings.storage.retention_days == 7
 
 
 @pytest.mark.parametrize(
@@ -183,6 +186,23 @@ def test_http_mode_needs_a_signing_secret() -> None:
 def test_settle_time_must_exceed_the_request_timeout() -> None:
     data = with_changes("apply", settle_seconds=10)
     assert "apply.settle_seconds must be longer" in rejected(data)
+
+
+SHORT = {**with_changes("storage", retention_days=4), "undo": {"max_age_hours": 24}}
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        with_changes("storage", retention_days=7),  # undo.max_age_hours is 168 by default: not longer
+        {**SHORT, "slack": {**base()["slack"], "plan_expiry_hours": 120, "catch_up_hours": 24}},
+        {**SHORT, "slack": {**base()["slack"], "catch_up_hours": 120}},
+    ],
+)
+def test_retention_must_outlast_the_plan_expiry_catch_up_and_the_undo_age_limit(data: dict[str, Any]) -> None:
+    assert "storage.retention_days must be longer" in rejected(data)
+    fits = {**SHORT, "slack": {**base()["slack"], "catch_up_hours": 24}}
+    assert parse_settings(fits, ENV).storage.retention_days == 4
 
 
 def test_secrets_are_not_accepted_from_the_file(tmp_path: Path) -> None:
