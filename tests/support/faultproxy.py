@@ -25,12 +25,17 @@ from typing import Any
 import httpx
 
 HOP_BY_HOP = {"connection", "content-length", "host", "keep-alive", "transfer-encoding", "content-encoding"}
+HOLD_LIMIT_SECONDS = 60.0
+"""A held request not released by then is dropped without being forwarded, so a failed test cannot hang."""
 PROXY_ERROR_PAGE = b"<html><body><h1>502 Bad Gateway</h1></body></html>"
 
 
 class Fault(Enum):
     DELAY = "delay"
     """Forward, then wait `seconds` before answering: a client timeout while the server may have committed."""
+    HOLD = "hold"
+    """Hold the request until `FaultProxy.release`, then forward it: a write that reaches the server after the client
+    gave up, and after anything the test runs in between, such as recovery."""
     DROP_BEFORE = "drop_before"
     """Close the connection without forwarding: nothing reaches the server."""
     DROP_AFTER = "drop_after"
@@ -70,6 +75,9 @@ class _State:
     rules: list[Rule] = field(default_factory=list)
     log: list[Entry] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    released: threading.Event = field(default_factory=threading.Event)
+    closing: bool = False
+    held: threading.Semaphore = field(default_factory=lambda: threading.Semaphore(0))
 
     def take(self, method: str, path: str) -> Rule | None:
         with self.lock:
@@ -123,6 +131,12 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._send(rule.status, {"Content-Type": "text/html"}, PROXY_ERROR_PAGE)
             return
+        if rule and rule.fault is Fault.HOLD:
+            state.held.release()
+            if not state.released.wait(HOLD_LIMIT_SECONDS) or state.closing:
+                state.record(Entry(self.command, path, fault, None))
+                self._drop()
+                return
         headers = {name: value for name, value in self.headers.items() if name.lower() not in HOP_BY_HOP}
         try:
             response = state.upstream.request(self.command, self.path, headers=headers, content=body)
@@ -132,7 +146,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         state.record(Entry(self.command, path, fault, response.status_code))
         answer = {name: value for name, value in response.headers.items() if name.lower() not in HOP_BY_HOP}
-        if rule is None:
+        if rule is None or rule.fault is Fault.HOLD:
             self._send(response.status_code, answer, response.content)
         elif rule.fault is Fault.DELAY:
             time.sleep(rule.seconds)
@@ -192,6 +206,8 @@ class FaultProxy:
         return self
 
     def __exit__(self, *exc: object) -> None:
+        self._state.closing = True  # a request still held is dropped, never forwarded after the test
+        self._state.released.set()
         self._server.shutdown()
         self._server.server_close()
         self._state.upstream.close()
@@ -200,6 +216,15 @@ class FaultProxy:
         """Break the next `rule.times` requests that match `rule`. Rules are tried in the order they were added."""
         with self._state.lock:
             self._state.rules.append(rule)
+
+    def wait_held(self, timeout: float = 30.0) -> None:
+        """Return once a request matching a `Fault.HOLD` rule has reached the proxy and is being held."""
+        if not self._state.held.acquire(timeout=timeout):
+            raise TimeoutError("no request was held")
+
+    def release(self) -> None:
+        """Forward every held request, and any later one a `Fault.HOLD` rule matches, at once."""
+        self._state.released.set()
 
     def wait_for(self, count: int, timeout: float = 30.0) -> list[Entry]:
         """The log once it holds `count` entries. A client can give up before the server has answered the proxy."""
