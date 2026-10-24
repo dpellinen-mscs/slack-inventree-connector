@@ -1827,7 +1827,22 @@ class Store:
             )
             attempt_id = int(cursor.lastrowid or 0)
             self._audit(actor, "attempt_started", post_id=post_id, request_id=row.id, attempt_id=attempt_id)
+            if kind is AttemptKind.UNDO:
+                self._forget_taught(row.id, post_id, actor)
             return Attempt(attempt_id, marker)
+
+    def _forget_taught(self, request_id: int, post_id: int, actor: Actor) -> None:
+        """Delete every alias a request of the plan of `request_id` taught last (ADR 0012): an undo says the plan may
+        have been wrong, so what it taught goes with it, whether or not the undo succeeds. Call inside a
+        transaction."""
+        taught = self._db.execute(
+            "SELECT a.id, a.request_id FROM aliases a JOIN requests r ON r.id = a.request_id"
+            " WHERE r.plan_id = (SELECT plan_id FROM requests WHERE id = ?) ORDER BY a.id",
+            (request_id,),
+        ).fetchall()
+        for alias_id, taught_by in taught:
+            self._db.execute("DELETE FROM aliases WHERE id = ?", (alias_id,))
+            self._audit(actor, "alias_forgotten", post_id=post_id, request_id=taught_by, alias_id=alias_id)
 
     def next_marker(self, key: RequestKey, kind: AttemptKind) -> Marker:
         """The marker the next attempt of `kind` will carry, to build its request body with. `begin_attempt` checks
@@ -2399,6 +2414,16 @@ class Store:
     def stored_aliases(self) -> tuple[StoredAlias, ...]:
         """Every stored alias with where it was learned: parts first, then locations, oldest first."""
         rows = self._db.execute(f"{self._STORED_ALIAS_SELECT} ORDER BY a.kind = 'location', a.id").fetchall()
+        return tuple(self._stored_alias(row) for row in rows)
+
+    def aliases_taught_by(self, post: PostKey, revision: int) -> tuple[StoredAlias, ...]:
+        """The stored aliases a request of plan revision `revision` of `post` taught last: parts first, then
+        locations, oldest first. One a later confirmation replaced, or an admin removed, is not among them."""
+        rows = self._db.execute(
+            f"{self._STORED_ALIAS_SELECT} WHERE p.workspace_id = ? AND p.channel_id = ? AND p.ts = ?"
+            " AND l.revision = ? ORDER BY a.kind = 'location', a.id",
+            (post.workspace_id, post.channel_id, post.ts, revision),
+        ).fetchall()
         return tuple(self._stored_alias(row) for row in rows)
 
     def remove_alias(self, alias_id: int) -> StoredAlias:

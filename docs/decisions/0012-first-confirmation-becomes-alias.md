@@ -57,6 +57,38 @@ Details decided by the agent (FYI to Dan):
   again once a "Norvane Disc 40 Pro" exists. An alias an admin typed has
   no stored set and is not rechecked this way.
 
+Learning as built (agent, 2026-10-24; `learning.lessons`, `Worker._learn`):
+
+- Only a plan an approver's Apply click approved teaches, once every request
+  of it is `verified`. A plan the policy approved needed no correction.
+- In practice the confirmed text is an `answer` match: the gate builds no
+  request from a bare whole-word or fuzzy match, so the thread asks to
+  confirm it, and the poster's "yes" or pick is what the click then
+  confirms.
+- A name a person typed in the thread for a line or a place teaches the
+  post's own text for it, not the typed name.
+- Only the poster's own words are learned: a text must occur in the
+  post's messages. An item or place text the model wrote, or read from a
+  photo, is never learned, even once a person confirmed the movement.
+- A text with a word like "my", "this", "his", "usual" or "ones", a text
+  with no letter ("40"), a place named by a vehicle word alone ("the
+  van"), and a text the same plan decided for two records are never
+  learned (no per-user aliases yet).
+- **Narrower than the decision above, pending Dan:** a text is learned
+  only when its record is the only record the whole-word and fuzzy rules
+  fit it to (articles ignored), or when it fits none. So a pick from a
+  candidate list ("cable" among three cables, "Disc 40" between the 40 and
+  the 40 Pro) teaches nothing, and neither does a typed correction to a
+  record the text does not fit ("norvane 40" when the poster took Disc
+  60s). The pick says what one post moved, not what the words always
+  mean, and the recheck above cannot catch it: the rivals it would store
+  are exactly the ambiguity the pick settled. A wrong write is worse than
+  a click, so this errs on asking.
+- An undo forgets what its plan taught, as soon as the undo begins and
+  whether or not it succeeds (`Store.begin_attempt`, audited as
+  `alias_forgotten`), rather than offering to: an undo says the plan may
+  have been wrong.
+
 ## Consequences
 
 - Alias storage, learning on a verified apply, and reading aliases into

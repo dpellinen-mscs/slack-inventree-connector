@@ -163,7 +163,9 @@ payloads whose channel or message does not fit the stored id.
 - [x] Instance lock: one connector per database (`Store.acquire_lock`, heartbeat, `run.run`; `test_run.py`)
 - [ ] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word matches, fuzzy matches and picked candidates as aliases, for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo offers to forget the alias
   - [x] Storage (migration 0021, `Store.learn_alias` from a verified request only, `Store.aliases`), read into the run loop's catalog (`catalog.with_aliases`), a learned alias rechecked against new rivals (`matching._rechecked`)
-  - [ ] Learning: a verified plan stores its whole-word, fuzzy and picked matches; the receipt names them; undo offers to forget them
+  - [x] Learning: a verified plan stores its whole-word, fuzzy and picked matches; the receipt names them; undo offers to forget them
+    - [x] A clicked plan, once every request is verified, stores the poster's texts a person confirmed or corrected that fit their record alone (a pick among candidates teaches nothing until Dan decides); the receipt names them (`learning.lessons`, `Worker._learn`, `Store.aliases_taught_by`)
+    - [x] An undo forgets the aliases its plan taught, as it begins (ADR 0012 as built; `Store.begin_attempt`)
 
 **DoD:** integration tests against every pinned InvenTree version, with one
 job on PostgreSQL, prove each line below.
