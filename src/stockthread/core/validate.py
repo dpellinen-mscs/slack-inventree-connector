@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Sequence
 from decimal import Decimal, InvalidOperation
 
@@ -124,13 +125,33 @@ def validate(
     *,
     max_quantity: int,
     post_flags: frozenset[PostFlag] = frozenset(),
+    stocking: Sequence[str | None] = (),
 ) -> tuple[ReviewReason, ...]:
-    """Every review reason for one candidate. `text` is the post's text by people, all messages joined."""
+    """Every review reason for one candidate. `text` is the post's text by people, all messages joined.
+
+    `stocking` holds, per line, the units of the line's part (InvenTree's `Part.units`), given only for a part
+    matched so that it can authorize a write, else None. A line whose length is in its part's own unit
+    (`in_stocking_unit`: "50 m" of a part stocked in m), stated by a number in the text (`_lone_number`), is
+    a count of that unit and raises no pack-unit reason for its unit. The caller judges the part; nothing here
+    reads the catalog."""
     reasons = {reason_for_flag(flag) for flag in movement.flags}
     reasons |= {reason_for_flag(flag) for flag in post_flags if flag is not PostFlag.CONTAINS_SENSITIVE}
+    lone = _lone_number(movement, text)
     text = _folded(text)
-    reasons |= _from_fields(movement, text)
-    reasons |= _from_text(movement, text)
+    stocked = frozenset(
+        n
+        for n, (item, units) in enumerate(zip(movement.line_items, stocking, strict=False), start=1)
+        if lone and in_stocking_unit(item.unit, units)
+    )
+    # Only a line a measure in the text states exactly: "50 cm", "1,5 m" or no measure at all leaves it a question.
+    own = frozenset(
+        n
+        for found in MEASURE.finditer(text)
+        if not _in_a_name(movement, text, found)
+        for n in _own_measure(movement, found, stocked)
+    )
+    reasons |= _from_fields(movement, text, own)
+    reasons |= _from_text(movement, text, own)
     reasons |= _grounding(movement, text)
     reasons |= _places(movement, text)
     reasons |= _contradictions(movement)
@@ -148,8 +169,9 @@ def photo_not_read(messages: Sequence[MessageInput]) -> bool:
     return any(message.file_ids for message in messages if not message.deleted)
 
 
-def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
-    """The flags that follow from the fields (eval/README.md, "Flags"), and an unclear type."""
+def _from_fields(movement: CandidateMovement, text: str, own: frozenset[int]) -> set[ReviewReason]:
+    """The flags that follow from the fields (eval/README.md, "Flags"), and an unclear type. The lines in `own` are
+    in their part's own unit."""
     kind = movement.movement_type
     reasons = set()
     if movement.source_text is None and kind not in (MovementType.RECEIVE, MovementType.COUNT):
@@ -161,7 +183,7 @@ def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     if any(item.quantity is None for item in movement.line_items):
         reasons.add(_rule(ReasonCode.QUANTITY_MISSING, "no number"))
     for n, item in enumerate(movement.line_items, start=1):
-        if not counts_pieces(item.unit):
+        if not counts_pieces(item.unit) and n not in own:
             reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {DETAIL_NOT_A_COUNT}"))
         if item.pack_size is not None:
             reasons.add(_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {DETAIL_PACK_SIZE}"))
@@ -181,9 +203,25 @@ def _from_fields(movement: CandidateMovement, text: str) -> set[ReviewReason]:
 
 def counts_pieces(unit: str | None) -> bool:
     """The unit is a count: none, or "each", "pc", "x". A request carries the quantity alone, as a number of the
-    part's stocking unit, and nothing reads that unit yet: "50 ft" may be 50 m or 50 pieces once written."""
+    part's stocking unit: "50 ft" may be 50 m or 50 pieces once written, unless `in_stocking_unit` holds."""
     unit = _unit(unit)
     return unit is None or unit in _EACH
+
+
+def stocking_unit(units: str | None) -> str | None:
+    """The length unit a part is stocked in, from InvenTree's `Part.units`: "m" for m, meter(s) or metre(s), "ft"
+    for ft, foot or feet, else None. Only the same unit counts, never a conversion: cm, mm and inches are left out
+    ("in" is also a preposition), and so is "M", which is not a metre."""
+    if units is None or units.strip() == "M":
+        return None
+    return LENGTH_UNITS.get(units.strip().casefold())
+
+
+def in_stocking_unit(unit: str | None, units: str | None) -> bool:
+    """A line's unit is the length unit its part is stocked in (`stocking_unit` of the part's `units`): then the
+    line's quantity is a number of the part's own unit, and a request may carry it bare."""
+    stocked = stocking_unit(units)
+    return stocked is not None and stocking_unit(unit) == stocked
 
 
 def _unit(unit: str | None) -> str | None:
@@ -193,8 +231,8 @@ def _unit(unit: str | None) -> str | None:
     return unit[:-2] if unit.endswith("xes") else unit[:-1] if unit.endswith("s") else unit
 
 
-def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
-    """Reasons the text gives, whatever the extractor made of it."""
+def _from_text(movement: CandidateMovement, text: str, own: frozenset[int]) -> set[ReviewReason]:
+    """Reasons the text gives, whatever the extractor made of it. The lines in `own` are in their part's own unit."""
     reasons = set()
     if SUSPICIOUS.search(text):
         reasons.add(_rule(ReasonCode.SUSPICIOUS_INSTRUCTIONS))
@@ -202,7 +240,7 @@ def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         reasons |= _unit_reasons(movement, text, found, "container word in the text")
     for found in MEASURE.finditer(text):
         if not _in_a_name(movement, text, found):
-            reasons |= _unit_reasons(movement, text, found, "measure in the text")
+            reasons |= _unit_reasons(movement, text, found, "measure in the text", _own_measure(movement, found, own))
     if VAGUE.search(text):
         reasons.add(_rule(ReasonCode.QUANTITY_VAGUE, "vague quantity word in the text"))
     if CORRECTION.search(text):
@@ -226,14 +264,69 @@ def _from_text(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     return reasons
 
 
-def _unit_reasons(movement: CandidateMovement, text: str, found: re.Match[str], detail: str) -> set[ReviewReason]:
+def _lone_number(movement: CandidateMovement, text: str) -> bool:
+    """Each number in the post's text is one line's quantity, one for one, and nothing in it may multiply one, so a
+    measure in it can state a line's quantity in its part's own unit. Else "50 m" may be more than 50 m once
+    written: "3 runs of 50 m", "2x 50 m", "50 m x2", "50 m for each of the 3 houses", "50 m, twice", the measure
+    posted twice, a number word, or "50 M" (not a metre), which only the text before folding tells apart. A number
+    inside a word ("cat6", "van2", a mention) or in a place's text word for word ("van 3") is part of a name; the
+    place must still match a location that can authorize a write. Strict on purpose: what it leaves out is asked
+    about, never written."""
+    if re.search(r"\dM\b|\d\s+M\b", unicodedata.normalize("NFKC", text)):
+        return False
+    text = _folded(text)
+    # Before a place's text is taken out, so a place cannot hide one ("from shop 2x").
+    if re.search(r"\bx\s*\d|\d\s*x\b|\N{MULTIPLICATION SIGN}|\+\+", text) or any(
+        word in NUMBER_WORDS or word in _MULTIPLIER_WORDS for word in re.findall(r"[a-z]+", text)
+    ):
+        return False
+    for place in (movement.source_text, movement.destination_text):
+        if place and (found := next(iter(_occurrences(place, text)), None)):
+            text = f"{text[: found.start()]} {text[found.end() :]}"  # once: a second "van 3" may be another 50 m
+    numbers = re.findall(r"(?<![^\W\d_])\d+(?:[.,]\d+)*", text)
+    if any("," in number or _AMBIGUOUS_NUMBER.fullmatch(number) for number in numbers):
+        return False
+    return Counter(Decimal(number) for number in numbers) == Counter(item.quantity for item in movement.line_items)
+
+
+_MULTIPLIER_WORDS = frozenset(
+    {"twice", "thrice", "times", "each", "per", "every", "apiece", "double", "triple", "both", "pair", "pairs"}
+    | {"couple", "dozen", "dozens", "half", "halves", "lengths", "runs", "cuts", "pieces", "again", "another"}
+    | {"same", "ditto", "too", "also", "plus", "all", "extra", "more", "dbl"}
+)
+"""Words that may multiply a measure or repeat it. A list of places with none of them ("for unit A and unit B") is
+not caught, as it is not for a count either; the reply shows the quantity it would write."""
+
+
+def _own_measure(movement: CandidateMovement, found: re.Match[str], own: frozenset[int]) -> frozenset[int]:
+    """The lines of `own` this measure states exactly: its number is the line's quantity, and its unit word the
+    line's unit. A measure in another unit ("50 m (164 ft)"), in quote marks, or with a number whose separator could
+    be read two ways ("1,5 m", "1.000 m", "1,050 m") states none."""
+    stated = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([a-z]+)", found.group(0))
+    if stated is None or _AMBIGUOUS_NUMBER.fullmatch(stated.group(1)):
+        return frozenset()
+    with contextlib.suppress(InvalidOperation):
+        value = Decimal(stated.group(1).replace(",", ""))
+        return frozenset(
+            n
+            for n in own
+            if movement.line_items[n - 1].quantity == value
+            and stocking_unit(stated.group(2)) == stocking_unit(movement.line_items[n - 1].unit)
+        )
+    return frozenset()
+
+
+def _unit_reasons(
+    movement: CandidateMovement, text: str, found: re.Match[str], detail: str, exact: frozenset[int] = frozenset()
+) -> set[ReviewReason]:
     """The pack-unit reasons of a unit word in the text, each naming a line the unit may belong to, so that line's
     quantity question settles it; a wrong line settled would write a length as a count. The lines named:
     - the item right after it ("50 ft of drop cable", "1 box of breakers"), on the same line of text;
     - the item right before it, with only spaces or punctuation between ("drop cable 50 ft", "breakers, 2 boxes");
     - when no item is right after it: the item before it however far, and every line whose quantity is its number;
     - every line whose item is not in the text word for word: where its unit is cannot be told.
-    A movement of a single line whose item is not found names no line, which fits it."""
+    A movement of a single line whose item is not found names no line, which fits it. A line in `exact` is left
+    out: the measure states its quantity in its part's own unit (`_own_measure`)."""
     start, number = found.start(), re.match(_NUMBER, found.group(0))
     if number is None and (number := re.search(rf"{_NUMBER}(?=\s*$)", text[:start])):
         start = number.start()  # "1 box": the container's number is part of it
@@ -263,7 +356,7 @@ def _unit_reasons(movement: CandidateMovement, text: str, found: re.Match[str], 
             named |= {n for n, item in enumerate(movement.line_items, start=1) if item.quantity == value}
     if len(movement.line_items) == 1 and not after and not before:
         return {_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, detail)}
-    return {_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {detail}") for n in named}
+    return {_rule(ReasonCode.PACK_UNIT_AMBIGUOUS, f"line {n}: {detail}") for n in named - exact}
 
 
 _NUMBER = r"\d+(?:[.,]\d+)*"

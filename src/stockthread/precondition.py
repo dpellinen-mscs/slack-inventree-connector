@@ -34,6 +34,7 @@ from typing import Any
 
 from stockthread.core.model import Match, Operation, operation_for
 from stockthread.core.resolve import StockItem, target_item
+from stockthread.core.validate import counts_pieces, in_stocking_unit
 from stockthread.core.write_request import WriteRequest, _decimal
 from stockthread.slack.replies import MovementView
 
@@ -112,12 +113,16 @@ def check(
     *,
     history: Mapping[int, Collection[int]],
     chosen: Collection[int] = (),
+    units: Mapping[int, str] | None = None,
 ) -> Snapshot | Stale:
     """The snapshot of `view`'s decided plan against `read` (the stock items of every pair of `pairs(view)`, read
     now), or why the plan no longer holds. `request` is the request built from `view` (`plan.plan_requests`): its
     lines must be the view's takes, merged by item, or this raises ValueError. `history`: the history entry pks of
     each stock item the request names, read before `read` (an entry written between the two reads is then one the
-    read-back reports, never one it misses). `chosen`: the lines (from 0) a person named the stock items for."""
+    read-back reports, never one it misses). `chosen`: the lines (from 0) a person named the stock items for.
+    `units`: the units of each part a line carries as a length in its own unit (`MovementView.units`), read now: a
+    part stocked in another unit since the plan makes it stale, as its request would write the length as a number
+    of that unit."""
     operation, place, _ = places(view)
     if len(view.stock) != len(view.items) or not view.items:
         raise ValueError("a decided movement has the stock of every line")
@@ -132,6 +137,15 @@ def check(
         part = record(match)
         if part is None or pick is None or not pick.decided:
             raise ValueError("a decided movement has the part and the stock of every line")
+        unit = view.movement.line_items[line].unit
+        stocked = view.units[line] if view.units else None
+        if stocked is None and not counts_pieces(unit):
+            raise ValueError("a decided movement counts every line, or has it in its part's own unit")
+        if stocked is not None:
+            if units is None or part not in units:
+                raise ValueError(f"the units of part {part} were not read")
+            if not in_stocking_unit(unit, units[part]):
+                return Stale(f"line {line + 1}: part {part} is not stocked in the line's unit now")
         stock = read[(part, place)]
         now = {item.pk: item for item in stock}
         left = [

@@ -20,7 +20,7 @@ from stockthread.core.model import (
     ReasonSource,
     ReviewReason,
 )
-from stockthread.core.validate import photo_not_read, validate
+from stockthread.core.validate import in_stocking_unit, photo_not_read, stocking_unit, validate
 
 
 def take(item: str = "Disc 40", quantity: str | None = "2", **fields: Any) -> CandidateMovement:
@@ -557,3 +557,145 @@ def test_a_photo_is_unread_while_its_message_is_in_the_post() -> None:
     assert photo_not_read([caption, text])
     assert not photo_not_read([text])
     assert not photo_not_read([replace(caption, deleted=True), text])
+
+
+@pytest.mark.parametrize(
+    ("units", "stocked"),
+    [("m", "m"), (" meters ", "m"), ("Metre", "m"), ("ft", "ft"), ("feet", "ft"), ("Foot", "ft"), ("M", None),
+     ("", None), (None, None), ("box", None), ("cm", None), ("in", None), ("m/s", None), ("pcs", None)],
+)  # fmt: skip
+def test_the_stocking_unit_is_a_length_of_the_same_unit_only(units: str | None, stocked: str | None) -> None:
+    assert stocking_unit(units) == stocked
+
+
+@pytest.mark.parametrize(
+    ("unit", "units", "same"),
+    [("m", "m", True), ("meters", "metre", True), ("feet", "ft", True), ("m", "ft", False), ("ft", "m", False),
+     ("m", "", False), ("m", "box", False), ("m", "M", False), (None, "m", False), ("each", "m", False)],
+)  # fmt: skip
+def test_a_line_is_in_its_stocking_unit_only_for_the_same_length_unit(
+    unit: str | None, units: str | None, same: bool
+) -> None:
+    assert in_stocking_unit(unit, units) is same
+
+
+def cable(quantity: str = "50", unit: str | None = "m", **fields: Any) -> CandidateMovement:
+    line = LineItem("drop cable", Decimal(quantity), unit)
+    return take(line_items=(line,), source_text="shop", destination_text="van 3", **fields)
+
+
+def stocked_details(movement: CandidateMovement, text: str, stocking: tuple[str | None, ...]) -> set[str]:
+    reasons = validate(movement, text, max_quantity=100, stocking=stocking)
+    return {reason.detail for reason in reasons if reason.code is ReasonCode.PACK_UNIT_AMBIGUOUS}
+
+
+@pytest.mark.parametrize(
+    "text", ["took 50 m of drop cable from shop to van 3", "took 50m drop cable from shop to van 3",
+             "took drop cable 50 m from shop to van 3"],
+)  # fmt: skip
+def test_a_length_in_the_parts_own_unit_raises_no_pack_reason(text: str) -> None:
+    assert stocked_details(cable(), text, ("m",)) == set()
+
+
+def test_a_grounded_length_in_the_parts_own_unit_has_no_reason_at_all() -> None:
+    """ "50m drop cable" and "drop cable 50 m" keep the grounding reason QUANTITY_NOT_IN_TEXT, which this leaves be."""
+    assert validate(cable(), "took 50 m of drop cable from shop to van 3", max_quantity=100, stocking=("m",)) == ()
+
+
+@pytest.mark.parametrize("units", [None, "ft", "", "box", "M"])
+def test_a_length_in_another_or_no_stocking_unit_still_asks(units: str | None) -> None:
+    details = stocked_details(cable(), "took 50 m of drop cable from shop to van 3", (units,))
+    assert details == {"line 1: a unit other than a count", "line 1: measure in the text"}
+
+
+def test_without_stocking_units_nothing_changes() -> None:
+    details = stocked_details(cable(), "took 50 m of drop cable from shop to van 3", ())
+    assert details == {"line 1: a unit other than a count", "line 1: measure in the text"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["took 50 m (164 ft) of drop cable from shop to van 3", "took 2 rolls of 50 m drop cable from shop to van 3",
+     'took 50" drop cable from shop to van 3', "took 50 m of drop cable, 30 m of it from shop to van 3"],
+)  # fmt: skip
+def test_another_measure_or_a_container_still_asks(text: str) -> None:
+    assert stocked_details(cable(), text, ("m",))
+
+
+def test_a_pack_size_or_a_unit_in_the_item_still_asks() -> None:
+    sized = take(line_items=(LineItem("drop cable", Decimal(50), "m", pack_size=Decimal(10)),), source_text="shop")
+    assert "line 1: a pack size" in stocked_details(sized, "took 50 m of drop cable from shop to truck 1", ("m",))
+    unit_in_item = take(line_items=(LineItem("m drop cable", Decimal(50), "m"),), source_text="shop")
+    assert "line 1: the item starts with a unit word" in stocked_details(
+        unit_in_item, "took 50 m drop cable from shop to truck 1", ("m",)
+    )
+
+
+def test_only_the_line_in_its_own_unit_is_spared() -> None:
+    lines = (LineItem("drop cable", Decimal(50), "m"), LineItem("fiber", Decimal(30), "m"))
+    movement = take(line_items=lines, source_text="shop", destination_text="van 3")
+    text = "took 50 m of drop cable and 30 m of fiber from shop to van 3"
+    assert stocked_details(movement, text, ("m", "ft")) == {
+        "line 2: a unit other than a count",
+        "line 2: measure in the text",
+    }
+    assert stocked_details(movement, text, ("m", None)) == stocked_details(movement, text, ("m",))
+
+
+def test_a_measure_whose_number_is_not_the_lines_quantity_still_names_it() -> None:
+    """The extractor read 50 m, but the text's only measure says 30 m: the line keeps its question."""
+    assert stocked_details(cable("50"), "took 30 m of drop cable from shop to van 3", ("m",))
+
+
+@pytest.mark.parametrize(
+    ("text", "quantity"),
+    [("took 50 cm of drop cable from shop to van 3", "50"), ("took 1,5 m of drop cable from shop to van 3", "15"),
+     ("took 1,5 m of drop cable from shop to van 3", "1.5"), ("took 1.000 m of drop cable from shop to van 3", "1"),
+     ("took 1,050 m of drop cable from shop to van 3", "1050"), ("took drop cable from shop to van 3", "50")],
+)  # fmt: skip
+def test_a_length_no_measure_states_exactly_keeps_its_unit_reason(text: str, quantity: str) -> None:
+    """Review: "50 cm" is no measure the rule reads, and "1,5 m" or "1.000 m" can be read two ways."""
+    assert "line 1: a unit other than a count" in stocked_details(cable(quantity), text, ("m",))
+
+
+def test_a_decimal_length_in_the_parts_own_unit_is_spared() -> None:
+    assert stocked_details(cable("2.5"), "took 2.5 m of drop cable from shop to van 3", ("m",)) == set()
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["took 3 runs of 50 m drop cable from shop to van 3", "took 4 lengths of 50 m drop cable from shop to van 3",
+     "took 2 cuts of 50 m drop cable from shop to van 3", "took 2x 50 m drop cable from shop to van 3",
+     "took 50 m drop cable x2 from shop to van 3", "took 50 m drop cable \N{MULTIPLICATION SIGN}2 from shop to van 3",
+     "took 50 m drop cable from shop to van 3 for each of the 3 houses",
+     "took 50 m drop cable from shop to van 3, 2 times", "took 50 m drop cable from shop to van 3, twice",
+     "took two runs of 50 m drop cable from shop to van 3",
+     "took 50 m drop cable from shop to van 3\ntook 50 m drop cable from shop to van 3",
+     "took 50 M drop cable from shop to van 3", "took 50M drop cable from shop to van 3",
+     "took 50 m drop cable from shop to van 3, plus the same for van 3",
+     "took 50 m drop cable from shop to van 3, same as yesterday",
+     "took 50 m drop cable from shop to van 3 for all the drops", "took 50 m drop cable (dbl) from shop to van 3",
+     "took 50 m drop cable ++ from shop to van 3"],
+)  # fmt: skip
+def test_a_length_something_may_multiply_still_asks(text: str) -> None:
+    """Review: only the one number of each line lets a measure state it; "3 runs of 50 m" would write 50."""
+    assert "line 1: a unit other than a count" in stocked_details(cable(), text, ("m",))
+
+
+def test_a_length_beside_a_count_is_spared_when_each_number_is_a_lines_quantity() -> None:
+    lines = (LineItem("drop cable", Decimal(50), "m"), LineItem("ONT", Decimal(2)))
+    movement = take(line_items=lines, source_text="shop", destination_text="van 3")
+    assert stocked_details(movement, "took 50 m drop cable and 2 ONT from shop to van 3", ("m", None)) == set()
+    assert stocked_details(movement, "took 50 m drop cable and 2 ONT from shop to van 3 for 3 jobs", ("m", None))
+
+
+@pytest.mark.parametrize(
+    ("text", "source"),
+    [("took 50 m drop cable from van 3 times to van 3", "van 3 times"),
+     ("took 50 m drop cable from shop 2x to van 3", "shop 2x"),
+     ("from shop 3 runs: took 50 m drop cable to van 3", "shop 3 runs"),
+     ("took 50 m drop cable from shop to van 3 and 50 m to van 3", "shop")],
+)  # fmt: skip
+def test_a_place_cannot_hide_a_multiplier(text: str, source: str) -> None:
+    """Review: a place's text is taken out once, and only after the multiplier words are looked for."""
+    assert "line 1: a unit other than a count" in stocked_details(replace(cable(), source_text=source), text, ("m",))

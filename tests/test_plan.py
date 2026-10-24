@@ -149,6 +149,45 @@ def test_a_line_that_is_not_a_count_is_refused_even_if_the_gate_missed_it(
     assert len(plan_requests([each], markers(1), user=SAM)) == 1
 
 
+def length(unit: str = "m", units: str | None = "m", pack_size: Decimal | None = None) -> MovementView:
+    """One line of 2 `unit` of part 1, whose units (as the view holds them) are `units`."""
+    given = view()
+    line = replace(given.movement.line_items[0], unit=unit, pack_size=pack_size)
+    return replace(given, movement=replace(given.movement, line_items=(line,)), units=(units,))
+
+
+def test_a_length_in_its_parts_own_unit_is_one_request_with_the_bare_quantity() -> None:
+    (request,) = plan_requests([length()], markers(1), user=SAM)
+    assert [(line["pk"], line["quantity"]) for line in request.body["items"]] == [(57, "2")]
+
+
+def test_a_decimal_length_in_its_parts_own_unit_carries_the_decimal() -> None:
+    given = length()
+    line = replace(given.movement.line_items[0], quantity=Decimal("2.5"))
+    half = replace(given, movement=replace(given.movement, line_items=(line,)), stock=(picked((57, "2.5")),))
+    (request,) = plan_requests([half], markers(1), user=SAM)
+    assert [(line["pk"], line["quantity"]) for line in request.body["items"]] == [(57, "2.5")]
+
+
+@pytest.mark.parametrize(
+    ("unit", "units", "pack_size"),
+    [("m", None, None), ("m", "ft", None), ("ft", "m", None), ("m", "", None), ("m", "M", None),
+     ("m", "m", Decimal(10)), ("box", "box", None)],
+)  # fmt: skip
+def test_a_length_without_its_parts_own_unit_is_refused(
+    monkeypatch: pytest.MonkeyPatch, unit: str, units: str | None, pack_size: Decimal | None
+) -> None:
+    monkeypatch.setattr("stockthread.plan.gate_reasons", lambda _view: set())
+    with pytest.raises(NotDecided, match="line 1 is not a count"):
+        plan_requests([length(unit, units, pack_size)], markers(1), user=SAM)
+
+
+def test_a_length_with_no_units_in_the_view_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("stockthread.plan.gate_reasons", lambda _view: set())
+    with pytest.raises(NotDecided, match="line 1 is not a count"):
+        plan_requests([replace(length(), units=())], markers(1), user=SAM)
+
+
 def test_an_unclear_movement_or_an_empty_plan_is_refused() -> None:
     with pytest.raises(NotDecided, match="review reason"):
         plan_requests([view(MovementType.UNCLEAR)], markers(1), user=SAM)

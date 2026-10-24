@@ -40,6 +40,9 @@ class FakeInvenTree:
         self.history_fails: set[int] = set()
         self.fail_stock_reads = False
         self.lock: anyio.Lock | None = None
+        self.units: dict[int, str] = {}
+        """Each part's `Part.units`; a part not here has none ("")."""
+        self.units_read: list[int] = []
 
     def write_entry(self, item: int, notes: str, deltas: dict[str, Any], kind: int) -> None:
         self.entries.append((1000 + len(self.entries), item, notes, deltas, kind))
@@ -69,6 +72,11 @@ class FakeInvenTree:
         if pk not in self.items or pk in self.history_fails:  # InvenTree answers 400 for an item it deleted
             raise InvenTreeError(f"GET /api/stock/track/: 400 for item {pk}")
         return [entry for entry, item, *_ in self.entries if item == pk]
+
+    async def part_units(self, pk: int) -> str:
+        self._read()
+        self.units_read.append(pk)
+        return self.units.get(pk, "")
 
     async def stock_items(self, part: int, location: int) -> list[dict[str, Any]]:
         self._read()

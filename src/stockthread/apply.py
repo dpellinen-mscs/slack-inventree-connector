@@ -122,6 +122,12 @@ def depletes(lines: list[tuple[int, Decimal]], snapshot: Any) -> bool:
     return True
 
 
+async def _units(reader: ApplyReader, view: MovementView) -> dict[int, str]:
+    """The units, read now, of each part a line carries as a length in its own unit (`MovementView.units`)."""
+    parts = {match.record for match, units in zip(view.items, view.units, strict=False) if units is not None}
+    return {part: await reader.part_units(part) for part in sorted(pk for pk in parts if pk is not None)}
+
+
 async def _items_gone(reader: HistoryReader, pks: list[int]) -> bool:
     for pk in pks:
         if not await reader.stock_item_gone(pk):
@@ -135,6 +141,8 @@ class ApplyReader(HistoryReader, Protocol):
     async def item_entries(self, pk: int) -> list[int]: ...
 
     async def stock_items(self, part: int, location: int) -> list[dict[str, Any]]: ...
+
+    async def part_units(self, pk: int) -> str: ...
 
 
 class Sender(Protocol):
@@ -231,7 +239,14 @@ async def apply_request(
         snapshot = (
             before
             if isinstance(before, Stale)
-            else check(view, request, await _stock(reader, pairs(view)), history=before, chosen=chosen)
+            else check(
+                view,
+                request,
+                await _stock(reader, pairs(view)),
+                history=before,
+                chosen=chosen,
+                units=await _units(reader, view),
+            )
         )
         if isinstance(snapshot, Stale):
             store.transition(key, expected=RequestState.APPROVED, target=RequestState.PLANNED, actor=Actor.APPLIER)

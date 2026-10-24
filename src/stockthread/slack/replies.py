@@ -103,12 +103,18 @@ class MovementView:
     no line's stock was read."""
     named: Mapping[int | str, str] = field(default_factory=dict)
     """The names typed in the thread, by line or side ("source", "destination"), shown beside the post's words."""
+    units: Sequence[str | None] = ()
+    """The units of each line's part (`Part.units`), as validate was given them: set for a line in its part's own
+    length unit (`in_stocking_unit`), else None. Empty: no line's units were read. A request carries a length bare
+    only for a line whose units are here, and checks them again before it writes (`precondition.check`)."""
 
     def __post_init__(self) -> None:
         if len(self.items) != len(self.movement.line_items):
             raise ValueError("one match per line item")
         if self.stock and len(self.stock) != len(self.items):
             raise ValueError("one stock pick per line item, or none")
+        if self.units and len(self.units) != len(self.items):
+            raise ValueError("one part's units per line item, or none")
 
 
 def escape(text: str) -> str:
