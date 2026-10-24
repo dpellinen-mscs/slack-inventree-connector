@@ -40,6 +40,8 @@ MAX_MOVEMENTS = 20
 """How many movements a reply shows. Slack refuses more than 50 blocks; each movement takes 2."""
 MAX_BLOCKS = 50
 """Slack's limit of blocks in one message. A reply takes at most 42, and its question 3 more."""
+MAX_LEARNED = 10
+"""The learned aliases a receipt names; the rest are counted (`stockthread aliases list` shows them all)."""
 
 TYPE_LABELS = {
     MovementType.TAKE_TO_VEHICLE: "Take to a vehicle",
@@ -722,6 +724,7 @@ def receipt(
     inventree_url: str,
     approved_by: str | None,
     undo: Sequence[str | None] | None = None,
+    learned: Sequence[tuple[str, str]] = (),
 ) -> dict[str, Any]:
     """The receipt in the post's thread once no step of its plan's writes is due or in flight (design section 7, step
     6), and again once an undo of one of them concluded: for every movement, its state, what it was to change, links
@@ -731,7 +734,8 @@ def receipt(
     `approved_by`: the approver whose Apply click approved the plan, or None when the write policy approved it.
     `undo`: per movement, the marker id of its request when an undo of it may be asked for now (`applier.undo_refusal`
     with no user), or None; such a movement's section carries an Undo button with that value. A movement beyond
-    MAX_MOVEMENTS is not shown, so it gets no button."""
+    MAX_MOVEMENTS is not shown, so it gets no button. `learned`: the aliases the plan taught (ADR 0012), as (text,
+    name of its part or location); named only on a receipt that reports every movement verified."""
     if not views:
         raise ValueError("a receipt shows at least one movement")
     if len(states) != len(views) or len(markers) != len(views):
@@ -788,6 +792,11 @@ def receipt(
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": trail}]})
     if len(views) > MAX_MOVEMENTS:
         blocks.append(_section(f"…and {len(views) - MAX_MOVEMENTS} more movements, not shown here."))
+    if learned and all(state is RequestState.VERIFIED for state in states):
+        taught = "; ".join(f"“{escape(text)}” means {escape(name)}" for text, name in learned[:MAX_LEARNED])
+        more = f"; and {len(learned) - MAX_LEARNED} more" if len(learned) > MAX_LEARNED else ""
+        note = f"Learned from this Apply: {taught}{more}."
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": _cut(note)}]})
     count = f"{len(views)} movements" if len(views) > 1 else "1 movement"
     return {"text": f"{text}: {count}.", "blocks": blocks}
 

@@ -366,3 +366,14 @@ def test_the_command_reads_but_never_creates_or_migrates(
     assert capsys.readouterr().err.count("ERROR ") == 4
     assert cli.main(["aliases"]) == 0
     assert "list" in capsys.readouterr().out
+
+
+def test_a_confirmation_never_takes_over_an_alias_an_admin_typed(store: Store) -> None:
+    store._db.execute(
+        "INSERT INTO aliases (kind, text, words, record, created_at, updated_at)"
+        " VALUES ('part', 'Disc 40', 'disc 40', 1, '2026-10-01', '2026-10-01')"
+    )
+    verify(store)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+    (typed,) = store.stored_aliases()
+    assert (typed.text, typed.learned_from, typed.rivals) == ("Disc 40", None, None)  # an undo cannot forget it

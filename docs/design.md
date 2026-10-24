@@ -1970,6 +1970,22 @@ Deterministic. The rules run in this order:
 - An alias is checked against the catalog snapshot when it is used. An
   alias that points to an inactive part or a deleted location is ignored
   and reported.
+- Learning (ADR 0012; `learning.lessons`, `Worker._learn`): once every
+  request of a plan that an approver's Apply click approved is
+  `verified`, each text of it that a person confirmed in the thread (the
+  `answer` rule, or `words` and `fuzzy` if a plan ever holds one) becomes
+  an alias of its record. So does the post's own text of a line or place
+  a person typed a name for. Only the poster's own words are learned (the
+  text occurs in a message the poster wrote, as the plan's dry run read
+  it), and only when the record is the one record rules 4 and 5 fit the
+  text to, articles ignored: a pick among candidates, and a text the
+  catalog does not back, teach nothing. An admin's alias is never taken
+  over. A plan the policy approved, a dry run, an unverified write, a
+  text with a word like "my", "this" or "ones", a place named by a
+  vehicle word alone, and a text the plan decided for two records teach
+  nothing. An undo forgets what its plan taught as it begins. Learning is
+  best effort: a read that fails teaches nothing, and the next
+  confirmation does. The receipt names what was learned.
 
 ## 11. Testing strategy
 

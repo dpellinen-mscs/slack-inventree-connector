@@ -272,3 +272,24 @@ def test_a_receipt_of_many_undoable_movements_still_fits_in_one_message() -> Non
     )  # fmt: skip
     assert len(body["blocks"]) <= MAX_BLOCKS
     assert len([block for block in body["blocks"] if "accessory" in block]) == MAX_MOVEMENTS
+
+
+def test_the_aliases_a_verified_plan_taught_are_named_last_with_their_text_escaped() -> None:
+    views = [view(stock=(picked((57, "2")),))]
+    learned = [("norvane 40", "Norvane Disc 40 Access Point"), ("<!here> bay", "Warehouse/Bay *2*")]
+    body = receipt(views, (S.VERIFIED,), [MARKER], PARTS, LOCATIONS, inventree_url=URL, approved_by=SAM,
+                   learned=learned)  # fmt: skip
+    note = body["blocks"][-1]
+    assert note["type"] == "context"
+    assert note["elements"][0]["text"] == (
+        "Learned from this Apply: “norvane 40” means Norvane Disc 40 Access Point; “&lt;!here&gt; bay” means"
+        " Warehouse/Bay *2*."
+    )
+
+
+@pytest.mark.parametrize("state", sorted(set(RECEIPT_WORDS) - {S.VERIFIED}))
+def test_no_alias_is_named_unless_every_movement_is_verified(state: RequestState) -> None:
+    views = [view(stock=(picked((57, "2")),))] * 2
+    body = receipt(views, (S.VERIFIED, state), [MARKER] * 2, PARTS, LOCATIONS, inventree_url=URL, approved_by=SAM,
+                   learned=[("norvane 40", "Norvane Disc 40 Access Point")])  # fmt: skip
+    assert "Learned" not in text_of(body)

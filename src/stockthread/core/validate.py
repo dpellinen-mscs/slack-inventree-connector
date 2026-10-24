@@ -398,6 +398,11 @@ def _occurrences(phrase: str, text: str) -> list[re.Match[str]]:
     return list(re.finditer(rf"(?<!\w){re.escape(phrase)}(?!\w)", text))
 
 
+def says(text: str, phrase: str) -> bool:
+    """Whether `phrase` occurs in `text` as whole words, case and width folded as the validator reads a post."""
+    return bool(_occurrences(phrase, _folded(text)))
+
+
 def _has_words(phrase: str, text: str) -> bool:
     return bool(_occurrences(phrase, text))
 

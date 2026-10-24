@@ -103,6 +103,7 @@ from stockthread.core.typed_answers import read_typed_answer, replay_typed, take
 from stockthread.core.validate import in_stocking_unit, photo_not_read, validate
 from stockthread.gate import Judgement
 from stockthread.inventree import InvenTreeError
+from stockthread.learning import lessons
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.plan_record import NotRebuilt, plan_hash, plan_of
 from stockthread.slack.catchup import is_catch_up
@@ -142,6 +143,7 @@ from stockthread.slack.replies import (
 )
 from stockthread.store import (
     MAX_EVENT_ATTEMPTS,
+    AliasKind,
     Answered,
     Button,
     DryRunOutcome,
@@ -153,6 +155,7 @@ from stockthread.store import (
     ReviewItem,
     StateConflict,
     Store,
+    StoredAlias,
     WaitingPost,
     WriteBlocked,
     new_button_id,
@@ -801,7 +804,51 @@ class Worker:
             if applied.state is not before:
                 done += 1
                 log.info("request %s: %s (%s)", key, applied.state, applied.why)
+                if applied.state is RequestState.VERIFIED:
+                    self._learn(key)
         return done
+
+    def _learn(self, key: RequestKey) -> None:
+        """Store what the plan of request `key` teaches (`learning.lessons`; ADR 0012) once an approver's click
+        approved it and every request of it is verified, against the catalog and the post's messages read now.
+        Learning is best effort and never a reason to write again or to hold the receipt back: what cannot be read
+        now teaches nothing, and the next confirmation of the same text teaches it."""
+        taught = 0
+        try:
+            plan = self.store.plan(key.post, key.revision)
+            if plan.approved_by is None or any(row.state is not RequestState.VERIFIED for row in plan.requests):
+                return
+            rebuilt = plan_views(self.store, plan)
+            # The text as the dry run that made the plan read it, by the poster alone: not an edit since, not a reply.
+            made = [
+                r for r in self.store.dry_run_history(key.post) if r.result and plan_hash(r.result) == plan.input_hash
+            ]
+            read = self._messages(key.post, made[-1].changes_through or 0) if made else "unreadable"
+            if isinstance(read, str):
+                log.warning("post %s: nothing learned from plan revision %d (%s)", key.post.ts, key.revision, read)
+                return
+            said = [m.text for m in read[0] if not m.deleted and read[3].get(m.ts) == rebuilt.poster]
+            found = lessons(rebuilt.views, self.catalog(), rebuilt.poster, said)
+        except LockLost:
+            raise
+        except Exception as error:
+            log.warning("post %s: nothing learned from plan revision %d (%s)", key.post.ts, key.revision,
+                        type(error).__name__)  # fmt: skip
+            return
+        for lesson in found:
+            try:
+                self.store.learn_alias(
+                    self.owner, lesson.kind, lesson.text, lesson.record, rivals=lesson.rivals,
+                    learned_from=plan.requests[lesson.movement - 1].key,
+                )  # fmt: skip
+                taught += 1
+            except LockLost:
+                raise
+            except Exception as error:
+                log.warning("post %s: an alias of plan revision %d not learned (%s)", key.post.ts, key.revision,
+                            type(error).__name__)  # fmt: skip
+        if taught:
+            log.info("post %s: plan revision %d taught %d aliases", key.post.ts, key.revision, taught)
 
     def post_receipts(self) -> int:
         """Post the receipt each plan is due (`Store.receipts_due`; design section 7, step 6) in its post's thread, and
@@ -919,15 +966,20 @@ class Worker:
             for row in plan.requests
         ]
         states = tuple(row.state for row in plan.requests)
+        verified = all(state is RequestState.VERIFIED for state in states)
+        taught = self.store.aliases_taught_by(post, revision) if verified else ()
+        parts = {part.pk: part.name for part in catalog.parts}
+        locations = {location.pk: location.path for location in catalog.locations}
         body = receipt(
             rebuilt.views,
             states,
             [row.marker_id for row in plan.requests],
-            {part.pk: part.name for part in catalog.parts},
-            {location.pk: location.path for location in catalog.locations},
+            parts,
+            locations,
             inventree_url=self.settings.inventree.url,
             approved_by=plan.approved_by,
             undo=undo,
+            learned=[(alias.text, _record_name(alias, parts, locations)) for alias in taught],
         )
         return states, body
 
@@ -2310,3 +2362,10 @@ def _log_failure(what: str, which: object, error: Exception) -> None:
     frames = traceback.extract_tb(error.__traceback__)
     where = f"{Path(frames[-1].filename).name}:{frames[-1].lineno}" if frames else "?"
     log.error("%s %s: failed (%s at %s)", what, which, type(error).__name__, where)
+
+
+def _record_name(alias: StoredAlias, parts: Mapping[int, str], locations: Mapping[int, str]) -> str:
+    """The name of the part or location `alias` names, as a receipt shows it; its kind and id when the catalog has
+    none."""
+    names = parts if alias.kind is AliasKind.PART else locations
+    return names.get(alias.record, f"{alias.kind} {alias.record}")
