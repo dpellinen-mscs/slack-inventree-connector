@@ -4,10 +4,11 @@
 -- posts use, and the Slack user id for one with a word like "my" (per-user aliases, M4). `rivals` is the JSON list of
 -- the records the whole-word and fuzzy rules fitted when it was confirmed; a record that fits later and is not in it
 -- makes the alias ambiguous. NULL for an alias an admin typed, which is never rechecked this way. `request_id` is the
--- verified request the confirmation moved stock in, so an undo can offer to forget what it taught.
+-- verified request the confirmation moved stock in, so an undo can offer to forget what it taught. AUTOINCREMENT: an
+-- admin removes aliases by id (`stockthread aliases remove`), and the audit log names them by id, so none is reused.
 
 CREATE TABLE aliases (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK (kind IN ('part', 'location')),
     text TEXT NOT NULL CHECK (text <> ''),
     words TEXT NOT NULL CHECK (words <> ''),
