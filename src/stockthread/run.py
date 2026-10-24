@@ -28,7 +28,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
-from stockthread.applier import GateNow, approve_by_click, approve_by_policy, work_request
+from stockthread.applier import GateNow, approve_by_click, approve_by_policy, plan_expired, work_request
 from stockthread.apply import Applied, ApplyReader, Sender, undo_apply
 from stockthread.catalog import assign_vehicles, load_catalog, with_aliases
 from stockthread.config import Settings
@@ -261,12 +261,14 @@ def inventree_steps(
     beat: Callable[[], None],
     connect: Connect | None = None,
     limit: float | None = None,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> tuple[Stepper, Undoer]:
     """The worker's apply step (`applier.work_request`) and undo (`apply.undo_apply`) against InvenTree, for
     `writes.enabled`. Each call opens its own reader and writer (`connect`) and reads the server's version again: a
     server that is no longer tested for writes blocks the apply at the gate (ADR 0016) and refuses the undo. The
     vehicles are the catalog's (`catalog`, the cache), read before the step of an `approved` request only, and the
-    lock is beaten (`beat`) after that read.
+    lock is beaten (`beat`) after that read. A plan expires `slack.plan_expiry_hours` after its post, on `clock`, as
+    the worker counts it: one that expired before its first write goes back to review (`applier.work_request`).
 
     Each call is cut off after `limit` seconds (by default before the instance lock could go stale), and begins no
     write once less than SEND_MARGIN_TIMEOUTS times `inventree.timeout_seconds` is left: a cut-off then ends a read,
@@ -280,6 +282,10 @@ def inventree_steps(
     opened = connect or (lambda: _clients(settings))
     writing = threading.Lock()
 
+    def expired(post: PostKey) -> bool:
+        at = Decimal(str(clock().timestamp()))
+        return plan_expired(store, post, at, settings.slack.plan_expiry_hours)
+
     def step(key: RequestKey) -> Applied:
         vehicles: dict[str, int] = {}
         if store.request(key).state is RequestState.APPROVED:
@@ -292,7 +298,7 @@ def inventree_steps(
                 now = GateNow(Policy.of(settings, check_version(await reader.server_info())), vehicles)
                 return await work_request(
                     key, store=store, reader=reader, writer=writer, lock=anyio.Lock(), lock_owner=owner,
-                    gate_now=lambda: now, settle=settle, send_by=send_by,
+                    gate_now=lambda: now, expired=expired, settle=settle, send_by=send_by,
                 )  # fmt: skip
 
         with writing:

@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -107,6 +107,7 @@ async def test_a_clear_take_out_is_approved_by_the_policy_written_once_and_verif
             lock=lock,
             lock_owner=OWNER,
             gate_now=lambda: now,
+            expired=lambda _: False,
             settle=timedelta(seconds=60),
         )
     assert applied.problems == (), applied.problems
@@ -133,7 +134,11 @@ def test_the_run_loops_steps_write_once_read_back_and_undo_on_the_real_server(st
          "INVENTREE_TOKEN": token().get_secret_value()},
     )  # fmt: skip
     vehicles = Catalog((), (), vehicles={SAM: scratch.other})
-    step, undo = inventree_steps(settings, lambda: vehicles, store, OWNER, beat=lambda: None)
+
+    def soon() -> datetime:  # the post's plan expires a day after it
+        return datetime.fromtimestamp(1700000300, UTC)
+
+    step, undo = inventree_steps(settings, lambda: vehicles, store, OWNER, beat=lambda: None, clock=soon)
     approve = policy_approver(settings, lambda: vehicles, store, OWNER, beat=lambda: None)  # the real version check
     judgement = approve(POST)
     assert judgement is not None
