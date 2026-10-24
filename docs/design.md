@@ -1495,8 +1495,18 @@ connector never has two InvenTree writes in flight and cannot race itself.
    in the run loop (`Worker.approve_due`, `run.policy_approver`, ADR 0019):
    once, right after the reply that made it is recorded, and only the plan
    a post's first dry run made; an outage puts the judgement off for at
-   most 10 minutes. A plan it does not approve waits for Apply, which is
-   not built yet.
+   most 10 minutes. A plan it does not approve waits for Apply: with writes
+   on, a dry-run reply that made a plan carries an Apply button (Slack asks
+   to confirm). A click counts only on the newest reply or notice of the
+   post that a dry run stored (`Store.dry_run_with_reply`; the button's value
+   is that dry run's revision) and approves the post's current plan, which
+   may be one a later dry run made again from the same reading
+   (`Worker._handle_apply`, `applier.approve_by_click`, `run.click_approver`).
+   A click that fails is not tried again: the clicker is told to try again.
+   An approver approves only what the reply showed (ADR 0016): a reply cut
+   to Slack's limits (`replies.shows_everything`: a section over 2,900
+   characters or more than 20 movements) carries no Apply button and says
+   why, and a click on it approves nothing.
 
 Built (steps 1 to 6 for one request, without the receipt): `apply.apply_request`.
 It takes the process's writer lock, and waits, nothing read and still

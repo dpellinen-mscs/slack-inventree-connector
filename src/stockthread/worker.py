@@ -121,6 +121,7 @@ from stockthread.slack.ingest import (
 )
 from stockthread.slack.replies import (
     ANSWER_ACTION,
+    APPLY_ACTION,
     CLICK_FEEDBACK,
     UNDO_ACTION,
     MovementView,
@@ -133,6 +134,9 @@ from stockthread.slack.replies import (
     receipt_replaced,
     rejection_notice,
     retraction_notice,
+    shows_everything,
+    with_apply,
+    with_no_apply,
     with_question,
     without_question,
 )
@@ -150,11 +154,17 @@ from stockthread.store import (
     StateConflict,
     Store,
     WaitingPost,
+    WriteBlocked,
     new_button_id,
 )
 from stockthread.store.db import DryRunRecord
 
 log = logging.getLogger(__name__)
+
+_REVISION = re.compile(r"[1-9][0-9]{0,5}")
+UNDO_REQUESTED = frozenset(
+    {RequestState.UNDOING, RequestState.UNDO_FAILED, RequestState.UNDO_UNKNOWN, RequestState.UNDONE}
+)
 
 GRACE_SECONDS = 10
 """Added to the sibling window before a post is due: delivery takes time, and clocks differ."""
@@ -320,6 +330,10 @@ Approver = Callable[[PostKey], Judgement | None]
 """post -> `applier.approve_by_policy` of its current plan (run.py gives it the store, the instance lock's owner and
 what the gate reads now: the settings, the server's version check and the vehicles)."""
 
+ClickApprover = Callable[[PostKey, int, str, Decimal], Judgement | None]
+"""(post, plan revision, the Slack user who clicked Apply, the time of the click) -> `applier.approve_by_click` (run.py
+gives it the store, the instance lock's owner, what the gate reads now and the plan expiry)."""
+
 Stepper = Callable[[RequestKey], Applied]
 """request -> where `applier.work_request` left it (run.py gives it the InvenTree client, the writer lock, the
 instance lock's owner, what the gate reads now and the settle time)."""
@@ -334,6 +348,19 @@ UNDO_FEEDBACK = {
     "before relying on it.",
 }
 """What the clicker alone is told about each state an undo that started ends in."""
+APPLY_FEEDBACK = {
+    "approved": "Approved. It is checked again and written to InvenTree, and a receipt follows in this thread.",
+    "already_approved": "This movement was approved already.",
+    "undone": "This movement was undone. Post it again to move the stock again.",
+    "blocked": "Not applied: an earlier movement of this post is still being worked on or was written.",
+    "writes_off": "Not applied: writes are turned off in the connector's settings.",
+    "no_plan": "Not applied: this reply has nothing that could apply now.",
+    "post_changed": "Not applied: the post changed or is being worked on. Please try again in a moment.",
+    "not_rebuilt": "Not applied: the connector cannot rebuild this movement from its records.",
+    "not_shown": "Not applied: the reply is too long to show everything a write would do.",
+    "failed": "Not applied: something went wrong before anything was changed. Please try again in a few minutes.",
+}
+"""What the clicker alone is told about an Apply click (`Worker._handle_apply`). A refusal by the gate adds its why."""
 UNDO_WRITES_OFF = "Not undone: writes are turned off in the connector's settings. Undo it in InvenTree instead."
 UNDO_ALREADY = "This movement was undone already."
 UNDO_ERROR = "Not undone: something went wrong before anything was changed. Please try again in a few minutes."
@@ -379,6 +406,9 @@ class Worker:
     is written, read back or recovered."""
     approve: Approver | None = None
     """Approves a post's plan by the policy (`approve_due`). None while writes are off: no plan is approved."""
+    approve_click: ClickApprover | None = None
+    """Approves a post's plan for an approver who clicked Apply (`_handle_apply`). None while writes are off: no reply
+    gets an Apply button, and no click approves anything."""
     _to_approve: dict[PostKey, tuple[Decimal, int, Decimal]] = field(default_factory=dict)
     """Posts whose reply made a plan in this process, until the policy has judged it: when it was made, the failed
     judgements in a row, and the time before which it is not judged again. Kept in memory only: a plan not judged
@@ -524,6 +554,8 @@ class Worker:
             return EventStatus.DROPPED, "not_a_click"
         if click.action_id == UNDO_ACTION:
             return self._handle_undo(click)
+        if click.action_id == APPLY_ACTION:
+            return self._handle_apply(click)
         if click.action_id != ANSWER_ACTION:
             return EventStatus.DROPPED, "action_not_handled_yet"
         button = self.store.button(click.value)
@@ -555,7 +587,7 @@ class Worker:
         what came of it."""
         key = self.store.request_with_marker(click.value) if is_marker_id(click.value) else None
         if key is None:
-            return self._undo_told(click, EventStatus.DROPPED, "unknown_button", CLICK_FEEDBACK["unknown_button"])
+            return self._told(click, EventStatus.DROPPED, "unknown_button", CLICK_FEEDBACK["unknown_button"])
         plan = self.store.plan(key.post, key.revision)
         if (
             key.post.workspace_id != self.settings.slack.workspace_id
@@ -563,12 +595,12 @@ class Worker:
             or plan.receipt_ts is None
             or plan.receipt_ts != click.message_ts
         ):
-            return self._undo_told(click, EventStatus.DROPPED, "other_message", CLICK_FEEDBACK["other_message"])
+            return self._told(click, EventStatus.DROPPED, "other_message", CLICK_FEEDBACK["other_message"])
         try:
             rebuilt = plan_views(self.store, plan)
         except NotRebuilt as error:
             log.warning("undo of request %s: %s", key, error)
-            return self._undo_told(click, EventStatus.DROPPED, "not_rebuilt", UNDO_NOT_REBUILT)
+            return self._told(click, EventStatus.DROPPED, "not_rebuilt", UNDO_NOT_REBUILT)
         refused = undo_refusal(
             self.store,
             key,
@@ -580,9 +612,9 @@ class Worker:
         if refused is not None:
             # A second click, or this click handled again after its undo (a crash before the event was finished).
             text = UNDO_ALREADY if self.store.request(key).state is RequestState.UNDONE else f"Not undone: {refused}."
-            return self._undo_told(click, EventStatus.DROPPED, "undo_refused", text)
+            return self._told(click, EventStatus.DROPPED, "undo_refused", text)
         if self.undo is None:
-            return self._undo_told(click, EventStatus.DROPPED, "writes_off", UNDO_WRITES_OFF)
+            return self._told(click, EventStatus.DROPPED, "writes_off", UNDO_WRITES_OFF)
         before = self.store.request(key).state
         self.beat(now=True)  # the undo reads and writes InvenTree under its own deadlines
         try:
@@ -592,16 +624,71 @@ class Worker:
         except Exception as error:
             if self.store.request(key).state is before:
                 # Nothing was stored: the click may be handled again. Told only if it is not (`drain`).
-                self._undo_told(click, EventStatus.FAILED, "", UNDO_ERROR)
+                self._told(click, EventStatus.FAILED, "", UNDO_ERROR)
                 raise
             _log_failure("undo of request", key, error)
             applied = Applied(self.store.request(key).state, f"failed: {_code(error)}")
         log.info("undo of request %s: %s (%s)", key, applied.state, applied.why)
         if applied.state is before and applied.why.startswith("no undo: "):  # refused before its intent was stored
             why = applied.why.removeprefix("no undo: ")
-            return self._undo_told(click, EventStatus.DROPPED, "undo_refused", f"Not undone: {why}.")
+            return self._told(click, EventStatus.DROPPED, "undo_refused", f"Not undone: {why}.")
         text = UNDO_FEEDBACK.get(applied.state, f"The undo ended as {applied.state}. Look at it in InvenTree.")
-        return self._undo_told(click, EventStatus.DONE, applied.state.value, text)
+        return self._told(click, EventStatus.DONE, applied.state.value, text)
+
+    def _handle_apply(self, click: Click) -> tuple[EventStatus, str]:
+        """Approve the plan an approver's Apply click on a dry-run reply asks for (ADR 0019: a plan the policy does not
+        approve waits for Apply), after the checks against the stored reply: the clicked message is the reply a dry run
+        posted, the button's value is that dry run's revision, and no newer reply or notice of the post stands in the
+        thread. The post's current plan is approved (`approve_by_click`, which checks the approver, the
+        plan's revision and its expiry, and judges the gate with the click); it may be one made by a later dry run
+        that read the same and posted nothing. The ingest checks drop an Apply click from anyone but an approver.
+
+        Nothing is written here: `work_due` writes an approved plan, judged again under the writer lock. A click that
+        fails is not tried again later, so no plan is approved long after the click: the clicker is told to try again.
+        A reply too long to show the plan in full (`shows_everything`, with the catalog's names now) approves
+        nothing, though it carries no button. The clicker alone is told what came of it."""
+        found = self.store.dry_run_with_reply(self.settings.slack.workspace_id, click.channel, click.message_ts)
+        if found is None or not _REVISION.fullmatch(click.value) or int(click.value) != found[1]:
+            return self._told(click, EventStatus.DROPPED, "unknown_button", CLICK_FEEDBACK["unknown_button"])
+        post, revision = found
+        newest = [record.revision for record in self.store.dry_run_history(post) if record.reply_ts is not None]
+        if newest[-1] != revision:  # a newer reply or notice stands in the thread
+            return self._told(click, EventStatus.DROPPED, "other_message", CLICK_FEEDBACK["other_message"])
+        if self.approve_click is None:
+            return self._told(click, EventStatus.DROPPED, "writes_off", APPLY_FEEDBACK["writes_off"])
+        plan = self.store.current_plan(post)
+        if plan is None:
+            return self._told(click, EventStatus.DROPPED, "no_plan", APPLY_FEEDBACK["no_plan"])
+        self.beat(now=True)  # the judgement reads the catalog and the server's version
+        try:
+            # An approver approves only what the reply showed (ADR 0016): one cut short carries no button.
+            catalog = self.catalog()
+            parts = {part.pk: part.name for part in catalog.parts}
+            locations = {location.pk: location.path for location in catalog.locations}
+            if not shows_everything(plan_views(self.store, plan).views, parts, locations):
+                return self._told(click, EventStatus.DROPPED, "not_shown", APPLY_FEEDBACK["not_shown"])
+            judgement = self.approve_click(post, plan.revision, click.user, self._now())
+        except LockLost:
+            raise
+        except StateConflict:
+            return self._told(click, EventStatus.DROPPED, "post_changed", APPLY_FEEDBACK["post_changed"])
+        except WriteBlocked as error:
+            log.info("apply click on post %s: %s", post.ts, error)
+            return self._told(click, EventStatus.DROPPED, "blocked", APPLY_FEEDBACK["blocked"])
+        except NotRebuilt as error:
+            log.warning("apply click on post %s: %s", post.ts, error)
+            return self._told(click, EventStatus.DROPPED, "not_rebuilt", APPLY_FEEDBACK["not_rebuilt"])
+        except Exception as error:
+            _log_failure("apply click on post", post.ts, error)
+            return self._told(click, EventStatus.FAILED, _code(error), APPLY_FEEDBACK["failed"])
+        if judgement is None:
+            if any(row.state in UNDO_REQUESTED for row in plan.requests):
+                return self._told(click, EventStatus.DROPPED, "undone", APPLY_FEEDBACK["undone"])
+            return self._told(click, EventStatus.DROPPED, "already_approved", APPLY_FEEDBACK["already_approved"])
+        log.info("post %s: plan %s on an Apply click (%s)", post.ts, judgement.verdict, judgement.why)
+        if not judgement.allowed:
+            return self._told(click, EventStatus.DROPPED, "apply_refused", f"Not applied: {judgement.why}.")
+        return self._told(click, EventStatus.DONE, "approved", APPLY_FEEDBACK["approved"])
 
     def approve_due(self) -> int:
         """Let the policy judge each plan a reply made in this process (`approve`; ADR 0004 and 0019): a clear
@@ -841,7 +928,7 @@ class Worker:
         except Exception as error:
             _log_failure("replaced receipt of post", post.ts, error)
 
-    def _undo_told(self, click: Click, status: EventStatus, outcome: str, text: str) -> tuple[EventStatus, str]:
+    def _told(self, click: Click, status: EventStatus, outcome: str, text: str) -> tuple[EventStatus, str]:
         self._feedback = _Feedback(click.channel, click.user, click.thread_ts or click.message_ts, text)
         return status, outcome
 
@@ -1210,6 +1297,13 @@ class Worker:
                 plan=_plan(key, standing),  # the reply that stands is the one a plan acts on
             )
             return True
+        plan = _plan(key, decided)
+        if plan is not None and asked is None and self.approve_click is not None:
+            try:  # an approver approves only what they were shown (ADR 0016): a reply cut short gets no button
+                complete = shows_everything(views, parts, locations)
+                body = with_apply(body, post.revision) if complete else with_no_apply(body)
+            except Exception as error:  # the reply still says it could apply; the plan waits for a newer reply
+                _log_failure("apply button", key.ts, error)
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
         # before the outcome is recorded posts the reply again at restart; a duplicate beats a silent drop.
         self.store.close_siblings(self.owner, key)
@@ -1225,7 +1319,7 @@ class Worker:
                 changes,
                 answers,
                 question=asked,
-                plan=_plan(key, decided),
+                plan=plan,
             ),
         )
         return True

@@ -1264,10 +1264,22 @@ def test_without_writes_on_and_a_tested_server_the_worker_gets_no_apply_step(
         built.append("approver")
         raise AssertionError("no approval by the policy without writes on and a tested server")
 
+    def clicker(*_: Any, **__: Any) -> Any:
+        built.append("clicker")
+        raise AssertionError("no approval by a click without writes on and a tested server")
+
     with caplog.at_level(logging.INFO, logger="stockthread.run"):
-        assert (
-            run_with(database, stop, FakeConnection(), writes=writes, check=check, steps=steps, approver=approver) == 0
+        code = run_with(
+            database,
+            stop,
+            FakeConnection(),
+            writes=writes,
+            check=check,
+            steps=steps,
+            approver=approver,
+            clicker=clicker,
         )
+    assert code == 0
     assert built == []
     assert line in caplog.text
     store = Store.open_read_only(database)
@@ -1306,13 +1318,26 @@ def test_with_writes_on_and_a_tested_server_the_worker_runs_the_apply_step(
         assert catalog().parts == CATALOG.parts
         return lambda post: None
 
+    clickers: list[tuple[Any, Any]] = []
+
+    def clicker(settings: Settings, catalog: Any, store: Store, owner: str, *, beat: Any, check: Any) -> Any:
+        clickers.append((owner, check))
+        assert owner == built[0][2]
+        assert catalog().parts == CATALOG.parts
+        return lambda post, revision, user, at: None
+
     with caplog.at_level(logging.WARNING, logger="stockthread.run"):
-        assert run_with(database, stop, FakeConnection(), writes=True, steps=steps, approver=approver) == 0
+        assert (
+            run_with(database, stop, FakeConnection(), writes=True, steps=steps, approver=approver, clicker=clicker)
+            == 0
+        )
     assert len(built) == 1
     assert built[0][0].writes.enabled
     assert stepped == [key]
     assert len(approvers) == 1
     assert approvers[0][1](None) is TESTED  # the version check the run was given
+    assert len(clickers) == 1
+    assert clickers[0][1](None) is TESTED
     assert (
         "stock writes are ON: movements the policy approves (take_to_vehicle, take_to_site) are written, read back"
         " and can be undone" in caplog.text

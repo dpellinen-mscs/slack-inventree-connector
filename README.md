@@ -79,7 +79,8 @@ What to expect in this version:
 - Nothing is written to InvenTree while `writes.enabled` is false (the default). With it true, and
   an InvenTree version CI tests, a clear take-out to a vehicle or a site (`policy.auto_apply`) is
   written right after its dry run, read back, and reported in the thread with an Undo button. Every
-  other movement waits for an Apply button this version does not have yet, so it is not written.
+  other movement that could apply waits for an approver (`slack.approvers`) to click Apply on its
+  dry-run reply; Slack asks them to confirm first.
 - The built-in extractor reads simple one-line posts. What it cannot read, it leaves unanswered.
 - Optionally, a model reads the posts the built-in extractor cannot: uncomment the `[llm]` section
   in `stockthread.toml` and point it at any OpenAI-compatible endpoint (a hosted provider with

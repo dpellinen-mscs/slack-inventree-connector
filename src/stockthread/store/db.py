@@ -1414,6 +1414,30 @@ class Store:
     def request(self, key: RequestKey) -> RequestRow:
         return self._request(key)[0]
 
+    def dry_run_with_reply(self, workspace_id: str, channel_id: str, reply_ts: str) -> tuple[PostKey, int] | None:
+        """The post, and the revision of its dry run, whose reply or notice in the thread is the message `reply_ts`
+        of the channel (the message an Apply button is on), or None when no dry run posted it."""
+        rows = self._db.execute(
+            "SELECT o.ts, 1 FROM posts o WHERE o.workspace_id = ?1 AND o.channel_id = ?2 AND o.reply_ts = ?3"
+            " UNION ALL SELECT o.ts, d.revision FROM dry_run_revisions d JOIN posts o ON o.id = d.post_id"
+            " WHERE o.workspace_id = ?1 AND o.channel_id = ?2 AND d.reply_ts = ?3",
+            (workspace_id, channel_id, reply_ts),
+        ).fetchall()
+        if len(rows) != 1:
+            return None  # a Slack ts names one message of a channel: two dry runs never posted the same one
+        ts, revision = rows[0]
+        return PostKey(workspace_id, channel_id, ts), int(revision)
+
+    def undone_before(self, post: PostKey, revision: int) -> bool:
+        """Whether an undo of a request of an earlier plan revision of the post was asked for (whatever came of it)."""
+        row = self._db.execute(
+            "SELECT 1 FROM requests r JOIN plans p ON p.id = r.plan_id JOIN posts o ON o.id = p.post_id"
+            " WHERE o.workspace_id = ? AND o.channel_id = ? AND o.ts = ? AND p.revision < ?"
+            " AND r.state IN ('undoing', 'undo_failed', 'undo_unknown', 'undone') LIMIT 1",
+            (post.workspace_id, post.channel_id, post.ts, revision),
+        ).fetchone()
+        return row is not None
+
     def request_with_marker(self, marker_id: str) -> RequestKey | None:
         """The request whose marker id is `marker_id` (the value of an Undo button), or None when there is none."""
         row = self._db.execute(
