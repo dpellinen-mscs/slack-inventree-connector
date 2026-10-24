@@ -11,6 +11,9 @@ Nothing is released yet. With `writes.enabled = true`, the connector writes clea
 
 ### Fixed
 
+- `stockthread trail` prints every character of Slack text that is not printable (control characters, DEL, C1
+  codes, bidi overrides) escaped as `\uXXXX` (a surrogate pair above U+FFFF), so a post or answer cannot move the
+  cursor or reorder the terminal line.
 - A consume of serialized stock no longer reads "could apply": InvenTree answers a remove on a serialized item with
   success and changes nothing, so the dry run shows the items and a review reason instead.
 - A question and the revisions of its post now expire at the same time, fixed by the post's first dry run
