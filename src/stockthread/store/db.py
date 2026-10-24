@@ -2141,11 +2141,13 @@ class Store:
 
         A post's text is kept while it may still be needed: while the post, any of its dry runs, or any change to one
         of its requests is newer than `before`, and while any request may have a write in flight (`UNSETTLED`) or is
-        still to be written or read back (`planned`, `approved`, `applied`) or due a receipt, whatever its age. An
+        still to be written or read back (`approved`, `applied`) or due a receipt, whatever its age. A `planned` request
+        does not keep it: nothing moves an unacted plan on, and once its last change is older than `before` its plan has
+        expired, so any click on it is refused before it reads the text. An
         event's body is kept with its post's text when the event is a message of that post, or an edit or deletion of
         one. Settings make `before` older than any plan's expiry, the catch-up window and undo's age limit
         (`StorageSettings.retention_days`)."""
-        busy = json.dumps(sorted(UNSETTLED | {S.PLANNED, S.APPROVED, S.APPLIED}))
+        busy = json.dumps(sorted(UNSETTLED | {S.APPROVED, S.APPLIED}))
         concluded = json.dumps(sorted(RECEIPT_STATES))
         kept = (  # the posts whose text is kept; a constant, never built from input
             "WITH kept(id) AS (SELECT id FROM posts o WHERE o.created_at >= ?1"

@@ -60,7 +60,9 @@ Three sources were possible:
   write; it can only block one (the gate or the precondition).
 - Retention, when it is built, must keep the record of every plan revision
   with a request that is not in a final state, or that an undo may still
-  reverse.
+  reverse. (Retention, PR #166: a `planned` request whose plan has expired
+  counts as final here. Nothing can approve it any more: a click is refused
+  as expired and the policy judges a plan only right after its reply.)
 - The record format is now an input of writes. A change to it needs the
   rebuild to read both the old and the new form, or a migration, and a
   round-trip test (record → views → record) guards it.

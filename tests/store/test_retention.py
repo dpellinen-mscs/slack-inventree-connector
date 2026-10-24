@@ -138,7 +138,18 @@ def test_an_old_event_of_no_post_is_blanked_once_finished_and_never_while_queued
     assert store.expire_text(OWNER, now() + LATER) == ExpiredText(posts=0, events=1)
 
 
-@pytest.mark.parametrize("state", [S.PLANNED, S.APPROVED, S.APPLYING, S.APPLIED])
+def test_an_old_plan_nobody_acted_on_is_blanked(store: Store, path: Path) -> None:
+    """With writes off no plan is ever applied; its post's text must still expire."""
+    replied(store)
+    assert store.request(KEY).state is S.PLANNED
+    assert store.expire_text(OWNER, now() - LATER) == ExpiredText(posts=0, events=0)
+    assert store.expire_text(OWNER, now() + LATER) == ExpiredText(posts=1, events=1)
+    results, bodies, _ = stored(path)
+    assert results[0] is None
+    assert bodies[0] is None
+
+
+@pytest.mark.parametrize("state", [S.APPROVED, S.APPLYING, S.APPLIED])
 def test_a_post_whose_request_may_still_be_written_or_read_back_keeps_its_text(
     store: Store, path: Path, state: RequestState
 ) -> None:
