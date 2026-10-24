@@ -1164,7 +1164,21 @@ can also steer the gate by what it omits. These rules close that path:
   catalog reads each part's InvenTree `units`; the quantity question names
   it ("in m", or "in pieces" when the part has none) when the line's part
   is matched surely enough to write, and else asks for "the part's
-  stocking unit". `plan_requests` refuses a line that still has a unit.
+  stocking unit". `plan_requests` refuses a line that still has a unit,
+  with one exception: a length in its part's own unit ("50 m" of a part
+  whose `units` is m, meter or metre; "50 ft" of one in ft, foot or feet)
+  is a count of that unit. Only the same unit counts, never a conversion,
+  and only for a part matched surely enough to write: validate is given
+  that part's units, and spares the line's unit reason and the reason of
+  the one measure that states its quantity in that unit. Any other measure
+  or container word in the text still raises, and so does anything that
+  may multiply the measure: every number in the text (outside the place
+  texts and words like "cat6") must be one line's quantity, one for one,
+  with no "x2", "twice", "each", "runs of" or number word ("3 runs of
+  50 m" would otherwise write 50), and "50 M" is not a metre. The record keeps the units
+  on the line (`part_units`), and right before the write, under the writer
+  lock, the part's units are read from InvenTree again: a part stocked in
+  another unit since then sends the plan back to review unwritten.
 - **Matching is deterministic** and takes only the item text, the location
   text and the poster as input (section 10). The extraction prompt never
   contains catalog or alias data, so the model cannot learn part names to

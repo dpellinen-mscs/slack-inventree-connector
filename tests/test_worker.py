@@ -4762,3 +4762,88 @@ def test_the_worker_expires_old_text_at_most_once_an_hour(
     assert worker.step() == 3
     start = datetime.fromtimestamp(1790000000, UTC)
     assert passes == [start - timedelta(days=30), start + timedelta(hours=1) - timedelta(days=30)]
+
+
+# A length in the part's own unit (validate `stocking`): "50 m" of a part stocked in m is a count of m.
+
+
+def cable_record(store: Store, clock: Clock, catalog: Catalog, text: str) -> dict[str, Any]:
+    """The record of the one dry run of `text`, read against `catalog`."""
+    worker = Worker(settings(), store, OWNER, FakeSlack(), lambda: catalog, clock)
+    enqueue(store, message("1790000000.000100", text))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    (record,) = store.dry_run_history(PostKey(WORKSPACE, CHANNEL, "1790000000.000100"))
+    assert record.outcome is DryRunOutcome.REPLIED
+    assert record.result is not None
+    return dict(record.result)
+
+
+def cables(units: str, name: str = "Drop cable") -> Catalog:
+    return Catalog(parts=(PartRecord(3, "DROP-1", name, units=units),), locations=CATALOG.locations)
+
+
+def pack_reasons(record: dict[str, Any]) -> list[str]:
+    return [r["detail"] for r in record["movements"][0]["reasons"] if r["code"] == ReasonCode.PACK_UNIT_AMBIGUOUS.value]
+
+
+def test_a_length_of_an_exactly_matched_part_in_its_own_unit_asks_nothing_about_it(store: Store, clock: Clock) -> None:
+    record = cable_record(store, clock, cables("m"), "took 50 m of drop cable from main stock to truck 1")
+    assert pack_reasons(record) == []
+    assert record["movements"][0]["items"][0]["part_units"] == "m"
+
+
+@pytest.mark.parametrize("units", ["", "ft", "box"])
+def test_a_length_of_a_part_in_another_or_no_unit_still_asks(store: Store, clock: Clock, units: str) -> None:
+    record = cable_record(store, clock, cables(units), "took 50 m of drop cable from main stock to truck 1")
+    assert pack_reasons(record) == ["line 1: a unit other than a count", "line 1: measure in the text"]
+    assert "part_units" not in record["movements"][0]["items"][0]
+
+
+def test_a_length_of_a_loosely_matched_part_still_asks(store: Store, clock: Clock) -> None:
+    """The part's units are trusted only for a match that can authorize a write."""
+    record = cable_record(store, clock, cables("m", "Drop cabel"), "took 50 m of drop cable from main stock to truck 1")
+    assert record["movements"][0]["items"][0]["part"]["rule"] == "fuzzy"
+    assert pack_reasons(record) == ["line 1: a unit other than a count", "line 1: measure in the text"]
+    assert "part_units" not in record["movements"][0]["items"][0]
+
+
+TWO_CABLES = Catalog(
+    parts=(
+        PartRecord(1, "DROP-P", "Drop cable Pro", units="m"),
+        PartRecord(2, "DROP-L", "Drop cable Lite", units="ft"),
+    ),
+    locations=CATALOG.locations,
+)
+
+
+@pytest.mark.parametrize(("button", "asks"), [(0, False), (1, True)])
+def test_a_part_picked_by_button_is_validated_again_with_its_units(
+    store: Store, clock: Clock, button: int, asks: bool
+) -> None:
+    """50 m of "drop cable": Pro is stocked in m, Lite in ft. The pick decides whether the length needs a question."""
+    worker = asked(store, clock, TWO_CABLES, "took 50 m of drop cable from main stock to truck 1")
+    reply, ts = posted(worker)
+    [item] = store.questions(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert item.question["ask"] == "choose_part"
+    clicked(store, click_on(reply, ts, button, SAM), "1")
+    worker.step()
+    clock.at("1790000200.000000")
+    worker.step()
+    history = store.dry_run_history(PostKey(WORKSPACE, CHANNEL, ROOT))
+    last = history[-1].result
+    assert len(history) == 2
+    assert last is not None
+    assert last["movements"][0]["items"][0]["part"]["record"] == button + 1
+    assert bool(pack_reasons(dict(last))) is asks
+    assert ("part_units" not in last["movements"][0]["items"][0]) is asks
+
+
+@pytest.mark.parametrize(("units", "plan"), [("m", [("current", [("transfer", "planned")])]), ("", [])])
+def test_a_length_in_its_parts_own_unit_with_its_stock_read_makes_a_plan(
+    store: Store, clock: Clock, path: Path, units: str, plan: list[Any]
+) -> None:
+    stocked(store, clock, FakeStock({(3, 10): [ok(57, 80)]}), "took 50 m of drop cable from main stock to truck 1",
+            cables(units))  # fmt: skip
+    assert [(state, requests) for _, _, state, requests in plans(path)] == plan

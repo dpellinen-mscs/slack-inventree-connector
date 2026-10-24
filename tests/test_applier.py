@@ -145,6 +145,50 @@ async def test_a_clear_take_out_is_approved_by_the_policy_and_written_once(store
     assert approve_by_policy(store, OWNER, POST, ON) is None  # nothing left to approve
 
 
+CABLE = view(
+    movement=replace(TAKE.movement, line_items=(replace(TAKE.movement.line_items[0], unit="m"),)),
+    stock=(picked((ITEM, "2")),),
+    units=("m",),
+)
+"""2 m of part 1, stocked in m when the plan was made."""
+
+
+@pytest.mark.anyio
+async def test_a_length_in_its_parts_own_unit_is_written_once_its_units_are_read_again(store: Store) -> None:
+    reply(store, record(CABLE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    fake = FakeInvenTree()
+    fake.units[1] = "meters"
+    assert await step(store, fake) == Applied(S.VERIFIED, "read back: as planned")
+    assert fake.units_read == [1]
+    assert [line["quantity"] for line in fake.sent[0].body["items"]] == ["2"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("now", ["ft", "", "box"])
+async def test_a_part_stocked_in_another_unit_since_the_plan_goes_back_to_review_unwritten(
+    store: Store, now: str
+) -> None:
+    reply(store, record(CABLE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    fake = FakeInvenTree()
+    fake.units[1] = now
+    assert await step(store, fake) == Applied(
+        S.PLANNED, "back to review: line 1: part 1 is not stocked in the line's unit now"
+    )
+    assert fake.sent == []
+    assert store.request(KEY).state is S.PLANNED
+
+
+@pytest.mark.anyio
+async def test_a_count_reads_no_units(store: Store) -> None:
+    reply(store, record(TAKE))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    fake = FakeInvenTree()
+    assert await step(store, fake) == Applied(S.VERIFIED, "read back: as planned")
+    assert fake.units_read == []
+
+
 def test_writes_off_approve_nothing(store: Store) -> None:
     reply(store, record(TAKE))
     judgement = approve_by_policy(store, OWNER, POST, OFF)

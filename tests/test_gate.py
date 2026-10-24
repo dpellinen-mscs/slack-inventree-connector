@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 
@@ -182,6 +183,42 @@ def test_validation_blocks_alone_whoever_clicks(undecided: MovementView, clicked
     judgement = run([undecided], clicked_by=clicked_by)
     assert judgement.verdict is Verdict.BLOCKED
     assert judgement.why.startswith("not decided: movement 1")
+    assert judgement.requests == ()
+
+
+def length(unit: str, pack_size: Decimal | None = None, **fields: Any) -> MovementView:
+    """2 of `unit` of part 1, a clear take-out otherwise."""
+    movement = view().movement
+    line = replace(movement.line_items[0], unit=unit, pack_size=pack_size)
+    return view(movement=replace(movement, line_items=(line,)), **fields)
+
+
+@pytest.mark.parametrize("clicked_by", [None, LUIS])
+def test_a_length_in_its_parts_own_unit_is_judged_like_a_count(clicked_by: str | None) -> None:
+    judgement = run([length("m", units=("metres",))], clicked_by=clicked_by)
+    assert judgement.allowed
+    (request,) = judgement.requests
+    assert [line["quantity"] for line in request.body["items"]] == ["2"]
+
+
+@pytest.mark.parametrize(
+    "undecided",
+    [
+        length("m"),  # the view has no units: they were not read, or the part may not authorize a write
+        length("m", units=(None,)),
+        length("ft", units=("m",)),
+        length("cm", units=("cm",)),
+        length("box", units=("box",)),
+        length("m", Decimal(50), units=("m",)),  # "2 rolls of 50 m"
+    ],
+)
+@pytest.mark.parametrize("clicked_by", [None, LUIS])
+def test_a_length_without_its_parts_own_unit_is_blocked_whoever_clicks(
+    undecided: MovementView, clicked_by: str | None
+) -> None:
+    judgement = run([undecided], clicked_by=clicked_by)
+    assert judgement.verdict is Verdict.BLOCKED
+    assert "is not a count" in judgement.why
     assert judgement.requests == ()
 
 

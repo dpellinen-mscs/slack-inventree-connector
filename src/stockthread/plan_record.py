@@ -126,7 +126,15 @@ def _view(number: int, stored: Mapping[str, Any]) -> MovementView:
         ),
         tuple(picks),
         named,
+        _units(lines),
     )
+
+
+def _units(lines: Sequence[Mapping[str, Any]]) -> tuple[str | None, ...]:
+    """The part units of each line, written only for a line in its part's own length unit; () when no line has
+    any. A record written before units were kept has none, and its length lines are refused by `plan_requests`."""
+    units = tuple(_text(item["part_units"]) if "part_units" in item else None for item in lines)
+    return units if any(unit is not None for unit in units) else ()
 
 
 def _match(stored: Mapping[str, Any] | None) -> Match | None:

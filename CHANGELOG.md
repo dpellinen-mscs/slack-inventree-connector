@@ -12,6 +12,14 @@ allows once an approver clicks Apply on its dry-run reply (by default returns, r
 reply too long to show in full carries no Apply button. An approved plan is never written once it has expired
 (`slack.plan_expiry_hours`): it goes back to review; a plan whose first write began is finished.
 
+### Changed
+
+- A length in its part's own unit ("50 m of drop cable" for a part stocked in m, "50 ft" for one in ft) asks no
+  quantity question and may apply, for a part matched surely enough to write. Units are never converted: cm, mm,
+  inches, any other unit, containers and anything that may multiply the length ("3 runs of 50 m", "2x 50 m",
+  "twice") still ask. The part's units are read from InvenTree again right before
+  the write, and a part stocked in another unit since the dry run goes back to review unwritten.
+
 ### Fixed
 
 - `stockthread trail` prints every character of Slack text that is not printable (control characters, DEL, C1

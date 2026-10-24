@@ -150,3 +150,27 @@ def test_a_record_whose_requests_cannot_be_built_makes_no_plan(decided: Movement
     assert stored["movements"][0]["gate"] == []
     assert views_of(stored, plan_hash(stored)) == [decided]
     assert plan_of(stored) is None
+
+
+def cable(units: tuple[str | None, ...] = ("m",)) -> MovementView:
+    """50 m of part 1, whose units the view holds as `units`."""
+    movement = CandidateMovement(
+        MovementType.TAKE_TO_VEHICLE, (LineItem("drop cable", Decimal(50), "m"),), "main stock", "my truck"
+    )
+    return view(movement=movement, stock=(picked((57, "50")),), units=units)
+
+
+def test_a_length_in_its_parts_own_unit_rebuilds_with_the_units_and_makes_a_plan() -> None:
+    stored = record(cable())
+    assert stored["movements"][0]["items"][0]["part_units"] == "m"
+    assert views_of(stored, plan_hash(stored)) == [cable()]
+    assert plan_of(stored) is not None
+
+
+def test_a_record_without_part_units_digests_as_before_and_its_length_makes_no_plan() -> None:
+    """A record written before units were kept: the same digest as then, and no request carries its length."""
+    stored = record(cable(()))
+    assert "part_units" not in stored["movements"][0]["items"][0]
+    assert "part_units" not in record(TO_TRUCK)["movements"][0]["items"][0]
+    assert views_of(stored, plan_hash(stored)) == [cable(())]
+    assert plan_of(stored) is None
