@@ -1989,12 +1989,27 @@ receives events only from channels it is a member of.
 
 A fault proxy between the connector and InvenTree delays, drops and
 corrupts responses (`tests/support/faultproxy.py`). Each fault happens
-either before the request reaches the server or after the server answered.
+either before the request reaches the server or after the server answered,
+and a held request reaches the server only when the test releases it.
 `test_char_failure_seen_by_client_hides_committed_transfer` shows that a
 client timeout, a lost connection, a proxy error page and a cut body can
 each hide a transfer that committed. The proxy drives the M3 tests for
-unknown outcomes, including
-`test_late_commit_after_client_timeout_never_double_applies`.
+unknown outcomes, including the two for a write that outlives the client
+timeout (`tests/integration/test_apply_server.py`):
+`test_an_answer_after_the_client_timeout_is_recovered_and_never_sent_again`
+(the server commits and answers late: recovery finds the marker) and
+`test_a_write_that_lands_after_recovery_concluded_failed_is_never_sent_again`
+(the write reaches the server only after recovery concluded `failed`: a
+person's retry and a new revision are refused before and after it lands,
+and the marker check reports it as a hit). A held write also opens the
+window between the precondition and the write:
+`test_another_users_change_between_the_precondition_and_the_write_is_found_and_blocks_the_post`
+takes stock from the item there, and the read-back names the other
+writer's entry (`verify_failed`, a receipt due, the post blocked).
+`test_a_crash_during_an_undo_is_recovered_after_a_restart` kills a run
+(`tests/support/crashing_undo.py`, SIGKILL) while its undo's write is
+held; the write then lands or never does, and the next start concludes
+it `undone` or `undo_failed`, never undoing twice.
 
 ## 12. Configuration
 

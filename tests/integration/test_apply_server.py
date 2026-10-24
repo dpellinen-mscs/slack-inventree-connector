@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from datetime import timedelta
 from decimal import Decimal
@@ -15,9 +17,10 @@ from faultproxy import Fault, FaultProxy, Rule
 from pydantic import SecretStr
 from views import picked, view
 
-from stockthread.apply import apply_request, recover_request, recover_undo, undo_apply
+from stockthread.apply import apply_request, check_post_markers, recover_request, recover_undo, undo_apply
 from stockthread.config import InvenTreeSettings
 from stockthread.core.marker import Marker
+from stockthread.core.marker_check import FindingKind
 from stockthread.core.model import Match, MatchRule, MatchStatus, Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.write_request import PATHS
@@ -25,7 +28,7 @@ from stockthread.gate import Judgement, Verdict
 from stockthread.inventree import InvenTreeReader
 from stockthread.plan import plan_requests
 from stockthread.slack.replies import MovementView
-from stockthread.store import Store
+from stockthread.store import Store, WriteBlocked
 from stockthread.writer import InvenTreeWriter
 
 if TYPE_CHECKING:
@@ -78,13 +81,15 @@ def token() -> SecretStr:
     return SecretStr(Path(os.environ["STOCKTHREAD_IT_TOKEN_FILE"]).read_text(encoding="utf-8").strip())
 
 
-def server(url: str | None = None) -> InvenTreeSettings:
-    return InvenTreeSettings(url=url or os.environ["STOCKTHREAD_IT_URL"], timeout_seconds=10)
+def server(url: str | None = None, timeout: int = 10) -> InvenTreeSettings:
+    return InvenTreeSettings(url=url or os.environ["STOCKTHREAD_IT_URL"], timeout_seconds=timeout)
 
 
-async def run(store: Store, movement: MovementView, write_via: str | None = None) -> RequestState:
-    """`write_via`: the URL the writer sends to (a fault proxy); the reader always reads the server itself."""
-    async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(write_via), token()) as writer:
+async def run(store: Store, movement: MovementView, write_via: str | None = None, timeout: int = 10) -> RequestState:
+    """`write_via`: the URL the writer sends to (a fault proxy), with `timeout`; the reader always reads the server
+    itself."""
+    writes = server(write_via, timeout)
+    async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(writes, token()) as writer:
         applied = await apply_request(
             KEY,
             movement,
@@ -233,6 +238,191 @@ async def test_recovery_of_an_unknown_undo_whose_item_was_deleted_concludes(
     assert recovered.state is RequestState.VERIFY_FAILED, recovered
     assert recovered.problems, recovered
     assert store.recorded_requests(POST)[0].attempts[-1].marker_found is landed
+
+
+def transfers_sent(proxy: FaultProxy) -> list[int | None]:
+    """The upstream status of every transfer the proxy saw: None for one that never reached the server."""
+    return [entry.upstream_status for entry in proxy.log if entry.path == PATHS[Operation.TRANSFER]]
+
+
+@pytest.mark.anyio
+async def test_an_answer_after_the_client_timeout_is_recovered_and_never_sent_again(
+    store: Store, scratch: Scratch, proxy: FaultProxy
+) -> None:
+    """M3 DoD: a response that arrives after the client timeout never leads to a second write. The server commits and
+    answers 3 s later, after the writer gave up at 1 s: unknown, then recovery finds the marker and reads it back.
+    A person asking to apply it again is refused, and so is a new revision of the post: the stock moved once."""
+    item = scratch.stock(5)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], "2")
+    proxy.inject(Rule("POST", PATHS[Operation.TRANSFER], Fault.DELAY, seconds=3.0))
+    assert await run(store, movement, write_via=proxy.url, timeout=1) is RequestState.UNKNOWN
+    assert [entry.upstream_status for entry in proxy.wait_for(1)] == [201]
+    assert await recover(store, movement) is RequestState.VERIFIED
+    with pytest.raises(ValueError, match="not approved"):  # the same request again
+        await run(store, movement, write_via=proxy.url)
+    revision = store.create_plan(POST, "1" * 64, (Operation.TRANSFER,))
+    with pytest.raises(WriteBlocked, match="left a stock change behind"):
+        store.transition(
+            RequestKey(POST, revision, 1), expected=RequestState.PLANNED, target=RequestState.APPROVED,
+            actor=Actor.HUMAN,
+        )  # fmt: skip
+    assert transfers_sent(proxy) == [201]
+    assert len(store.markers(KEY)) == 1
+    moved = scratch.api.items(scratch.part, scratch.other)
+    assert sum(Decimal(str(row["quantity"])) for row in moved) == Decimal(2)
+    assert Decimal(str(scratch.item(item["pk"])["quantity"])) == Decimal(3)
+
+
+@pytest.mark.anyio
+async def test_a_write_that_lands_after_recovery_concluded_failed_is_never_sent_again(
+    store: Store, scratch: Scratch, proxy: FaultProxy
+) -> None:
+    """M3 DoD: the same with the worst timing (ADR 0015). The write reaches the server only after the writer gave up
+    and after recovery found no marker and no change (`failed`). Before it lands and after, a person's retry and a
+    new revision of the post are refused, so nothing else is sent; once it lands the marker check reports it."""
+    item = scratch.stock(5)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], "2")
+    proxy.inject(Rule("POST", PATHS[Operation.TRANSFER], Fault.HOLD))
+    assert await run(store, movement, write_via=proxy.url, timeout=1) is RequestState.UNKNOWN
+    proxy.wait_held()
+    assert await recover(store, movement) is RequestState.FAILED
+    with pytest.raises(WriteBlocked, match="may still land"):  # a person's retry of the same request
+        store.transition(KEY, expected=RequestState.FAILED, target=RequestState.APPROVED, actor=Actor.HUMAN)
+    revision = store.create_plan(POST, "1" * 64, (Operation.TRANSFER,))  # an edit: the post's next revision
+
+    def refused() -> None:
+        with pytest.raises(WriteBlocked, match="may still land"):
+            store.transition(
+                RequestKey(POST, revision, 1), expected=RequestState.PLANNED, target=RequestState.APPROVED,
+                actor=Actor.HUMAN,
+            )  # fmt: skip
+
+    refused()
+    async with InvenTreeReader(server(), token()) as reader:
+        assert await check_post_markers(reader, store, POST) == []
+    proxy.release()
+    assert proxy.wait_for(1)[0].upstream_status == 201  # it landed, after recovery
+    refused()
+    async with InvenTreeReader(server(), token()) as reader:
+        findings = await check_post_markers(reader, store, POST)
+    assert [(finding.key, finding.kind) for finding in findings] == [(KEY, FindingKind.HIT)], findings
+    assert transfers_sent(proxy) == [201]
+    moved = scratch.api.items(scratch.part, scratch.other)
+    assert sum(Decimal(str(row["quantity"])) for row in moved) == Decimal(2)
+    assert Decimal(str(scratch.item(item["pk"])["quantity"])) == Decimal(3)
+
+
+@pytest.mark.anyio
+async def test_another_users_change_between_the_precondition_and_the_write_is_found_and_blocks_the_post(
+    store: Store, scratch: Scratch, proxy: FaultProxy
+) -> None:
+    """M3 DoD: a stock change by another user between precondition and write is detected and reported. The transfer
+    of 2 is held on its way while someone takes 4 of the 5, then lands and moves the 1 left. The read-back names the
+    other writer's entry: `verify_failed`, a receipt is due for it, and no new revision of the post is approved."""
+    item = scratch.stock(5)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], "2")
+    proxy.inject(Rule("POST", PATHS[Operation.TRANSFER], Fault.HOLD))
+    states: list[RequestState] = []
+    problems: list[str] = []
+
+    async def write() -> None:
+        async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(proxy.url), token()) as writer:
+            applied = await apply_request(
+                KEY, movement, allowed(movement), store=store, reader=reader, writer=writer, lock=anyio.Lock(),
+                lock_owner=OWNER,
+            )  # fmt: skip
+        states.append(applied.state)
+        problems.extend(applied.problems)
+
+    def take() -> None:
+        scratch.api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 4}], "notes": "x"})
+        proxy.release()
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(write)
+        await anyio.to_thread.run_sync(proxy.wait_held)
+        assert store.request(KEY).state is RequestState.APPLYING  # the precondition held, the intent is stored
+        await anyio.to_thread.run_sync(take)
+    assert states == [RequestState.VERIFY_FAILED], (states, problems)
+    assert store.request(KEY).state is RequestState.VERIFY_FAILED
+    assert any(problem.endswith(" are another writer's, during the apply") for problem in problems), problems
+    assert store.receipts_due() == [(POST, 1)]
+    revision = store.create_plan(POST, "1" * 64, (Operation.TRANSFER,))
+    with pytest.raises(WriteBlocked, match="left a stock change behind"):
+        store.transition(
+            RequestKey(POST, revision, 1), expected=RequestState.PLANNED, target=RequestState.APPROVED,
+            actor=Actor.HUMAN,
+        )  # fmt: skip
+    assert transfers_sent(proxy) == [201]
+    moved = scratch.api.items(scratch.part, scratch.other)  # the 1 left moved whole, not the 2 planned
+    assert sum(Decimal(str(row["quantity"])) for row in moved) == 1
+    assert scratch.api.items(scratch.part, scratch.parent) == []
+
+
+@pytest.mark.parametrize("landed", [True, False])
+@pytest.mark.anyio
+async def test_a_crash_during_an_undo_is_recovered_after_a_restart(
+    store: Store, scratch: Scratch, proxy: FaultProxy, tmp_path: Path, landed: bool
+) -> None:
+    """M3 DoD: a crash during undo is recovered. A run of its own starts the undo of a verified transfer and is killed
+    (SIGKILL) while its write is held on the way, leaving `undoing`. The write then lands, or never does. The next
+    start concludes it `undo_unknown`, and recovery finds it `undone` with every total back, or `undo_failed` with the
+    apply's stock standing; either way a second undo is refused, so the stock moves back at most once."""
+    item = scratch.stock(5)
+    approved(store, Operation.TRANSFER)
+    movement = taken(scratch, item["pk"], "2")
+    assert await run(store, movement) is RequestState.VERIFIED
+    store.release_lock(OWNER)
+    store.close()
+    proxy.inject(Rule("POST", PATHS[Operation.TRANSFER], Fault.HOLD))
+    script = Path(__file__).parents[1] / "support" / "crashing_undo.py"
+    args = (tmp_path / "stockthread.db", proxy.url, item["pk"], scratch.part, scratch.parent, scratch.other, "2")
+    crashing = subprocess.Popen([sys.executable, str(script), *map(str, args)])  # noqa: S603 (our own script)
+    try:
+        await anyio.to_thread.run_sync(proxy.wait_held)
+    finally:
+        crashing.kill()
+        crashing.wait()
+    if landed:
+        proxy.release()
+        assert proxy.wait_for(1)[0].upstream_status == 201
+
+    restarted = Store.open(tmp_path / "stockthread.db")
+    try:
+        assert restarted.request(KEY).state is RequestState.UNDOING
+        restarted.acquire_lock("worker-it-restarted", stale_after=timedelta(0))  # the killed run's lock is stale
+        assert restarted.conclude_crashed_writes("worker-it-restarted") == [KEY]
+        assert restarted.request(KEY).state is RequestState.UNDO_UNKNOWN
+        lock = anyio.Lock()
+        async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(), token()) as writer:
+            recovered = await recover_undo(
+                KEY, movement, store=restarted, reader=reader, lock=lock, settle=timedelta(0)
+            )
+            assert recovered.problems == (), recovered.problems
+            assert recovered.state is (RequestState.UNDONE if landed else RequestState.UNDO_FAILED)
+            if landed:
+                with pytest.raises(ValueError, match="is undone, not one an undo may start from"):
+                    await undo_apply(
+                        KEY, movement, store=restarted, reader=reader, writer=writer, lock=lock,
+                        lock_owner="worker-it-restarted", user="U0DAN0001",
+                    )  # fmt: skip
+            else:  # it may still land: a second undo would reverse the apply twice
+                again = await undo_apply(
+                    KEY, movement, store=restarted, reader=reader, writer=writer, lock=lock,
+                    lock_owner="worker-it-restarted", user="U0DAN0001",
+                )  # fmt: skip
+                assert again.state is RequestState.UNDO_FAILED, again
+                assert again.why.startswith("no undo: an earlier undo of this request was not refused"), again
+    finally:
+        restarted.close()
+    assert transfers_sent(proxy) == ([201] if landed else [])
+    moved = scratch.api.items(scratch.part, scratch.other)
+    assert sum(Decimal(str(row["quantity"])) for row in moved) == (0 if landed else Decimal(2))
+    back = scratch.api.items(scratch.part, scratch.parent)
+    assert sum(Decimal(str(row["quantity"])) for row in back) == (Decimal(5) if landed else Decimal(3))
 
 
 @pytest.mark.anyio
