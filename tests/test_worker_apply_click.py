@@ -289,6 +289,36 @@ def test_a_click_on_a_reply_a_newer_one_replaced_approves_nothing(store: Store, 
     assert store.request(RequestKey(POST, 2, 1)).state is S.APPROVED
 
 
+def test_a_click_on_a_reply_whose_newer_reply_lost_its_ts_approves_nothing(store: Store, clock: Clock) -> None:
+    """A revised reply stored with no ts still made the current plan: the older reply's button must not approve it."""
+    clicking = Clicking(store)
+    worker = replied(store, clock, clicking)
+    fake = slack(worker)
+    post_message = fake.chat_postMessage
+
+    def no_ts(**kwargs: Any) -> dict[str, Any]:
+        post_message(**kwargs)
+        return {"ok": True, "ts": None}
+
+    fake.chat_postMessage = no_ts  # type: ignore[method-assign]
+    enqueue(store, edit("1790000040.000100", BACK, "returned 3 Disc 40 from truck 1 to main stock"))
+    clock.at("1790000100.000000")
+    worker.step()
+    assert len(fake.posted) == 2
+    history = store.dry_run_history(POST)
+    assert [(record.revision, record.reply_ts is None) for record in history] == [(1, False), (2, True)]
+    plan = store.current_plan(POST)
+    assert plan is not None
+    assert plan.revision == 2
+    fake.chat_postMessage = post_message  # type: ignore[method-assign]
+    click(store, worker, reply=0)
+    worker.drain()
+    assert last_event(store) == (EventStatus.DROPPED, "other_message")
+    assert told(worker) == [(LUIS, CLICK_FEEDBACK["other_message"])]
+    assert clicking.calls == []
+    assert store.request(RequestKey(POST, 2, 1)).state is S.PLANNED
+
+
 def test_a_click_on_the_reply_that_stands_approves_the_plan_an_edit_made_again(store: Store, clock: Clock) -> None:
     """An edit that reads the same posts nothing; the plan it makes again is the one the standing reply shows."""
     clicking = Clicking(store)

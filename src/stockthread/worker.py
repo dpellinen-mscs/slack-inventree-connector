@@ -638,10 +638,10 @@ class Worker:
     def _handle_apply(self, click: Click) -> tuple[EventStatus, str]:
         """Approve the plan an approver's Apply click on a dry-run reply asks for (ADR 0019: a plan the policy does not
         approve waits for Apply), after the checks against the stored reply: the clicked message is the reply a dry run
-        posted, the button's value is that dry run's revision, and no newer reply or notice of the post stands in the
-        thread. The post's current plan is approved (`approve_by_click`, which checks the approver, the
-        plan's revision and its expiry, and judges the gate with the click); it may be one made by a later dry run
-        that read the same and posted nothing. The ingest checks drop an Apply click from anyone but an approver.
+        posted, the button's value is that dry run's revision, and every dry run of the post since then read the same
+        and posted nothing (`UNCHANGED`). The post's current plan is approved (`approve_by_click`, which checks the
+        approver, the plan's revision and its expiry, and judges the gate with the click) only if one of those dry
+        runs made it. The ingest checks drop an Apply click from anyone but an approver.
 
         Nothing is written here: `work_due` writes an approved plan, judged again under the writer lock. A click that
         fails is not tried again later, so no plan is approved long after the click: the clicker is told to try again.
@@ -651,13 +651,16 @@ class Worker:
         if found is None or not _REVISION.fullmatch(click.value) or int(click.value) != found[1]:
             return self._told(click, EventStatus.DROPPED, "unknown_button", CLICK_FEEDBACK["unknown_button"])
         post, revision = found
-        newest = [record.revision for record in self.store.dry_run_history(post) if record.reply_ts is not None]
-        if newest[-1] != revision:  # a newer reply or notice stands in the thread
+        # Every dry run since the clicked one read the same and posted nothing. Any other, even one whose message's
+        # ts was not stored, may have made a plan the clicked reply does not show (ADR 0016).
+        later = [record for record in self.store.dry_run_history(post) if record.revision > revision]
+        if any(record.outcome is not DryRunOutcome.UNCHANGED for record in later):
             return self._told(click, EventStatus.DROPPED, "other_message", CLICK_FEEDBACK["other_message"])
+        shown = {revision, *(record.revision for record in later)}
         if self.approve_click is None:
             return self._told(click, EventStatus.DROPPED, "writes_off", APPLY_FEEDBACK["writes_off"])
         plan = self.store.current_plan(post)
-        if plan is None:
+        if plan is None or plan.revision not in shown:
             return self._told(click, EventStatus.DROPPED, "no_plan", APPLY_FEEDBACK["no_plan"])
         self.beat(now=True)  # the judgement reads the catalog and the server's version
         try:
