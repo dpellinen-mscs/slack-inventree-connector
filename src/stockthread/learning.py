@@ -2,22 +2,23 @@
 fuzzy match or a person's pick in the thread decided becomes an alias of the record it was decided for. The worker
 stores them once every request of the plan is verified (`Worker.work_due`); a plan the policy approved, a dry run and
 anything a model suggested teach nothing. A name a person typed in the thread for a line or a place teaches the
-post's own text for it ("ubiquity psu" was the part the poster named), not the typed name.
+post's own text for it, not the typed name, under the same rules.
 
 The gate writes no plan with a bare whole-word or fuzzy match (`Match.can_authorize_a_write`): the thread asks to
 confirm it first, and the poster's "yes" or pick makes it an answer match. Those rules stay listed so a plan that ever
 holds one is taught the same way.
 
 A lesson needs all of these:
-- The text is the poster's own words: it occurs in the post's messages. An item or place text the model wrote, or
-  read from a photo, is never learned (only confirmed human corrections become aliases).
+- The text is the poster's own words: it occurs in a message the poster wrote, as the plan's dry run read it. An
+  item or place text the model wrote, or read from a photo, is never learned (only confirmed human corrections
+  become aliases).
 - It has a word with a letter, and no word whose meaning depends on who posted it or when ("my van", "this cable",
   "the usual ones"): everyone's posts use an alias, and per-user aliases are not built yet (M4).
-- Its record is the only record the whole-word and fuzzy rules fit it to now, with or without its articles, or it
-  fits none ("ubiquity psu" typed
-  as a part's name). A text that fits other records ("cable" picked among three cables, "norvane 40" corrected to a
-  Disc 60) would make every later post that says it a write to the record picked once; it is asked again instead.
-  A place named only by a vehicle word ("the van") is never learned either.
+- Its record is the one record the whole-word and fuzzy rules fit it to now, with or without its articles. A text
+  that fits other records too ("cable" picked among three cables) would make every later post that says it a write
+  to the record picked once, and a text that fits no record ("hdmi cable" corrected to a DisplayPort cable, "the
+  regular") names nothing the catalog backs: both are asked again instead. A place named only by a vehicle word
+  ("the van") is never learned either.
 - The same plan decided it for one record only."""
 
 from __future__ import annotations
@@ -94,7 +95,7 @@ def lessons(views: Sequence[MovementView], catalog: Catalog, poster: str, said: 
         rivals = _rivals(kind, text, catalog, poster)
         # "the truck" fits no record by its words, but "truck" fits every truck: the articles do not count.
         plain = " ".join(word for word in words(text) if word not in ARTICLES)
-        if i in clashing or not rivals | _rivals(kind, plain, catalog, poster) <= {record}:
+        if i in clashing or rivals | _rivals(kind, plain, catalog, poster) != {record}:
             continue
         if kind is AliasKind.LOCATION and set(words(plain)) <= VEHICLE_WORDS:
             continue

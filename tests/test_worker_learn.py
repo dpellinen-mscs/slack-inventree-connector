@@ -369,3 +369,17 @@ def test_a_confirmed_whole_word_take_out_waits_for_apply_once_and_then_applies_w
     assert store.request(RequestKey(second, 1, 1)).state is S.VERIFIED
     assert store.plan(second, 1).approved_by is None
     assert [sent.body["items"] for sent in inventree.sent][-1] == [{"pk": 59, "quantity": "2", "merge": False}]
+
+
+def test_only_the_posters_own_messages_say_a_text(store: Store) -> None:
+    clicked(store)
+    running = worker(store, FakeInvenTree())
+
+    def messages(post: PostKey, changes: int) -> tuple[list[MessageInput], str, bool, dict[str, str]]:
+        said = [MessageInput(post.ts, "took the two blue APs to my truck"), MessageInput("1700000002.000100", SAID)]
+        return said, SAM, False, {post.ts: SAM, "1700000002.000100": LUIS}
+
+    running._messages = messages  # type: ignore[method-assign,assignment]
+    running.work_due()
+    assert store.request(KEY).state is S.VERIFIED
+    assert store.stored_aliases() == ()  # "Norvane 40" is in Luis's reply, not in Sam's post

@@ -89,9 +89,12 @@ def test_a_text_that_fits_any_other_record_is_not_learned(text: str, record: int
     assert taught(take(text, matched(MatchRule.EXACT, record), named={0: "DISC-60"})) == []
 
 
-def test_a_name_typed_in_the_thread_teaches_the_posts_own_text_when_it_fits_nothing_else() -> None:
-    corrected = take("ubiquity psu", matched(MatchRule.EXACT, 3), named={0: "PC-1"})
-    assert taught(corrected) == [Lesson(PART, "ubiquity psu", 3, frozenset(), 1)]
+def test_a_name_typed_in_the_thread_teaches_the_posts_own_text_only_when_it_fits_that_record_alone() -> None:
+    corrected = take("patch cables", matched(MatchRule.EXACT, 3), named={0: "PC-1"})
+    assert taught(corrected) == [Lesson(PART, "patch cables", 3, frozenset({3}), 1)]
+    # Texts the catalog does not back: a different product, a nickname, a generic phrase.
+    for text in ("hdmi cable", "ubiquity psu", "the regular", "big box", "extra"):
+        assert taught(take(text, matched(MatchRule.EXACT, 3), named={0: "PC-1"})) == [], text
 
 
 def test_a_name_typed_for_a_line_the_post_named_nothing_for_teaches_nothing_new() -> None:
@@ -101,7 +104,7 @@ def test_a_name_typed_for_a_line_the_post_named_nothing_for_teaches_nothing_new(
 
 def test_places_are_learned_after_parts_and_my_truck_never() -> None:
     movement = CandidateMovement(
-        MovementType.TAKE_TO_VEHICLE, (LineItem("patch cable", Decimal(2)),), "the shop", "my truck"
+        MovementType.TAKE_TO_VEHICLE, (LineItem("patch cable", Decimal(2)),), "main", "my truck"
     )
     picked = view(
         movement=movement,
@@ -109,9 +112,9 @@ def test_places_are_learned_after_parts_and_my_truck_never() -> None:
         source=matched(MatchRule.ANSWER, SOURCE),
         destination=matched(MatchRule.ANSWER, DESTINATION),
     )
-    assert lessons([picked], CATALOG, SAM, ["took 2 patch cable from the shop to my truck"]) == [
+    assert lessons([picked], CATALOG, SAM, ["took 2 patch cable from main to my truck"]) == [
         Lesson(PART, "patch cable", 3, frozenset({3}), 1),
-        Lesson(LOCATION, "the shop", SOURCE, frozenset(), 1),
+        Lesson(LOCATION, "main", SOURCE, frozenset({SOURCE}), 1),
     ]
 
 
@@ -123,12 +126,15 @@ def test_a_typed_place_teaches_the_posts_place_text_only_when_it_fits_that_place
             items=(matched(MatchRule.EXACT, 3),),
             source=matched(MatchRule.EXACT, SOURCE),
             destination=matched(MatchRule.EXACT, DESTINATION),
-            named={"destination": "Truck 1"},
+            named={"destination": "the first truck in the vehicles list"},
         )
 
-    said = ["took 2 PC-1 from main stock to sams van and the truck"]
-    assert lessons([to("sams van")], CATALOG, SAM, said) == [Lesson(LOCATION, "sams van", DESTINATION, frozenset(), 1)]
-    assert lessons([to("the truck")], CATALOG, SAM, said) == []  # Truck 1 or Truck 2
+    said = ["took 2 PC-1 from main stock to trucks 1, sam's van, the white van and the truck"]
+    assert lessons([to("trucks 1")], CATALOG, SAM, said) == [
+        Lesson(LOCATION, "trucks 1", DESTINATION, frozenset({DESTINATION}), 1)
+    ]
+    for text in ("sam's van", "the white van", "the truck"):  # nothing the catalog backs, or Truck 1 or Truck 2
+        assert lessons([to(text)], CATALOG, SAM, said) == [], text
 
 
 def test_a_text_is_learned_once_from_the_first_movement_that_decided_it() -> None:

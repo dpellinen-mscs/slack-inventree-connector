@@ -33,8 +33,8 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 - Alias learning (ADR 0012): once every request of a plan an approver clicked Apply on is verified, each of the
   poster's own texts in it that a person confirmed or corrected in the thread becomes an alias of its part or
   location, and the receipt names it ("Learned from this Apply: “norvane 40” means Norvane Disc 40 Access Point.").
-  The next post that says so is an alias match. Only a text that fits that one record (or none) is learned, so a pick
-  among several candidates teaches nothing. A plan the write policy approved, a dry run, a write that did not read
+  The next post that says so is an alias match. Only a text whose words fit that one record is learned, so a pick
+  among several candidates, and a text the catalog does not back, teach nothing. A plan the write policy approved, a dry run, a write that did not read
   back as planned, text the model or a photo supplied, and texts with words like "my", "this" or "ones" teach
   nothing. An undo forgets what its plan taught; `stockthread aliases remove` forgets one by hand.
 - Retention (design section 6, threat model T10): `storage.retention_days` (30) after a post is done with,

@@ -67,23 +67,28 @@ Learning as built (agent, 2026-10-24; `learning.lessons`, `Worker._learn`):
   confirms.
 - A name a person typed in the thread for a line or a place teaches the
   post's own text for it, not the typed name.
-- Only the poster's own words are learned: a text must occur in the
-  post's messages. An item or place text the model wrote, or read from a
-  photo, is never learned, even once a person confirmed the movement.
+- Only the poster's own words are learned: a text must occur in a message
+  the poster wrote, as the dry run that made the plan read it. An item or
+  place text the model wrote, or read from a photo, is never learned, even
+  once a person confirmed the movement.
 - A text with a word like "my", "this", "his", "usual" or "ones", a text
   with no letter ("40"), a place named by a vehicle word alone ("the
   van"), and a text the same plan decided for two records are never
   learned (no per-user aliases yet).
-- **Narrower than the decision above, pending Dan:** a text is learned
-  only when its record is the only record the whole-word and fuzzy rules
-  fit it to (articles ignored), or when it fits none. So a pick from a
+- **Narrower than the decision above, pending Dan ([#174](https://github.com/dpellinen-mscs/slack-inventree-connector/issues/174)):** a text is learned
+  only when its record is the one record the whole-word and fuzzy rules
+  fit it to (articles ignored). So a pick from a
   candidate list ("cable" among three cables, "Disc 40" between the 40 and
   the 40 Pro) teaches nothing, and neither does a typed correction to a
   record the text does not fit ("norvane 40" when the poster took Disc
-  60s). The pick says what one post moved, not what the words always
+  60s, "hdmi cable" corrected to a DisplayPort cable) or any text the
+  catalog does not back ("the regular", "ubiquity psu" for a part named
+  "Power Supply"); an admin adds such an alias by hand. The pick says what one post moved, not what the words always
   mean, and the recheck above cannot catch it: the rivals it would store
   are exactly the ambiguity the pick settled. A wrong write is worse than
   a click, so this errs on asking.
+- A confirmation never takes over an alias an admin typed for the same
+  text, so no undo can forget one.
 - An undo forgets what its plan taught, as soon as the undo begins and
   whether or not it succeeds (`Store.begin_attempt`, audited as
   `alias_forgotten`), rather than offering to: an undo says the plan may

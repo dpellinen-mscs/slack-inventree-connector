@@ -819,12 +819,15 @@ class Worker:
             if plan.approved_by is None or any(row.state is not RequestState.VERIFIED for row in plan.requests):
                 return
             rebuilt = plan_views(self.store, plan)
-            history = self.store.dry_run_history(key.post)
-            read = self._messages(key.post, history[-1].changes_through or 0) if history else "unreadable"
+            # The text as the dry run that made the plan read it, by the poster alone: not an edit since, not a reply.
+            made = [
+                r for r in self.store.dry_run_history(key.post) if r.result and plan_hash(r.result) == plan.input_hash
+            ]
+            read = self._messages(key.post, made[-1].changes_through or 0) if made else "unreadable"
             if isinstance(read, str):
                 log.warning("post %s: nothing learned from plan revision %d (%s)", key.post.ts, key.revision, read)
                 return
-            said = [message.text for message in read[0] if not message.deleted]
+            said = [m.text for m in read[0] if not m.deleted and read[3].get(m.ts) == rebuilt.poster]
             found = lessons(rebuilt.views, self.catalog(), rebuilt.poster, said)
         except LockLost:
             raise

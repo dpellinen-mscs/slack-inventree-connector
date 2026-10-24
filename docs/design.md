@@ -1961,11 +1961,12 @@ Deterministic. The rules run in this order:
   `verified`, each text of it that a person confirmed in the thread (the
   `answer` rule, or `words` and `fuzzy` if a plan ever holds one) becomes
   an alias of its record. So does the post's own text of a line or place
-  a person typed a name for ("ubiquity psu"). Only the poster's own words
-  are learned (the text occurs in the post's messages), and only when the
-  record is the one record rules 4 and 5 fit the text to, articles
-  ignored, or the text fits none: a pick among candidates teaches
-  nothing. A plan the policy approved, a dry run, an unverified write, a
+  a person typed a name for. Only the poster's own words are learned (the
+  text occurs in a message the poster wrote, as the plan's dry run read
+  it), and only when the record is the one record rules 4 and 5 fit the
+  text to, articles ignored: a pick among candidates, and a text the
+  catalog does not back, teach nothing. An admin's alias is never taken
+  over. A plan the policy approved, a dry run, an unverified write, a
   text with a word like "my", "this" or "ones", a place named by a
   vehicle word alone, and a text the plan decided for two records teach
   nothing. An undo forgets what its plan taught as it begins. Learning is

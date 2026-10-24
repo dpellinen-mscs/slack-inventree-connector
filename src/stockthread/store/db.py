@@ -2327,7 +2327,8 @@ class Store:
         `learned_from`, which must be `verified`: only a confirmation that moved stock teaches an alias. `rivals`: the
         records the whole-word and fuzzy rules fit it to now (`matching.part_rivals`, `location_rivals`). Every alias
         of the kind and user the matcher takes for the same text ("patch cable" for "patch cables") is replaced by
-        this one. StateConflict, and nothing changes, when the request is not verified. `owner` must hold the instance
+        this one, unless one of them is an alias an admin typed (no rivals): then nothing changes. StateConflict, and
+        nothing changes, when the request is not verified. `owner` must hold the instance
         lock."""
         if not words(text) or record <= 0:
             raise ValueError("an alias names one record with at least one word")
@@ -2341,10 +2342,13 @@ class Store:
             now = self._now()
             # One alias per text as the matcher reads it: "patch cables" replaces "patch cable" (plurals folded).
             rows = self._db.execute(
-                "SELECT id, text FROM aliases WHERE kind = ? AND ifnull(user_id, '') = ? ORDER BY id",
+                "SELECT id, text, rivals IS NULL FROM aliases WHERE kind = ? AND ifnull(user_id, '') = ? ORDER BY id",
                 (kind.value, user or ""),
             ).fetchall()
-            same = [alias_id for alias_id, known in rows if same_words(known, text)]
+            same = [alias_id for alias_id, known, _ in rows if same_words(known, text)]
+            typed = any(admin for _, known, admin in rows if same_words(known, text))
+            if typed:  # an admin's alias for this text stands: a confirmation never takes it over
+                return
             found = same[0] if same else None
             for other in same[1:]:
                 self._db.execute("DELETE FROM aliases WHERE id = ?", (other,))
