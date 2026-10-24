@@ -8,13 +8,16 @@ against every snapshot (`assign_vehicles`).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
-from stockthread.core.matching import Catalog, LocationRecord, PartRecord
+from stockthread.core.matching import Catalog, LocationRecord, PartRecord, stale_aliases
 from stockthread.inventree import InvenTreeError, InvenTreeReader
 from stockthread.store import AliasKind, Store
+
+log = logging.getLogger(__name__)
 
 
 async def load_catalog(reader: InvenTreeReader) -> Catalog:
@@ -26,12 +29,28 @@ async def load_catalog(reader: InvenTreeReader) -> Catalog:
 
 def with_aliases(load: Callable[[], Catalog], store: Store) -> Callable[[], Catalog]:
     """Each snapshot `load` gives, with the aliases in the store now: one learned since the last catalog read is
-    matched by the next post, not after the next read."""
+    matched by the next post, not after the next read.
+
+    The records of aliases the matcher ignores, because their part or location cannot be matched now, are named in
+    the log once until that list changes; by kind and record id, never by the alias's words."""
+    reported: list[tuple[str, ...]] = [()]
 
     def read() -> Catalog:
-        return replace(
+        catalog = replace(
             load(), part_aliases=store.aliases(AliasKind.PART), location_aliases=store.aliases(AliasKind.LOCATION)
         )
+        parts = stale_aliases(replace(catalog, location_aliases=()))
+        places = stale_aliases(replace(catalog, part_aliases=()))
+        ignored = tuple(sorted({f"part {a.record}" for a in parts} | {f"location {a.record}" for a in places}))
+        if ignored != reported[0]:
+            reported[0] = ignored
+            if ignored:
+                log.warning(
+                    "aliases: stored aliases name %s, which cannot be matched now: they are ignored"
+                    " (`stockthread check-setup` lists them by id)",
+                    ", ".join(ignored),
+                )
+        return catalog
 
     return read
 
