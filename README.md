@@ -103,6 +103,10 @@ What to expect in this version:
   Slack) and run `.venv/bin/stockthread trail '<link>'`. It prints each dry run with every reason it
   needs a person, the question asked, who answered and with what, and the audit log. It only reads
   the database, and prints ids and codes rather than the words of the post, unless you add `--text`.
+- `.venv/bin/stockthread aliases list` prints the confirmed aliases ("disc 40" means part 12), each
+  with its id and the post it was learned from; `aliases export` prints them as JSON, for a backup.
+  `aliases remove <id>` forgets one, also while the connector runs: posts read after that are
+  matched as if it had never been learned. Removals are in the audit log.
 
 ### Serving over HTTP instead of Socket Mode
 

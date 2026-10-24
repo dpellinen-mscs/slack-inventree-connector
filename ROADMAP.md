@@ -194,7 +194,7 @@ job on PostgreSQL, prove each line below.
 
 ## M4: alias learning
 
-- [ ] Alias admin: list, remove and export (storage and learning are built in M3, [0012](docs/decisions/0012-first-confirmation-becomes-alias.md))
+- [x] Alias admin: list, remove and export (`stockthread aliases`) (storage and learning are built in M3, [0012](docs/decisions/0012-first-confirmation-becomes-alias.md))
 - [ ] Learned aliases are covered by the corpus
 - [ ] Aliases with words like "my" are stored per user
 - [ ] An alias is checked against InvenTree when it is used
