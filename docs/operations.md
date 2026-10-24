@@ -27,12 +27,22 @@ Use SQLite's online backup. It gives a consistent copy, the `-wal` file included
 connector keeps running. From the directory that holds the database:
 
 ```sh
-(umask 077; .venv/bin/python -c "import sqlite3; sqlite3.connect('stockthread.db').backup(sqlite3.connect('stockthread-backup.db'))")
+(umask 077; .venv/bin/python -c "import sqlite3; sqlite3.connect('file:stockthread.db?mode=ro', uri=True).backup(sqlite3.connect('stockthread-backup.db'))")
 ```
 
-`umask 077` keeps the copy readable by you only. Store backups like the database itself: they hold
-Slack message text. If you have the `sqlite3` command-line tool,
-`sqlite3 stockthread.db ".backup stockthread-backup.db"` does the same.
+`mode=ro` makes a wrong path fail ("unable to open database file") instead of quietly backing up a
+new, empty database. `umask 077` keeps the copy readable by you only. Store backups like the database
+itself: they hold Slack message text. If you have the `sqlite3` command-line tool,
+`sqlite3 stockthread.db ".backup stockthread-backup.db"` does the same, but it does not fail on a
+wrong path.
+
+Check a backup before you rely on it. This prints `ok` and the number of posts it holds:
+
+```sh
+.venv/bin/python -c "import sqlite3; c = sqlite3.connect('file:stockthread-backup.db?mode=ro', uri=True); print(c.execute('PRAGMA integrity_check').fetchone()[0], c.execute('SELECT count(*) FROM posts').fetchone()[0])"
+```
+
+A count of 0 on a connector that has answered posts means you backed up the wrong file.
 
 Alternatively, stop the connector, then copy `stockthread.db` together with any `-wal` and `-shm`
 files next to it.
@@ -46,17 +56,30 @@ connector, but it is not a backup of the database.
 2. Move `stockthread.db` and any `stockthread.db-wal` and `stockthread.db-shm` next to it out of the
    way. A `-wal` file left from the old database must not meet the restored one.
 3. Copy the backup to `stockthread.db`, then run `chmod 600 stockthread.db`.
-4. Start the connector.
+4. Set `writes.enabled = false` in `stockthread.toml` (see below for why).
+5. Start the connector. Let it catch up, then check the posts it answers again (below) against
+   InvenTree or the old database's `trail`.
+6. Set `writes.enabled` back to what it was and restart the connector.
 
 What happens after a restore:
 
+- **Posts made after the backup are read and answered again.** At start, catch-up reads each channel
+  from where the backup last left it, up to `slack.catch_up_hours` back (72 by default). A post made
+  after the backup is not in the restored database, so it gets a new dry run and a new reply in its
+  thread, with the review reason `late_ingest`. That reason keeps it from being applied
+  automatically, but **an Apply click on it writes the movement again**, even if it was already
+  applied before the restore: its new requests carry new markers, so the marker check (below) cannot
+  see the earlier write. Do not click Apply on any of these posts until you have checked that it did
+  not move stock already. With `writes.enabled = false`, as in step 4, nothing can be written while
+  you check.
 - Stock moved after the backup was made is not undone. InvenTree keeps it. The restored database just
   does not know about those writes: `trail` won't show them, and an Undo click on their receipts
   changes nothing. Undo them in InvenTree if needed.
 - A request the backup still shows as approved or in flight is checked against InvenTree before
   anything is written. Every write leaves its marker in the notes of the stock adjustment it makes,
   and the marker check finds a write that already happened ([design](design.md) section 7). So a
-  restore does not write a movement twice.
+  request the backup already holds is not written twice. This protects only requests in the backup,
+  not the posts above.
 - Plans in the backup that nobody acted on have most likely expired by now, and an Apply click on
   them is refused as expired.
 - Text the live file had already blanked comes back from the backup. The next hourly retention pass
@@ -82,4 +105,5 @@ refuse to read the old schema ("start the connector once to upgrade it").
 **Going back to an older version.** Migrations only go forward. An older version refuses to open a
 database whose schema is newer than it knows ("the database has schema version N; this version knows
 M"). To go back, stop the connector, install the older version, and restore the backup you made in
-step 1. Anything recorded since that backup is lost from the database, as described under Restore.
+step 1, following the Restore steps (writes off until the posts answered again are checked).
+Anything recorded since that backup is lost from the database, as described under Restore.
