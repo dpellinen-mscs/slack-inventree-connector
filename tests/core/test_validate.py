@@ -671,7 +671,11 @@ def test_a_decimal_length_in_the_parts_own_unit_is_spared() -> None:
      "took 50 m drop cable from shop to van 3, 2 times", "took 50 m drop cable from shop to van 3, twice",
      "took two runs of 50 m drop cable from shop to van 3",
      "took 50 m drop cable from shop to van 3\ntook 50 m drop cable from shop to van 3",
-     "took 50 M drop cable from shop to van 3", "took 50M drop cable from shop to van 3"],
+     "took 50 M drop cable from shop to van 3", "took 50M drop cable from shop to van 3",
+     "took 50 m drop cable from shop to van 3, plus the same for van 3",
+     "took 50 m drop cable from shop to van 3, same as yesterday",
+     "took 50 m drop cable from shop to van 3 for all the drops", "took 50 m drop cable (dbl) from shop to van 3",
+     "took 50 m drop cable ++ from shop to van 3"],
 )  # fmt: skip
 def test_a_length_something_may_multiply_still_asks(text: str) -> None:
     """Review: only the one number of each line lets a measure state it; "3 runs of 50 m" would write 50."""
@@ -683,3 +687,15 @@ def test_a_length_beside_a_count_is_spared_when_each_number_is_a_lines_quantity(
     movement = take(line_items=lines, source_text="shop", destination_text="van 3")
     assert stocked_details(movement, "took 50 m drop cable and 2 ONT from shop to van 3", ("m", None)) == set()
     assert stocked_details(movement, "took 50 m drop cable and 2 ONT from shop to van 3 for 3 jobs", ("m", None))
+
+
+@pytest.mark.parametrize(
+    ("text", "source"),
+    [("took 50 m drop cable from van 3 times to van 3", "van 3 times"),
+     ("took 50 m drop cable from shop 2x to van 3", "shop 2x"),
+     ("from shop 3 runs: took 50 m drop cable to van 3", "shop 3 runs"),
+     ("took 50 m drop cable from shop to van 3 and 50 m to van 3", "shop")],
+)  # fmt: skip
+def test_a_place_cannot_hide_a_multiplier(text: str, source: str) -> None:
+    """Review: a place's text is taken out once, and only after the multiplier words are looked for."""
+    assert "line 1: a unit other than a count" in stocked_details(replace(cable(), source_text=source), text, ("m",))

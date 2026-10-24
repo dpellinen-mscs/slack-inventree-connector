@@ -275,13 +275,14 @@ def _lone_number(movement: CandidateMovement, text: str) -> bool:
     if re.search(r"\dM\b|\d\s+M\b", unicodedata.normalize("NFKC", text)):
         return False
     text = _folded(text)
-    for place in (movement.source_text, movement.destination_text):
-        for found in reversed(_occurrences(place, text) if place else []):
-            text = f"{text[: found.start()]} {text[found.end() :]}"
-    if re.search(r"\bx\s*\d|\d\s*x\b|\N{MULTIPLICATION SIGN}", text) or any(
+    # Before a place's text is taken out, so a place cannot hide one ("from shop 2x").
+    if re.search(r"\bx\s*\d|\d\s*x\b|\N{MULTIPLICATION SIGN}|\+\+", text) or any(
         word in NUMBER_WORDS or word in _MULTIPLIER_WORDS for word in re.findall(r"[a-z]+", text)
     ):
         return False
+    for place in (movement.source_text, movement.destination_text):
+        if place and (found := next(iter(_occurrences(place, text)), None)):
+            text = f"{text[: found.start()]} {text[found.end() :]}"  # once: a second "van 3" may be another 50 m
     numbers = re.findall(r"(?<![^\W\d_])\d+(?:[.,]\d+)*", text)
     if any("," in number or _AMBIGUOUS_NUMBER.fullmatch(number) for number in numbers):
         return False
@@ -291,7 +292,10 @@ def _lone_number(movement: CandidateMovement, text: str) -> bool:
 _MULTIPLIER_WORDS = frozenset(
     {"twice", "thrice", "times", "each", "per", "every", "apiece", "double", "triple", "both", "pair", "pairs"}
     | {"couple", "dozen", "dozens", "half", "halves", "lengths", "runs", "cuts", "pieces", "again", "another"}
+    | {"same", "ditto", "too", "also", "plus", "all", "extra", "more", "dbl"}
 )
+"""Words that may multiply a measure or repeat it. A list of places with none of them ("for unit A and unit B") is
+not caught, as it is not for a count either; the reply shows the quantity it would write."""
 
 
 def _own_measure(movement: CandidateMovement, found: re.Match[str], own: frozenset[int]) -> frozenset[int]:
