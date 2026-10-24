@@ -103,6 +103,7 @@ What to expect in this version:
 - The database is one file, `stockthread.db`, next to the settings, readable by its owner only. It
   holds the raw Slack events. Message text is blanked `storage.retention_days` (30) days after a post
   is done with; ids, states and the audit log stay, so `trail` still shows what happened.
+  [Operations](docs/operations.md) covers backing it up, restoring it and upgrading over it.
 - To see why a post got the reply it did, copy the link of any of its messages (*Copy link* in
   Slack) and run `.venv/bin/stockthread trail '<link>'`. It prints each dry run with every reason it
   needs a person, the question asked, who answered and with what, and the audit log. It only reads
@@ -140,6 +141,7 @@ turn them on again in *Event Subscriptions*; catch-up reads what was missed, wit
 - [Threat model](docs/threat-model.md): what can go wrong, and which control answers it
 - [Security policy](SECURITY.md): how to report a vulnerability privately
 - [Modeling vehicles and sites](docs/locations.md): stock locations for vehicles, sites and stock rooms
+- [Operations](docs/operations.md): the database, backups, restores and upgrades
 - [Roadmap](ROADMAP.md): milestones and their definitions of done
 - [Decisions](docs/decisions/): the decision log
 - [Research notes](docs/research/): InvenTree, Slack, prior art

@@ -210,7 +210,7 @@ an inactive part or a deleted location is ignored and reported.
 - [ ] Full documentation: README, quickstart, configuration reference, architecture, operations, troubleshooting
 - [ ] Threat model, final version, and security review, including prompt injection through message text
 - [ ] A 24-hour run on small hardware with forced disconnects
-- [ ] Upgrade and backup notes for the audit store
+- [x] Upgrade and backup notes for the audit store ([operations](docs/operations.md))
 - [ ] Supported version matrix for InvenTree and Slack transports
 - [ ] Prepublication audit: full-history leak scan, license headers, docs check, private vulnerability reporting on
 - [ ] Release process, without publishing until Dan says so
