@@ -104,7 +104,7 @@ from stockthread.core.validate import photo_not_read, validate
 from stockthread.gate import Judgement
 from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
-from stockthread.plan_record import NotRebuilt, plan_of
+from stockthread.plan_record import NotRebuilt, plan_hash, plan_of
 from stockthread.slack.catchup import is_catch_up
 from stockthread.slack.ingest import (
     Click,
@@ -661,11 +661,14 @@ class Worker:
         later = [record for record in self.store.dry_run_history(post) if record.revision > revision]
         if any(record.outcome is not DryRunOutcome.UNCHANGED for record in later):
             return self._told(click, EventStatus.DROPPED, "other_message", CLICK_FEEDBACK["other_message"])
-        shown = {revision, *(record.revision for record in later)}
         if self.approve_click is None:
             return self._told(click, EventStatus.DROPPED, "writes_off", APPLY_FEEDBACK["writes_off"])
+        # A dry run that replies makes the post's plan or leaves none current, and every later one kept it: the
+        # current plan is the clicked reply's only if it was made from that reply's own record. Plan revisions are
+        # counted apart from dry runs (a post's first plan may come from its second dry run, after an answer).
+        clicked = [record.result for record in self.store.dry_run_history(post) if record.revision == revision]
         plan = self.store.current_plan(post)
-        if plan is None or plan.revision not in shown:
+        if plan is None or not clicked or clicked[0] is None or plan_hash(clicked[0]) != plan.input_hash:
             return self._told(click, EventStatus.DROPPED, "no_plan", APPLY_FEEDBACK["no_plan"])
         self.beat(now=True)  # the judgement reads the catalog and the server's version
         try:

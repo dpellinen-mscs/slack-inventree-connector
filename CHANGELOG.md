@@ -14,6 +14,9 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Fixed
 
+- An Apply click now approves a plan its post's second or later dry run made, as after an answered question.
+  The click compared the plan's revision with the dry run's, which are counted apart, so such a plan was refused
+  as "no plan" and could not be applied at all.
 - `stockthread trail` prints every character of Slack text that is not printable (control characters, DEL, C1
   codes, bidi overrides) escaped as `\uXXXX` (a surrogate pair above U+FFFF), so a post or answer cannot move the
   cursor or reorder the terminal line.

@@ -518,3 +518,46 @@ def test_a_post_the_store_blocks_says_so_and_not_to_try_again(store: Store, cloc
     worker.drain()
     assert last_event(store) == (EventStatus.DROPPED, "blocked")
     assert told(worker) == [(LUIS, APPLY_FEEDBACK["blocked"])]
+
+
+def test_a_click_approves_a_plan_its_posts_second_dry_run_made_after_an_answer(store: Store, clock: Clock) -> None:
+    # Plan revisions are counted apart from dry runs: dry run 2 makes plan revision 1 here.
+    clicking = Clicking(store)
+    worker = Worker(
+        settings(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock, approve_click=clicking,  # type: ignore[arg-type]
+    )  # fmt: skip
+    enqueue(store, message(ROOT, "returned 2 disc from truck 1 to main stock"))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    assert store.current_plan(POST) is None  # "disc" is a whole-word match: asked first
+    [asked] = slack(worker).posted
+    [yes] = [e for block in asked["blocks"] if block["type"] == "actions" for e in block["elements"]
+             if e["text"]["text"] == "Yes"]  # fmt: skip
+    payload = {
+        "type": "block_actions",
+        "api_app_id": APP,
+        "team": {"id": WORKSPACE},
+        "user": {"id": SAM, "team_id": WORKSPACE},
+        "channel": {"id": CHANNEL},
+        "container": {"type": "message", "message_ts": "1790009999.000001", "channel_id": CHANNEL},
+        "message": {"type": "message", "ts": "1790009999.000001", "thread_ts": ROOT, "text": asked["text"]},
+        "actions": [{**yes, "action_ts": "1790000040.000100"}],
+    }
+    assert store.enqueue_event("click:yes", "interactive", json.dumps(payload))
+    clock.at("1790000050.000000")
+    worker.step()
+    clock.at("1790000090.000000")
+    worker.step()
+    plan = store.current_plan(POST)
+    assert plan is not None
+    assert plan.revision == 1
+    assert [record.revision for record in store.dry_run_history(POST)] == [1, 2]
+    button = apply_button(slack(worker).posted[-1])
+    assert button is not None
+    assert (button["action_id"], button["value"]) == (APPLY_ACTION, "2")  # the dry run's revision, not the plan's
+    click(store, worker, reply=len(slack(worker).posted) - 1)
+    worker.step()
+    assert last_event(store) == (EventStatus.DONE, "approved")
+    assert clicking.calls == [(POST, 1, LUIS)]
+    assert store.plan(POST, 1).approved_by == LUIS
