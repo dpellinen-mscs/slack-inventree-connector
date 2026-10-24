@@ -36,6 +36,7 @@ reply too long to show in full carries no Apply button. An approved plan is neve
   alias yet.
 - `stockthread check-setup` warns about each stored alias whose part is inactive, deleted, a template or virtual, or
   whose location is structural or gone, by id: the matcher ignores it, and `aliases remove <id>` forgets it.
+  The run log names their records once each time that list changes.
 - `stockthread aliases list | export | remove <id>`: the stored aliases with the post each was learned from, as text
   or JSON, and their removal (audited as the admin's; the matcher stops using it at its next catalog read).
 - With writes on, the policy approves a clear movement of a type in `policy.auto_apply` (by default a
