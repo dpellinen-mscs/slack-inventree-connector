@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from stockthread.core.model import PostKey
+from stockthread.printable import printable
 from stockthread.store import Store
 
 _PERMALINK = re.compile(r"/archives/(?P<channel>[A-Z0-9]+)/p(?P<seconds>\d{10})(?P<micros>\d{6})(?:[?#].*)?$")
@@ -74,20 +75,7 @@ def post_trail(store: Store, message: PostKey, *, text: bool = False) -> list[st
     lines.extend(
         f"  {at} {actor} {event}{_states(before, after)}" for at, actor, event, before, after in store.audit(key)
     )
-    return [_printable(line) for line in lines]
-
-
-def _printable(line: str) -> str:
-    return "".join(char if char.isprintable() else _escaped(char) for char in line)
-
-
-def _escaped(char: str) -> str:
-    """`\\uXXXX`, or the UTF-16 surrogate pair as JSON writes it above U+FFFF: never read as fewer digits."""
-    code = ord(char)
-    if code <= 0xFFFF:
-        return f"\\u{code:04x}"
-    code -= 0x10000
-    return f"\\u{0xD800 + (code >> 10):04x}\\u{0xDC00 + (code & 0x3FF):04x}"
+    return [printable(line) for line in lines]
 
 
 def _decided(result: Mapping[str, Any], *, text: bool) -> list[str]:
