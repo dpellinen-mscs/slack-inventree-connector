@@ -6,8 +6,9 @@ follow [Semantic Versioning](https://semver.org/) from the first release.
 
 ## [Unreleased]
 
-Nothing is released yet. With `writes.enabled = true`, the connector writes clear take-outs only
-(`policy.auto_apply`); there is no Apply button yet for anything else.
+Nothing is released yet. With `writes.enabled = true`, the connector writes clear take-outs with no click
+(`policy.auto_apply`), and any other movement the gate allows once an approver clicks Apply on its dry-run reply
+(returns, receipts, counts and the rest). A reply too long to show in full carries no Apply button.
 
 ### Fixed
 
