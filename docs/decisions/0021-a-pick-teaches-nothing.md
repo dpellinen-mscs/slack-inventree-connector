@@ -27,13 +27,15 @@ admins to add deliberate aliases by hand."
 3. `stockthread aliases add part|location TEXT ID` stores an alias an admin typed, for everyone's posts. It is never
    rechecked against rivals, and no confirmation takes it over. Details decided by the agent (FYI to Dan):
    - It reads InvenTree first and refuses a record the matcher would ignore (inactive, template or virtual part;
-     structural or missing location), a text with no letter or with a word like "my" or "this" (`learning.DEICTIC`:
-     an alias is for everyone), and a text that is some record's exact or normalized name (the matcher tries names
-     before aliases, so the alias would never be used).
+     structural or missing location); as for a learned alias, a text with no letter, only articles, or a word like
+     "my" or "this" (`learning.DEICTIC`: an alias is for everyone), and a place named by vehicle words alone ("the
+     van" names another van once there are two); and a text that is some record's exact or normalized name, or
+     several records' (the matcher tries names before aliases, so the alias would never be used).
    - It replaces a learned alias for the same text, and refuses while another admin's alias stands for it: removing
      that one first is a deliberate step. Audited as `alias_added` and `alias_replaced`, by `admin`.
-   - Records are given by id, as in the record's InvenTree address; the command prints the part's name and IPN or the
-     location's path, so a wrong id shows at once.
+   - Records are given by id, as in the record's InvenTree address. Without `--yes` the command stores nothing: it
+     prints the part's name and IPN or the location's path, and the learned aliases it would replace, so a wrong id
+     shows before any post can use it.
 
 ## Consequences
 

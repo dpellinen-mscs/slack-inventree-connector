@@ -2032,7 +2032,8 @@ Deterministic. The rules run in this order:
   a pick cannot teach. It applies to everyone's posts, is never
   rechecked, replaces a learned alias for the same text, and is refused
   for a record the matcher would ignore, a text with a word like "my",
-  and a text that is already a record's name.
+  a vehicle word alone, and a text that is already a record's name. It
+  stores nothing without `--yes`, and shows the record's name first.
 
 ## 11. Testing strategy
 
