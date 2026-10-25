@@ -287,6 +287,20 @@ class NewPlan:
     """One per movement, in the post's order."""
 
 
+@dataclass(frozen=True)
+class ApplyButton:
+    """A dry-run reply posted with an Apply button that is still shown (migration 0022)."""
+
+    id: int
+    post: PostKey
+    revision: int
+    """The dry-run revision whose reply carries the button."""
+    message_ts: str
+    plans_before: int
+    """The newest plan revision of the post before the reply was recorded (0 for none): a plan revision after it was
+    made from the reply's record, or made again by a later unchanged dry run; one up to it was not."""
+
+
 class QuestionStatus(StrEnum):
     OPEN = "open"
     ANSWERED = "answered"
@@ -912,6 +926,7 @@ class Store:
         answers: int | None = None,
         question: NewQuestion | None = None,
         plan: NewPlan | None = None,
+        apply: bool = False,
     ) -> None:
         """Record the outcome of the post's dry run `revision`, and the timestamp of what was posted when Slack
         gave one. Each revision once, in order.
@@ -939,6 +954,10 @@ class Store:
         have). Either becomes the current revision only when this dry run knew of every message, change and answer
         the post holds now. Every other outcome leaves the post with no current plan. A plan replaced becomes stale,
         and its requests that have not started a write are cancelled.
+
+        `apply` says the reply carries an Apply button (`slack.replies.with_apply`): it is stored in the same
+        transaction (migration 0022), so `Worker._take_down_apply` can take it down once the plan is closed. Only a
+        reply that made a plan, with its ts, carries one.
         """
         posted = (DryRunOutcome.REPLIED, DryRunOutcome.RETRACTED)
         if plan is not None and (outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or result is None):
@@ -951,6 +970,8 @@ class Store:
             raise ValueError("only a reply has a timestamp, in Slack's form")
         if revision < 1 or (revision == 1 and outcome in (DryRunOutcome.UNCHANGED, DryRunOutcome.RETRACTED)):
             raise ValueError("only a revision is unchanged or retracted")
+        if apply and (outcome is not DryRunOutcome.REPLIED or plan is None or reply_ts is None):
+            raise ValueError("only a posted reply that made a plan carries an Apply button")
         if question is not None:
             if outcome is not DryRunOutcome.REPLIED:
                 raise ValueError("only a reply asks a question")
@@ -1015,6 +1036,8 @@ class Store:
                     self._questions_go_stale(post_id, now)
                 if question is not None:
                     self._ask(post_id, key, revision, reply_ts, question, now)
+                if apply:
+                    self._show_apply(post_id, revision, reply_ts)
                 self._replace_plan(post_id, self._if_newest(post_id, plan, through, changes, answers))
                 return
             cursor = self._db.execute(
@@ -1031,7 +1054,18 @@ class Store:
             self._audit(Actor.PLANNER, f"dry_run_{outcome.value}", post_id=post_id)
             if question is not None:
                 self._ask(post_id, key, revision, reply_ts, question, now)
+            if apply:
+                self._show_apply(post_id, revision, reply_ts)
             self._replace_plan(post_id, self._if_newest(post_id, plan, through, changes, 0))
+
+    def _show_apply(self, post_id: int, revision: int, reply_ts: str | None) -> None:
+        (before,) = self._db.execute(
+            "SELECT coalesce(max(revision), 0) FROM plans WHERE post_id = ?", (post_id,)
+        ).fetchone()
+        self._db.execute(
+            "INSERT INTO apply_buttons (post_id, revision, message_ts, plans_before) VALUES (?, ?, ?, ?)",
+            (post_id, revision, reply_ts, int(before)),
+        )
 
     def _if_newest(
         self, post_id: int, plan: NewPlan | None, through: int, changes: int, answers: int
@@ -1241,6 +1275,42 @@ class Store:
                 (item_id,),
             )
             row = self._db.execute("SELECT buttons_tries FROM review_items WHERE id = ?", (item_id,)).fetchone()
+            return 0 if row is None else int(row[0])
+
+    def apply_buttons_shown(self, limit: int) -> list[ApplyButton]:
+        """Replies whose Apply button is still shown (migration 0022): fewest failed tries first, then oldest. Whether
+        a button's plan is closed is the caller's to judge (`Worker._apply_closed`)."""
+        rows = self._db.execute(
+            "SELECT a.id, p.workspace_id, p.channel_id, p.ts, a.revision, a.message_ts, a.plans_before"
+            " FROM apply_buttons a JOIN posts p ON p.id = a.post_id WHERE a.buttons = 'shown'"
+            " ORDER BY a.buttons_tries, a.id LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [ApplyButton(int(row[0]), PostKey(*row[1:4]), int(row[4]), str(row[5]), int(row[6])) for row in rows]
+
+    def apply_taken_down(self, owner: str, button_id: int, *, removed: bool) -> None:
+        """The reply no longer shows its Apply button (`removed`), or the connector gave up on it."""
+        with self._transaction():
+            self._check_lock(owner)
+            row = self._db.execute(
+                "SELECT post_id FROM apply_buttons WHERE id = ? AND buttons = 'shown'", (button_id,)
+            ).fetchone()
+            if row is None:
+                return
+            self._db.execute(
+                "UPDATE apply_buttons SET buttons = ? WHERE id = ?", ("removed" if removed else "left", button_id)
+            )
+            self._audit(Actor.PLANNER, "apply_removed" if removed else "apply_left", post_id=int(row[0]))
+
+    def apply_failed(self, owner: str, button_id: int) -> int:
+        """Count a failed attempt to take an Apply button down. Returns the failed attempts so far."""
+        with self._transaction():
+            self._check_lock(owner)
+            self._db.execute(
+                "UPDATE apply_buttons SET buttons_tries = buttons_tries + 1 WHERE id = ? AND buttons = 'shown'",
+                (button_id,),
+            )
+            row = self._db.execute("SELECT buttons_tries FROM apply_buttons WHERE id = ?", (button_id,)).fetchone()
             return 0 if row is None else int(row[0])
 
     def answer(self, item_id: int) -> tuple[Mapping[str, Any], str] | None:

@@ -453,7 +453,12 @@ needs.
   A button carries only a random id of at least 128 bits that points to a
   row in the connector's database. The handler checks that the channel and
   the message in the payload are the ones stored with that id. Buttons are
-  removed once a decision is made.
+  removed once a decision is made: a question's once it is answered,
+  replaced by a newer reply or expired, and an Apply button once its plan
+  is approved (by a click or the policy), replaced, closed with nothing
+  written, or expired (`Worker.take_down_buttons`, migration 0022). The
+  reply is edited to end with a line that says which. This is best effort:
+  a click is checked against the store whatever Slack shows.
 - **Questions.** A post with review reasons gets one focused question at
   a time in its thread (`core/questions.py`, pure: wording and buttons
   belong to the adapter). The answer re-runs validation, and the next
