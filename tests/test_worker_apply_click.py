@@ -179,7 +179,7 @@ def clock() -> Clock:
 def replied(store: Store, clock: Clock, clicking: Clicking | None, text: str = BACK) -> Worker:
     """The worker after the post's dry-run reply, which made a plan."""
     worker = Worker(
-        settings(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock, approve_click=clicking,  # type: ignore[arg-type]
+        settings(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock, approve_click=clicking,
     )  # fmt: skip
     enqueue(store, message(ROOT, text))
     worker.step()
@@ -448,7 +448,7 @@ def test_a_reply_too_long_to_show_in_full_has_no_apply_button(store: Store, cloc
 
     clicking = Clicking(store)
     worker = Worker(
-        settings(), store, OWNER, FakeSlack(), lambda: catalog, clock, stock=on_the_truck, approve_click=clicking,  # type: ignore[arg-type]
+        settings(), store, OWNER, FakeSlack(), lambda: catalog, clock, stock=on_the_truck, approve_click=clicking,
     )  # fmt: skip
     enqueue(store, message(ROOT, LONG_RETURN))
     worker.step()
@@ -563,7 +563,7 @@ def test_a_click_approves_a_plan_its_posts_second_dry_run_made_after_an_answer(s
     # Plan revisions are counted apart from dry runs: dry run 2 makes plan revision 1 here.
     clicking = Clicking(store)
     worker = Worker(
-        settings(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock, approve_click=clicking,  # type: ignore[arg-type]
+        settings(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock, approve_click=clicking,
     )  # fmt: skip
     enqueue(store, message(ROOT, "returned 2 disc from truck 1 to main stock"))
     worker.step()
@@ -784,9 +784,9 @@ def test_questions_and_apply_buttons_take_turns() -> None:
     worker.settings = settings()
     worker.clock = Clock()
     worker._quiet_until = worker._take_down_quiet_until = Decimal(0)
-    worker.stopping = lambda: False  # type: ignore[method-assign]
+    worker.stopping = lambda: False
     worker._apply_due = due  # type: ignore[method-assign]
-    worker._take_down_one = one  # type: ignore[method-assign]
+    worker._take_down_one = one  # type: ignore[method-assign, assignment]
     for _ in range(4):
         worker.take_down_buttons()
     assert turns == ["buttons", "Apply", "buttons", "Apply"]
