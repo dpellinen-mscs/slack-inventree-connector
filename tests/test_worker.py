@@ -3543,7 +3543,7 @@ def test_a_type_picked_for_a_post_that_states_no_source_takes_that_type_s_defaul
     assert record.result["movements"][0]["source"] is None  # an unclear type has no default
     [item] = store.questions(KEY)
     assert item.question["ask"] == "movement_type"
-    kinds = [kind for kind in MovementType if kind is not MovementType.UNCLEAR]
+    kinds: list[MovementType] = [kind for kind in MovementType if kind is not MovementType.UNCLEAR]
     clicked(store, click_on({**reply, "channel": CHANNEL}, "1790009999.000001", kinds.index(picked), SAM), "1")
     worker.step()
     record = store.dry_run(KEY)

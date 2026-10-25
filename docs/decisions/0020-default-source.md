@@ -23,9 +23,14 @@ the default policy, almost no take-out could apply without a click, so ADR 0004'
 3. A `default` match can authorize a write, as an exact match can. For the policy it counts as an automatic place
    only for a source the post does not state, and only while it is still that type's default when judged
    (`GateNow.default_sources`). A changed default leaves the plan waiting for Apply. A default never makes a part or a
-   destination automatic. A default source that is someone's mapped vehicle waits, as any vehicle the poster did not
-   name exactly does.
+   destination automatic. A default source that is a mapped vehicle waits unless it is the poster's own, as for any
+   vehicle the poster did not name exactly. An approved request whose default changed before its write is held
+   unwritten at the check before the write; it stays approved, and is written only if that check passes again
+   before the plan expires (as for a vehicle mapping that changes).
 4. A movement type picked in the thread takes the picked type's default, or none.
+5. `receive` and `count` take no default: they take stock from no source, and the settings refuse one.
+6. Set a default only for a type whose unstated source really is that one place. A take to a site often comes off
+   the poster's truck: a warehouse default there would write the wrong source with no click.
 
 ## Consequences
 

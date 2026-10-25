@@ -112,13 +112,21 @@ class PolicySettings(_Section):
     max_quantity: int = Field(default=100, ge=1)
     """A larger quantity is a review reason."""
     default_source: dict[MovementType, Annotated[str, Field(min_length=1)]] = Field(default_factory=dict)
-    """Default source location per movement type. Unset means an implied source is a review reason."""
+    """Default source location per movement type, for a movement that states none (ADR 0020). Unset means an implied
+    source is a review reason. Not for receive or count, which take stock from no source."""
 
     @field_validator("auto_apply")
     @classmethod
     def _no_duplicates(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if len(set(value)) != len(value):
             raise ValueError("lists a movement type twice")
+        return value
+
+    @field_validator("default_source")
+    @classmethod
+    def _has_a_source(cls, value: dict[str, str]) -> dict[str, str]:
+        if sourceless := sorted({"receive", "count"} & set(value)):
+            raise ValueError(f"{' and '.join(sourceless)} take stock from no source")
         return value
 
 

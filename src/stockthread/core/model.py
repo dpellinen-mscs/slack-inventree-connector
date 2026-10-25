@@ -290,7 +290,8 @@ class Match:
 
     @property
     def can_authorize_a_write(self) -> bool:
-        """True only for one record found by an exact, normalized or alias rule, or given by an answer."""
+        """True only for one record found by an exact, normalized or alias rule, given by an answer, or set as a
+        default source by an admin."""
         return self.status is MatchStatus.MATCHED and self.rule in _AUTHORIZING_RULES
 
     def review_reason(self, *, kind: Literal["part", "location"]) -> ReviewReason | None:

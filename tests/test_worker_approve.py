@@ -404,7 +404,7 @@ def test_the_run_loops_approver_reads_the_version_and_vehicles_for_each_judgemen
 
 UNSOURCED = "2 Disc 40 on truck 1"
 DEFAULTED = replace(CATALOG, default_sources={MovementType.TAKE_TO_VEHICLE: 10})
-"""Main stock is the default source of a take to a vehicle (`policy.default_source`, `catalog.assign_default_sources`)."""
+"""Main stock is the default source of a take to a vehicle (`policy.default_source`)."""
 
 
 def test_a_take_out_that_states_no_source_takes_the_default_and_applies_by_the_policy(

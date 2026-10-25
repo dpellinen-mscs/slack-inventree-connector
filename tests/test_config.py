@@ -155,6 +155,7 @@ def test_unknown_key_is_refused(data: dict[str, Any], where: str) -> None:
         (with_changes("policy", max_quantity=0), "policy.max_quantity"),
         (with_changes("policy", default_source={"unclear": "Warehouse"}), "policy.default_source.unclear"),
         (with_changes("policy", default_source={"take_to_site": ""}), "policy.default_source.take_to_site"),
+        (with_changes("policy", default_source={"receive": "Warehouse/Receiving"}), "policy.default_source"),
     ],
 )
 def test_wrong_value_is_refused_and_named(data: dict[str, Any], where: str) -> None:

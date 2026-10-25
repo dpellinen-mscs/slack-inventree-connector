@@ -40,9 +40,12 @@ enabled = false               # the switch. Off: every movement is a dry-run
 auto_apply = ["take_to_vehicle", "take_to_site"]
 max_quantity = 100            # a larger quantity is a review reason
 # Default source location per movement type, by its whole path: a movement
-# of that type that states no source takes it, and can apply with no click.
+# of that type that states no source takes it. With the type in auto_apply
+# and every match exact, normalized or an alias, it applies with no click.
+# Set one only for a type whose unstated source really is that one place: a
+# take to a site often comes off the poster's truck, not the warehouse.
 # Unset: an implied source is a review reason. Example:
-# default_source = { take_to_vehicle = "Warehouse/Main Stock", take_to_site = "Warehouse/Main Stock" }
+# default_source = { take_to_vehicle = "Warehouse/Main Stock" }
 default_source = {}
 
 [apply]
