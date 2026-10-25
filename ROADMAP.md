@@ -163,10 +163,10 @@ payloads whose channel or message does not fit the stored id.
 - [ ] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
   - [x] `policy.default_source`: a movement that states no source takes its type's default, which the policy counts while it is still the default ([0020](docs/decisions/0020-default-source.md))
 - [x] Instance lock: one connector per database (`Store.acquire_lock`, heartbeat, `run.run`; `test_run.py`)
-- [ ] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word matches, fuzzy matches and picked candidates as aliases, for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo offers to forget the alias
+- [ ] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word and fuzzy matches that fit one record as aliases (a pick among candidates teaches nothing, [0021](docs/decisions/0021-a-pick-teaches-nothing.md)), for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo offers to forget the alias
   - [x] Storage (migration 0021, `Store.learn_alias` from a verified request only, `Store.aliases`), read into the run loop's catalog (`catalog.with_aliases`), a learned alias rechecked against new rivals (`matching._rechecked`)
   - [x] Learning: a verified plan an approver's click applied stores each text the whole-word and fuzzy rules fit to its one record (a pick among several teaches nothing while #174 is open); the receipt names them; an undo forgets them
-    - [x] A clicked plan, once every request is verified, stores the poster's texts a person confirmed or corrected that fit their record alone (a pick among candidates teaches nothing until Dan decides #174); the receipt names them (`learning.lessons`, `Worker._learn`, `Store.aliases_taught_by`)
+    - [x] A clicked plan, once every request is verified, stores the poster's texts a person confirmed or corrected that fit their record alone (a pick among candidates teaches nothing, [0021](docs/decisions/0021-a-pick-teaches-nothing.md)); the receipt names them (`learning.lessons`, `Worker._learn`, `Store.aliases_taught_by`)
     - [x] An undo forgets the aliases its plan taught, as it begins (ADR 0012 as built; `Store.begin_attempt`)
 
 **DoD:** integration tests against every pinned InvenTree version, with one
@@ -201,7 +201,8 @@ job on PostgreSQL, prove each line below.
 
 - [x] Alias admin: list, remove and export (`stockthread aliases`) (storage and learning are built in M3, [0012](docs/decisions/0012-first-confirmation-becomes-alias.md))
 - [x] Learned aliases are covered by the corpus (corpus 0.3.0: `rivals` in `catalog/aliases.json`; `test_every_learned_alias_decides_a_scored_match`)
-- [ ] Aliases with words like "my" are stored per user
+- [x] An admin adds an alias by hand (`stockthread aliases add`, [0021](docs/decisions/0021-a-pick-teaches-nothing.md))
+- ~~Aliases with words like "my" are stored per user~~ dropped from v1.0 by [0021](docs/decisions/0021-a-pick-teaches-nothing.md): they would almost never fire
 - [x] An alias is checked against InvenTree when it is used (the matcher ignores one whose record cannot be matched; `check-setup` reports it by id, the run log by record)
 
 **DoD:** after a confirmed correction, the same wording matches without a

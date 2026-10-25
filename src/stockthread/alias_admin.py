@@ -1,4 +1,5 @@
-"""What an admin sees of the confirmed aliases (`stockthread aliases`, ADR 0012): a list, an export and a removal.
+"""What an admin sees of the aliases (`stockthread aliases`, ADR 0012): a list, an export, a removal, and an alias
+typed by hand (#174).
 
 Alias text and user ids come from Slack, so they are printed quoted, with every character that is not printable
 (control characters, DEL, C1 codes, bidi overrides) escaped: none reaches the terminal as itself.
@@ -10,6 +11,9 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from stockthread.core.matching import Catalog, match_location, match_part, words
+from stockthread.core.model import MatchRule, MatchStatus
+from stockthread.learning import DEICTIC
 from stockthread.printable import printable
 from stockthread.store import AliasKind, StoredAlias
 
@@ -76,3 +80,50 @@ def export(aliases: Sequence[StoredAlias]) -> dict[str, Any]:
             for alias in aliases
         ],
     }
+
+
+def refused(text: str) -> str | None:
+    """Why `text` cannot be an alias an admin types, or None. An alias is for everyone's posts, so a word whose
+    meaning depends on who posted it or when ("my van", "this cable") is refused, as for a learned one
+    (`learning.DEICTIC`); so is a text with no letter ("40")."""
+    said = words(text)
+    if not any(any(c.isalpha() for c in word) for word in said):
+        return "it has no word with a letter"
+    named = sorted(DEICTIC.intersection(said))
+    if named:
+        return f"{_quoted(named[0])} means another thing for another poster or on another day"
+    return None
+
+
+def unmatchable(catalog: Catalog, kind: AliasKind, record: int) -> str | None:
+    """Why the matcher would ignore an alias of `record` (`matching.stale_aliases`), or None when it can be used."""
+    if kind is AliasKind.PART:
+        part = next((part for part in catalog.parts if part.pk == record), None)
+        if part is None or not part.active:
+            return "is not an active part in InvenTree (made inactive, or deleted)"
+        if part.template or part.virtual:
+            return f"is a {'template' if part.template else 'virtual'} part (it holds no stock)"
+        return None
+    location = next((location for location in catalog.locations if location.pk == record), None)
+    if location is None:
+        return "is not a stock location in InvenTree"
+    if location.structural:
+        return "is a structural location (it cannot hold stock)"
+    return None
+
+
+def named(catalog: Catalog, kind: AliasKind, record: int) -> str:
+    """The record as an admin knows it: a part's name and IPN, or a location's path."""
+    if kind is AliasKind.PART:
+        part = next(part for part in catalog.parts if part.pk == record)
+        return f"{_quoted(part.name)}" + (f" (IPN {_quoted(part.ipn)})" if part.ipn else "")
+    return _quoted(next(location for location in catalog.locations if location.pk == record).path)
+
+
+def shadowed(catalog: Catalog, kind: AliasKind, text: str) -> str | None:
+    """Why an alias for `text` would never be used, or None: the matcher tries a record's own name (exact and
+    normalized rules) before any alias, so a text that is one record's name is matched to that record."""
+    match = match_part(text, catalog) if kind is AliasKind.PART else match_location(text, catalog, "")
+    if match.status is MatchStatus.MATCHED and match.rule in (MatchRule.EXACT, MatchRule.NORMALIZED):
+        return f"it is the name of {kind.value} {match.record}, which the matcher tries before any alias"
+    return None

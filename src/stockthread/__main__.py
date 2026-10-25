@@ -11,12 +11,12 @@ import threading
 from pathlib import Path
 
 from stockthread import __version__
-from stockthread.alias_admin import alias_lines, describe, export
+from stockthread.alias_admin import alias_lines, describe, export, named, refused, shadowed, unmatchable
 from stockthread.config import ConfigError, load_settings
 from stockthread.inventree import InvenTreeError
-from stockthread.run import check_setup, run
+from stockthread.run import check_setup, inventree_catalog, run
 from stockthread.setup_check import exit_code
-from stockthread.store import SchemaTooNew, SchemaTooOld, Store
+from stockthread.store import AliasKind, SchemaTooNew, SchemaTooOld, Store
 from stockthread.trail import TrailError, message_key, post_trail
 
 DEFAULT_CONFIG = "stockthread.toml"
@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("STOCKTHREAD_CONFIG", DEFAULT_CONFIG)),
         help=f"settings file (default: $STOCKTHREAD_CONFIG or {DEFAULT_CONFIG})",
     )
-    aliases = commands.add_parser("aliases", help="list, export or remove the confirmed aliases (reads the database)")
+    aliases = commands.add_parser("aliases", help="list, export, add or remove aliases (reads the database)")
     alias_actions = aliases.add_subparsers(dest="action")
     config = argparse.ArgumentParser(add_help=False)
     config.add_argument(
@@ -80,6 +80,14 @@ def main(argv: list[str] | None = None) -> int:
         "remove", parents=[config], help="forget aliases: the next post is matched as if they were never learned"
     )
     remove.add_argument("ids", nargs="+", type=int, metavar="ID", help="an alias id, as `aliases list` prints it")
+    add = alias_actions.add_parser(
+        "add",
+        parents=[config],
+        help="type an alias by hand: posts that say TEXT name RECORD, for everyone (checked against InvenTree)",
+    )
+    add.add_argument("kind", choices=[kind.value for kind in AliasKind], help="what the text names")
+    add.add_argument("text", help='the words posts use, e.g. "ubiquity psu"')
+    add.add_argument("record", type=int, help="the part or stock location id, as in its InvenTree page's address")
     args = parser.parse_args(argv)
 
     if args.command == "check-config":
@@ -94,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.action is None:
             aliases.print_help()
             return 0
+        if args.action == "add":
+            return add_alias_command(args.config, AliasKind(args.kind), args.text, args.record)
         return aliases_command(args.config, args.action, getattr(args, "ids", []))
     parser.print_help()
     return 0
@@ -220,6 +230,48 @@ def aliases_command(path: Path, action: str, ids: list[int]) -> int:
         return 2
     finally:
         store.close()
+
+
+def add_alias_command(path: Path, kind: AliasKind, text: str, record: int) -> int:
+    """Store an alias an admin typed (#174), once InvenTree says its record can be matched; 1 when it is refused, 2
+    when the database or InvenTree cannot be read. Nothing is stored unless every check passes."""
+    try:
+        settings = load_settings(path, os.environ)
+    except ConfigError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    if why := refused(text):
+        print(f"ERROR not an alias: {why}", file=sys.stderr)
+        return 1
+    try:
+        Store.open_read_only(settings.storage.database).close()  # never create or migrate one
+        catalog = inventree_catalog(settings)()
+    except (FileNotFoundError, SchemaTooNew, SchemaTooOld, sqlite3.Error, InvenTreeError) as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    stale = unmatchable(catalog, kind, record)
+    why = f"{kind.value} {record} {stale}" if stale else shadowed(catalog, kind, text)
+    if why is None:
+        try:
+            store = Store.open(settings.storage.database)
+        except (SchemaTooNew, SchemaTooOld, sqlite3.Error) as exc:
+            print(f"ERROR {exc}", file=sys.stderr)
+            return 2
+        try:
+            added = store.add_alias(kind, text, record)
+        except ValueError as exc:
+            why = str(exc)
+        except sqlite3.Error as exc:
+            print(f"ERROR {exc}", file=sys.stderr)
+            return 2
+        finally:
+            store.close()
+    if why is not None:
+        print(f"ERROR not added: {why}", file=sys.stderr)
+        return 1
+    print(f"added {describe(added).lstrip()}: {named(catalog, kind, record)}")
+    print("posts read from now on use it; `stockthread aliases remove <id>` forgets it")
+    return 0
 
 
 if __name__ == "__main__":

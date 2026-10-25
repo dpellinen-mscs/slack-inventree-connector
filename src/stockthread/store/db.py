@@ -2544,6 +2544,43 @@ class Store:
             self._audit(Actor.ADMIN, "alias_removed", post_id=post_id, request_id=request_id, alias_id=alias_id)
             return removed
 
+    def add_alias(self, kind: AliasKind, text: str, record: int) -> StoredAlias:
+        """Store `text` as an alias an admin typed for part or location `record`, for everyone's posts, and return it
+        (#174: a deliberate alias). It stores no rivals, so it is never asked again when the catalog grows a rival, and
+        no confirmation takes it over (`learn_alias`). Every learned alias the matcher takes for the same text ("patch
+        cable" for "patch cables") is replaced, audited as `alias_replaced` with the request that taught it. Audited
+        as `alias_added` by the admin. ValueError, and nothing changes, when the text has no word, or when an alias an
+        admin typed already stands for the same text: removing it first is a deliberate step.
+
+        Needs no instance lock: an admin adds an alias while the connector runs."""
+        if not words(text) or record <= 0:
+            raise ValueError("an alias names one record with at least one word")
+        with self._transaction():
+            rows = self._db.execute(
+                "SELECT id, text, rivals IS NULL FROM aliases WHERE kind = ? AND user_id IS NULL ORDER BY id",
+                (kind.value,),
+            ).fetchall()
+            same = [(alias_id, admin) for alias_id, known, admin in rows if same_words(known, text)]
+            typed = [alias_id for alias_id, admin in same if admin]
+            if typed:
+                raise ValueError(
+                    f"alias {typed[0]} already names this text; `stockthread aliases remove {typed[0]}` first"
+                )
+            for other, _ in same:
+                row = self._db.execute(f"{self._STORED_ALIAS_SELECT} WHERE a.id = ?", (other,)).fetchone()
+                request_id, post_id = row[13:]
+                self._db.execute("DELETE FROM aliases WHERE id = ?", (other,))
+                self._audit(Actor.ADMIN, "alias_replaced", post_id=post_id, request_id=request_id, alias_id=other)
+            now = self._now()
+            alias_id = self._db.execute(
+                "INSERT INTO aliases (kind, text, words, record, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (kind.value, text.strip(), " ".join(words(text)), record, now, now),
+            ).lastrowid
+            self._audit(Actor.ADMIN, "alias_added", alias_id=alias_id)
+            return self._stored_alias(
+                self._db.execute(f"{self._STORED_ALIAS_SELECT} WHERE a.id = ?", (alias_id,)).fetchone()
+            )
+
     def release_lock(self, owner: str) -> None:
         with self._transaction():
             self._db.execute("DELETE FROM instance_lock WHERE id = 1 AND owner = ?", (owner,))

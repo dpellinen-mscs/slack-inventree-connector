@@ -115,6 +115,12 @@ What to expect in this version:
   with its id and the post it was learned from; `aliases export` prints them as JSON, for a backup.
   `aliases remove <id>` forgets one, also while the connector runs: posts read after that are
   matched as if it had never been learned. Removals are in the audit log.
+- A pick among several parts teaches nothing, so a word your team always means one way ("ubiquity
+  psu" for one power supply) asks every time until you add it by hand:
+  `.venv/bin/stockthread aliases add part 'ubiquity psu' 57`, where 57 is the id in the part's
+  InvenTree address (`/part/57/`); `aliases add location 'back room' 12` for a stock location. It
+  reads InvenTree first and refuses a record that cannot hold stock, a text with a word like "my"
+  or "this", and a text that is already some record's name. It applies to everyone's posts.
 
 ### Serving over HTTP instead of Socket Mode
 

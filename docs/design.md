@@ -1997,7 +1997,9 @@ Deterministic. The rules run in this order:
 - "My truck" resolves through the mapping from Slack user to vehicle,
   only when the word ("truck", "van") names that vehicle in its path,
   description or aliases. "My trailer" from a user with a truck goes
-  through the other rules instead. Aliases that contain such words are stored per user.
+  through the other rules instead. No alias holds such a word: none is
+  learned, and `aliases add` refuses one. There are no per-user aliases
+  ([0021](decisions/0021-a-pick-teaches-nothing.md)).
 - An alias is checked against the catalog snapshot when it is used. An
   alias that points to an inactive part or a deleted location is ignored
   and reported.
@@ -2025,6 +2027,12 @@ Deterministic. The rules run in this order:
   same words then apply with no click; a new part that fits them is a
   question again; a dry run with writes off and an expired plan teach
   nothing.
+- Typed by an admin ([0021](decisions/0021-a-pick-teaches-nothing.md);
+  `stockthread aliases add`): a text the team always means one way, which
+  a pick cannot teach. It applies to everyone's posts, is never
+  rechecked, replaces a learned alias for the same text, and is refused
+  for a record the matcher would ignore, a text with a word like "my",
+  and a text that is already a record's name.
 
 ## 11. Testing strategy
 

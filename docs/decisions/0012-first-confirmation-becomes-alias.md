@@ -1,6 +1,6 @@
 # 0012: A whole-word match is confirmed once, and that confirmation becomes an alias
 
-- Status: Accepted
+- Status: Accepted; a pick among candidates teaching an alias is superseded by [0021](0021-a-pick-teaches-nothing.md)
 - Date: 2026-09-30
 - Decided by: Dan
 - Source: [#28](https://github.com/dpellinen-mscs/slack-inventree-connector/issues/28), answer "C"
@@ -75,7 +75,7 @@ Learning as built (agent, 2026-10-24; `learning.lessons`, `Worker._learn`):
   with no letter ("40"), a place named by a vehicle word alone ("the
   van"), and a text the same plan decided for two records are never
   learned (no per-user aliases yet).
-- **Narrower than the decision above, pending Dan ([#174](https://github.com/dpellinen-mscs/slack-inventree-connector/issues/174)):** a text is learned
+- **Narrower than the decision above, as Dan decided on [#174](https://github.com/dpellinen-mscs/slack-inventree-connector/issues/174) ([ADR 0021](0021-a-pick-teaches-nothing.md)):** a text is learned
   only when its record is the one record the whole-word and fuzzy rules
   fit it to (articles ignored). So a pick from a
   candidate list ("cable" among three cables, "Disc 40" between the 40 and
