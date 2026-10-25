@@ -73,7 +73,7 @@ def test_a_refused_write_says_nothing_changed() -> None:
 @pytest.mark.parametrize(
     ("state", "words"),
     [
-        (S.PLANNED, "not applied. Stock changed since the plan, so it waits for review."),
+        (S.PLANNED, "not applied. It was not sent, because an earlier movement did not go through."),
         (S.REJECTED, "not applied. It was rejected."),
         (S.CANCELLED, "not applied. A newer reading of the post replaced it."),
         (S.EXPIRED, "not applied. It expired."),
@@ -95,10 +95,9 @@ def test_a_request_never_written_is_not_applied(state: RequestState, words: str)
         (S.UNDONE, S.VERIFY_FAILED),
         (S.VERIFIED, S.UNDO_FAILED),
         (S.VERIFIED, S.UNDONE, S.FAILED),
-        (S.UNDONE, S.PLANNED),  # one still waits for review: not finished
+        (S.UNDONE, S.PLANNED),
         (S.VERIFIED, S.VERIFY_FAILED),
-        (S.VERIFIED, S.FAILED),
-        (S.VERIFIED, S.PLANNED),
+        (S.VERIFIED, S.ACCEPTED, S.PLANNED),
         (S.FAILED, S.VERIFY_FAILED),
     ],
 )
@@ -135,6 +134,57 @@ def test_an_undo_of_some_movements_says_the_rest_stays_applied(states: tuple[Req
     assert shown.startswith("*Partly undone.* What is marked undone below was put back; the rest stays applied.")
     assert "*: undone." in shown
     assert "*: applied, and read back as planned." in shown
+
+
+@pytest.mark.parametrize(
+    "states",
+    [
+        (S.VERIFIED, S.FAILED),
+        (S.VERIFIED, S.PLANNED),
+        (S.VERIFIED, S.FAILED, S.PLANNED),
+        (S.VERIFIED, S.VERIFIED, S.EXPIRED),
+        (S.CANCELLED, S.VERIFIED),
+    ],
+)
+def test_a_plan_applied_only_in_part_says_so_and_how_to_record_the_rest(states: tuple[RequestState, ...]) -> None:
+    body = made(states)
+    assert body["text"] == f"Partly applied: {len(states)} movements."
+    assert text_of(body).startswith(
+        "*Partly applied.* What is marked applied below changed inventory, and it was read back to check it."
+        " The rest was not applied: to record it, post it again. Approved by the write policy"
+    )
+
+
+@pytest.mark.parametrize(
+    ("states", "words"),
+    [
+        ((S.PLANNED,), "not applied. Stock changed since the plan, so it waits for review."),
+        ((S.PLANNED, S.PLANNED), "not applied. Stock changed since the plan, so it waits for review."),
+        ((S.VERIFIED, S.PLANNED), "not applied. It was not sent."),
+        ((S.UNDONE, S.PLANNED), "not applied. It was not sent."),  # the first went through: it was undone later
+        ((S.EXPIRED, S.PLANNED), "not applied. It was not sent."),
+        ((S.FAILED, S.PLANNED), "not applied. It was not sent, because an earlier movement did not go through."),
+        ((S.VERIFY_FAILED, S.PLANNED), "not applied. It was not sent, because an earlier movement did not go through."),
+        ((S.ACCEPTED, S.PLANNED), "not applied. It was not sent, because an earlier movement did not go through."),
+    ],
+)
+def test_a_movement_sent_back_unsent_waits_for_review_only_when_its_whole_plan_does(
+    states: tuple[RequestState, ...], words: str
+) -> None:
+    """A plan is approved whole: once one of its requests is not planned, a click can approve none of the rest."""
+    shown = text_of(made(states))
+    title = "Take to a vehicle" if len(states) == 1 else f"{len(states)}. Take to a vehicle"
+    assert f"*{title}*: {words}" in shown
+
+
+def test_a_movement_after_one_that_went_wrong_says_so_whatever_came_between() -> None:
+    shown = text_of(made((S.VERIFIED, S.FAILED, S.PLANNED)))
+    assert "*1. Take to a vehicle*: applied, and read back as planned." in shown
+    assert "*2. Take to a vehicle*: not applied. InvenTree refused it" in shown
+    assert (
+        "*3. Take to a vehicle*: not applied. It was not sent, because an earlier movement did not go through." in shown
+    )
+    assert "waits for review" not in shown
 
 
 def test_a_read_back_that_did_not_match_says_to_check_inventree() -> None:

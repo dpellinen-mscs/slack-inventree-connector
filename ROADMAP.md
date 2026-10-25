@@ -148,7 +148,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`, run by `run.run` at start)
   - [x] Recovery of an unknown undo (`apply.recover_undo`, ADR 0018)
   - [x] The worker runs recovery (`Worker.work_due`)
-- [ ] Plans with several requests, and the `partially_applied` state
+- [x] Plans with several requests, and the `partially_applied` state: read from the request states, not stored; the receipt says "Partly applied" (`replies.receipt`; on a real server: `test_partial_plan_server.py`)
 - [ ] Receipt in the thread with the exact changes and a link to InvenTree
   - [x] The message: each movement's state, its exact changes, links to InvenTree and its marker (`replies.receipt`); due once no write of the plan is due or in flight and one concluded unreported, recorded with the states it reported (`Store.receipts_due`, `Store.receipt_posted`, migration 0019)
   - [x] Posted by the worker, with the Undo button; a receipt out of date by the time Slack returned is replaced (`Worker.post_receipts`)

@@ -1280,6 +1280,16 @@ their writes after the fact, and the docs warn against that setup.
 A plan has its own state: `current`, `stale`, `expired`, `applied`,
 `partially_applied`, `undone` or `accepted`.
 
+As built, only `current`, `stale` and `expired` are stored: they say
+which revision a click may approve. The others are read from the states
+of the plan's requests whenever the receipt is built, so they can never
+disagree with them. The receipt heads a plan `partially_applied` ("Partly
+applied") when some requests are `verified` and every other one wrote
+nothing InvenTree showed (`failed`, `planned`, `cancelled`, `expired`),
+and says what to do with the rest: post it again. A request the plan sent
+back unsent says so, and says it waits for no review: a plan is approved
+whole, so no click can approve the rest of a plan that is partly applied.
+
 ### States of a request
 
 | State | Meaning | Next |

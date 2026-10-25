@@ -659,6 +659,15 @@ RECEIPT_WORDS = {
 `verify_failed` and `failed` claim no more than their every path guarantees: a `verify_failed` request may have been
 found by its marker check with nothing sent, and a `failed` one concluded by recovery may still land (ADR 0015)."""
 
+NOT_SENT = "not applied. It was not sent"
+"""What a `planned` request says in place of RECEIPT_WORDS when another request of its plan is not `planned`: a plan is
+approved whole (`Store.approve_plan`), so it no longer waits for review. Why it went back unsent (stock changed, the
+plan expired, the attempt limit) is in the trail."""
+NOT_SENT_AFTER = f"{NOT_SENT}, because an earlier movement did not go through"
+"""Said instead when an earlier request of the plan went wrong (`failed`, or `verify_failed`, and maybe `accepted`
+since): the plan stops at the first request that went wrong (`Store.plan_stopped_before`) and sends the rest back."""
+WENT_WRONG = frozenset({RequestState.FAILED, RequestState.VERIFY_FAILED, RequestState.ACCEPTED})
+
 NOT_WRITTEN = frozenset(
     {RequestState.FAILED, RequestState.PLANNED, RequestState.REJECTED, RequestState.CANCELLED, RequestState.EXPIRED}
 )
@@ -753,6 +762,12 @@ def receipt(
         heading, text = "*Applied.* Inventory was changed as below, and read back to check it.", "Applied"
     elif all(state in NOT_WRITTEN for state in states):
         heading, text = "*Not applied.*", "Not applied"
+    elif all(state in NOT_WRITTEN | {RequestState.VERIFIED} for state in states):
+        heading, text = (
+            "*Partly applied.* What is marked applied below changed inventory, and it was read back to check it."
+            " The rest was not applied: to record it, post it again.",
+            "Partly applied",
+        )
     elif all(state in NOT_WRITTEN - {RequestState.PLANNED} | {RequestState.UNDONE} for state in states):
         heading, text = "*Undone.* What was applied below was put back, and read back to check it.", "Undone"
     elif all(state in {RequestState.VERIFIED, RequestState.UNDONE} for state in states):
@@ -769,8 +784,8 @@ def receipt(
     else:
         who = "Approved by a click."
     blocks: list[dict[str, Any]] = [_section(f"{heading} {who}")]
-    shown_views = zip(views[:MAX_MOVEMENTS], states, markers, offered, strict=False)
-    for number, (view, state, marker, undo_value) in enumerate(shown_views, 1):
+    shown_views = zip(views[:MAX_MOVEMENTS], markers, offered, strict=False)
+    for number, (view, marker, undo_value) in enumerate(shown_views, 1):
         movement = view.movement
         title = TYPE_LABELS[movement.movement_type]
         if len(views) > 1:
@@ -780,7 +795,8 @@ def receipt(
         destination = _named(
             movement.destination_text, view.destination, locations, "location", view.named.get("destination")
         )
-        shown = "\n".join([f"*{title}*: {RECEIPT_WORDS[state]}.", *lines, f"From {source} to {destination}"])
+        words = _receipt_words(states, number - 1)
+        shown = "\n".join([f"*{title}*: {words}.", *lines, f"From {source} to {destination}"])
         links = _receipt_links(view, locations, inventree_url)
         if links and len(shown) + 1 + len(links) <= MAX_SECTION:  # never cut inside a link
             shown = f"{shown}\n{links}"
@@ -799,6 +815,17 @@ def receipt(
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": _cut(note)}]})
     count = f"{len(views)} movements" if len(views) > 1 else "1 movement"
     return {"text": f"{text}: {count}.", "blocks": blocks}
+
+
+def _receipt_words(states: Sequence[RequestState], index: int) -> str:
+    """What movement `index` of a receipt says of its state: RECEIPT_WORDS, but a `planned` request in a plan that is
+    not all `planned` waits for no review."""
+    state = states[index]
+    if state is not RequestState.PLANNED or all(other is RequestState.PLANNED for other in states):
+        return RECEIPT_WORDS[state]
+    if any(other in WENT_WRONG for other in states[:index]):
+        return NOT_SENT_AFTER
+    return NOT_SENT
 
 
 def receipt_replaced() -> dict[str, Any]:

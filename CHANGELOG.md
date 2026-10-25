@@ -14,6 +14,9 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Changed
 
+- A receipt of a plan whose writes went through only in part says "Partly applied" (it said "Check this"), names
+  the movements that changed inventory, and says to post the rest again. A movement the plan never sent says so,
+  and no longer claims it waits for review: a plan is approved whole, so no click can approve the rest of it.
 - A length in its part's own unit ("50 m of drop cable" for a part stocked in m, "50 ft" for one in ft) asks no
   quantity question and may apply, for a part matched surely enough to write. Units are never converted: cm, mm,
   inches, any other unit, containers and anything that may multiply the length ("3 runs of 50 m", "2x 50 m",
