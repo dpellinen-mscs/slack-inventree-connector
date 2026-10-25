@@ -414,3 +414,34 @@ def test_an_edit_noted_while_the_lesson_is_read_teaches_nothing(store: Store, ca
     assert store.request(KEY).state is S.VERIFIED
     assert store.stored_aliases() == ()
     assert "an alias of plan revision 1 not learned (StateConflict)" in caplog.text
+
+
+def test_a_post_edited_before_its_dry_run_teaches_what_that_dry_run_read(store: Store) -> None:
+    """The dry run read the post after the edit, so the lesson is read at the same point and is stored: only an edit
+    noted after the text was read forgets or refuses it."""
+    store.place_message(OWNER, POST, user_id=SAM, thread_ts=None, window_seconds=5)
+    store.note_revision(OWNER, POST)
+    through = store.post_changes_through(POST)
+    assert through > 0
+    extraction = Extraction("rules", (TAKE.movement,))
+    record = _record(extraction, [TAKE], late=False, poster=SAM, messages=(), max_quantity=500)
+    result = json.loads(json.dumps(record))
+    made = plan_of(result)
+    assert made is not None
+    store.finish_dry_run(
+        OWNER, POST, DryRunOutcome.REPLIED, "1700000100.000100", result=result, plan=NewPlan(*made), changes=through
+    )
+    store.approve_plan(OWNER, POST, 1, actor=Actor.HUMAN, approver=LUIS)
+    read: list[int] = []
+    running = worker(store, FakeInvenTree())
+    messages = running._messages
+
+    def reading(post: PostKey, changes: int) -> Any:
+        read.append(changes)
+        return messages(post, changes)
+
+    running._messages = reading  # type: ignore[method-assign,assignment]
+    running.work_due()
+    assert store.request(KEY).state is S.VERIFIED
+    assert read == [through]
+    assert [alias.text for alias in store.stored_aliases()] == ["Norvane 40"]
