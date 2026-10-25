@@ -109,10 +109,23 @@ class Checker:
                 if not NORMALIZED_RE.match(text) or text.startswith("the ") or "  " in text:
                     self.error("catalog/aliases.json", f"alias {text!r} is not in normalized form")
         for alias in aliases.get("parts", []):
-            if alias["part"] not in self.parts:
-                self.error("catalog/aliases.json", f"unknown part {alias['part']!r}")
+            self.check_keys("catalog/aliases.json", alias, {"text", "part", "rivals"}, {"text", "part"})
+            for ipn in [alias.get("part"), *self.rivals(alias)]:
+                if ipn not in self.parts:
+                    self.error("catalog/aliases.json", f"unknown part {ipn!r}")
         for alias in aliases.get("locations", []):
-            self.check_location_ref("catalog/aliases.json", alias["location"])
+            self.check_keys("catalog/aliases.json", alias, {"text", "location", "rivals"}, {"text", "location"})
+            for path in [alias.get("location"), *self.rivals(alias)]:
+                self.check_location_ref("catalog/aliases.json", path)
+
+    def rivals(self, alias: dict) -> list:
+        """A learned alias's `rivals`: the records its text fitted by its words when a person confirmed it, as a
+        sorted list without repeats. An alias an admin typed has none."""
+        rivals = alias.get("rivals", [])
+        if not isinstance(rivals, list) or not all(isinstance(r, str) for r in rivals) or rivals != sorted(set(rivals)):
+            self.error("catalog/aliases.json", f"rivals of {alias.get('text')!r} must be a sorted list without repeats")
+            return []
+        return rivals
 
     def check_location_ref(self, where: str, path: str) -> None:
         location = self.locations.get(path)

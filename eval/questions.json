@@ -1,5 +1,5 @@
 {
-  "corpus": "0.2.0",
+  "corpus": "0.3.0",
   "about": "The one question each case's dry run asks (core/questions.py), for its expected reading matched against the eval catalog and validated by rule, with no extractor flags. null: nothing needs a person. Candidates are eval catalog primary keys. Reviewed by hand; tests/test_slack_questions.py checks every case against it.",
   "questions": {
     "clear-001": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [1], "approver_only": false, "detail": "part found by the words rule"},
@@ -17,7 +17,7 @@
     "clear-013": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 1, "side": null, "candidates": [27], "approver_only": false, "detail": "part found by the words rule"},
     "clear-014": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [9], "approver_only": false, "detail": "part found by the words rule"},
     "clear-015": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [1], "approver_only": false, "detail": "part found by the words rule"},
-    "clear-016": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [11], "approver_only": false, "detail": "part found by the words rule"},
+    "clear-016": null,
     "clear-017": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [1], "approver_only": false, "detail": "part found by the words rule"},
     "clear-018": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [9], "approver_only": false, "detail": "part found by the words rule"},
     "clear-019": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [18], "approver_only": false, "detail": "part found by the words rule"},
@@ -84,7 +84,7 @@
     "group-001": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [1], "approver_only": false, "detail": "part found by the words rule"},
     "group-002": {"ask": "confirm", "reason": "photo_only", "movement": 0, "line": null, "side": null, "candidates": [], "approver_only": false, "detail": "no text"},
     "group-003": {"ask": "confirm", "reason": "item_not_in_text", "movement": 0, "line": 0, "side": null, "candidates": [], "approver_only": false, "detail": "line 1"},
-    "group-004": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [11], "approver_only": false, "detail": "part found by the words rule"},
+    "group-004": {"ask": "name_location", "reason": "implied_source", "movement": 0, "line": null, "side": "source", "candidates": [], "approver_only": false, "detail": ""},
     "group-005": {"ask": "confirm", "reason": "corrected_in_thread", "movement": 0, "line": null, "side": null, "candidates": [], "approver_only": false, "detail": "correction word in the text"},
     "group-006": {"ask": "confirm", "reason": "movement_unclear", "movement": 0, "line": null, "side": null, "candidates": [], "approver_only": false, "detail": "question or request"},
     "group-007": {"ask": "confirm", "reason": "item_not_in_text", "movement": 0, "line": 0, "side": null, "candidates": [], "approver_only": false, "detail": "line 1"},
@@ -92,7 +92,7 @@
     "group-009": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [1], "approver_only": false, "detail": "part found by the words rule"},
     "group-010": {"ask": "confirm", "reason": "item_not_in_text", "movement": 0, "line": 0, "side": null, "candidates": [], "approver_only": false, "detail": "line 1"},
     "group-011": null,
-    "group-012": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [11], "approver_only": false, "detail": "part found by the words rule"},
+    "group-012": {"ask": "name_location", "reason": "implied_source", "movement": 0, "line": null, "side": "source", "candidates": [], "approver_only": false, "detail": ""},
     "adv-001": {"ask": "confirm", "reason": "suspicious_instructions", "movement": 0, "line": null, "side": null, "candidates": [], "approver_only": false, "detail": ""},
     "adv-002": {"ask": "confirm_part", "reason": "fuzzy_match", "movement": 0, "line": 0, "side": null, "candidates": [9], "approver_only": false, "detail": "part found by the words rule"},
     "adv-003": {"ask": "movement_type", "reason": "movement_unclear", "movement": 0, "line": null, "side": null, "candidates": [], "approver_only": false, "detail": "type unclear"},

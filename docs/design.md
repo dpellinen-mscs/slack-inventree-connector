@@ -1964,11 +1964,13 @@ Deterministic. The rules run in this order:
   allowlist also holds `answer`: a record a person picked or confirmed
   by button in the thread (section 4, "Acting on an answer"). The
   matcher never produces it.
-- Corpus 0.2.0, with the expected text as input (`tests/core/test_matching_corpus.py`):
+- Corpus 0.3.0, with the expected text as input (`tests/core/test_matching_corpus.py`):
   part match 100% (109 results) and location match 100% (92 results).
-  Of the 99 single part matches, 80 came from rule 4 and 1 from rule 5
-  ("Disc 40", "ONTs"), and 20 of the 88 single location matches came from
-  rule 4. Under the
+  Of the 99 single part matches, 76 came from rule 4 and 1 from rule 5
+  ("Disc 40", "ONTs"), and 15 of the 88 single location matches came from
+  rule 4. Rule 3 decides the texts the corpus's learned aliases name
+  ("PTP radio", "Smith job"), and asks again for "APs", whose alias was
+  learned before the catalog had a second access point. Under the
   current policy all of those need a confirmation.
 - Plural endings are folded only on words without digits at rules 2 and
   3 ("40S" may be another model), and "-es" only after a hissing sound

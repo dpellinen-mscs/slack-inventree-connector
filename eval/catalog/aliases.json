@@ -20,6 +20,20 @@
     {
       "text": "jarm",
       "part": "MNT-J-ARM"
+    },
+    {
+      "text": "ap",
+      "part": "AP-NV-D40",
+      "rivals": [
+        "AP-NV-D40"
+      ]
+    },
+    {
+      "text": "ptp radio",
+      "part": "RAD-SK-PTP5",
+      "rivals": [
+        "RAD-SK-PTP5"
+      ]
     }
   ],
   "locations": [
@@ -30,6 +44,13 @@
     {
       "text": "shop",
       "location": "Warehouse/Main Stock"
+    },
+    {
+      "text": "smith job",
+      "location": "Job Sites/Smith Residence",
+      "rivals": [
+        "Job Sites/Smith Residence"
+      ]
     }
   ]
 }

@@ -11,7 +11,7 @@ The predictions file names the corpus version it was produced for and holds
 one entry per case id:
 
     {
-      "corpus_version": "0.2.0",
+      "corpus_version": "0.3.0",
       "extractor": "rules-0.1",
       "predictions": [
         {"id": "clear-001", "movements": [ ...same shape as expected.movements... ], "post_flags": []}

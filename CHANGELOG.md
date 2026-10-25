@@ -41,6 +41,9 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Added
 
+- Eval corpus 0.3.0: learned aliases in `catalog/aliases.json` carry `rivals`, and the corpus covers them (one
+  matched with no question, one asked again because the catalog grew a rival).
+
 - The Apply button is taken out of its dry-run reply once the plan is approved (by a click or the policy), replaced
   by a newer reply, closed with nothing written, or expired. The reply ends with a line that says which, and who
   approved it. Replies posted before this version keep their buttons; a click on them is still checked against the

@@ -397,6 +397,13 @@ class CorpusDirectoryTest(unittest.TestCase):
                 lambda d: d["locations"].append({"text": "The Yard", "location": "Vehicles/Trailer"}),
             ),
             "duplicate alias": ("aliases.json", lambda d: d["parts"].append(dict(d["parts"][0]))),
+            "unknown alias key": ("aliases.json", lambda d: d["parts"][0].update(user="U0SAM0001")),
+            "rival unknown part": ("aliases.json", lambda d: d["parts"][0].update(rivals=["NOPE"])),
+            "rival structural location": ("aliases.json", lambda d: d["locations"][0].update(rivals=["Vehicles"])),
+            "rivals not a list": ("aliases.json", lambda d: d["parts"][0].update(rivals="AP-NV-D40")),
+            "rival not an IPN": ("aliases.json", lambda d: d["parts"][0].update(rivals=[{"ipn": "AP-NV-D40"}])),
+            "rivals repeated": ("aliases.json", lambda d: d["parts"][0].update(rivals=["AP-NV-D40", "AP-NV-D40"])),
+            "rivals unsorted": ("aliases.json", lambda d: d["parts"][0].update(rivals=["AP-NV-D60", "AP-NV-D40"])),
             "duplicate part": ("parts.json", lambda d: d["parts"].append(dict(d["parts"][0]))),
             "orphan location": (
                 "locations.json",

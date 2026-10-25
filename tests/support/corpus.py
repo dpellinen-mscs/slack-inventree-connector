@@ -56,11 +56,17 @@ def eval_catalog() -> tuple[Catalog, dict[int, str], dict[int, str]]:
     part_pk = {p.ipn: p.pk for p in parts}
     location_pk = {loc.path: loc.pk for loc in locations}
     aliases = _load("aliases")
+
+    def alias(entry: dict[str, Any], record: str, pks: dict[str, int]) -> Alias:
+        # A learned alias holds the records that fitted its text when it was confirmed; an admin's has none.
+        rivals = None if "rivals" not in entry else frozenset(pks[rival] for rival in entry["rivals"])
+        return Alias(entry["text"], pks[entry[record]], rivals=rivals)
+
     catalog = Catalog(
         parts=parts,
         locations=locations,
-        part_aliases=tuple(Alias(a["text"], part_pk[a["part"]]) for a in aliases["parts"]),
-        location_aliases=tuple(Alias(a["text"], location_pk[a["location"]]) for a in aliases["locations"]),
+        part_aliases=tuple(alias(a, "part", part_pk) for a in aliases["parts"]),
+        location_aliases=tuple(alias(a, "location", location_pk) for a in aliases["locations"]),
         vehicles={u["id"]: location_pk[u["vehicle"]] for u in _load("users")["users"] if u["vehicle"]},
     )
     return catalog, {v: k for k, v in part_pk.items()}, {v: k for k, v in location_pk.items()}

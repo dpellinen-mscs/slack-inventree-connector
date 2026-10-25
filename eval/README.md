@@ -19,7 +19,7 @@ Current version: see [`VERSION`](VERSION).
 | `catalog/parts.json` | The synthetic part catalog (IPN, name, description, keywords, units) |
 | `catalog/locations.json` | The synthetic stock locations, as a path tree |
 | `catalog/users.json` | Slack users and the vehicle assigned to each |
-| `catalog/aliases.json` | Aliases a human has already confirmed, in normalized form |
+| `catalog/aliases.json` | Aliases in normalized form: typed by an admin, or learned from a confirmed movement (with `rivals`) |
 | `questions.json` | The one question each case's dry run asks, by case id (`null`: none), reviewed by hand. A corpus change that changes a question updates it in the same change, with the reason in the PR |
 | `typed_answers.json` | Thread replies typed as the answer to one question (quantity, part, place, serials), with the reading a careful human expects (`null`: not an answer, read with the post). Versioned on its own; checked by `tests/core/test_typed_answers_eval.py` |
 | `schema/case-file.schema.json` | JSON Schema for a case file, with the lists of types, flags and tags |
@@ -214,6 +214,15 @@ The oracle is a stock clerk who knows those fields and nothing else:
 - `unmatched`: nothing fits. A forced fuzzy match is an error. A person is
   not a location, and neither is a vehicle that does not exist.
 
+An alias decides the match for its text, plurals folded. A learned alias
+also lists `rivals`: the parts or locations that fitted its text by its
+words when a person confirmed it (connector ADR 0012). When a record fits
+the text now that was not one of them, the clerk asks again, and the
+result is `ambiguous` with the alias's record and the new ones. So "ap",
+learned when the Disc 40 was the only access point, has three candidates
+today. An admin's alias has no `rivals` and is never asked again this way.
+Every learned alias decides at least one scored match.
+
 A generic word matches every part whose name or keywords contain it. "Patch
 cables" therefore has four candidates: the three copper lengths and the
 fiber patch cable.
@@ -294,7 +303,7 @@ An extractor writes its results to a predictions file:
 
 ```json
 {
-  "corpus_version": "0.2.0",
+  "corpus_version": "0.3.0",
   "extractor": "rules-0.1",
   "predictions": [
     {

@@ -199,7 +199,7 @@ job on PostgreSQL, prove each line below.
 ## M4: alias learning
 
 - [x] Alias admin: list, remove and export (`stockthread aliases`) (storage and learning are built in M3, [0012](docs/decisions/0012-first-confirmation-becomes-alias.md))
-- [ ] Learned aliases are covered by the corpus
+- [x] Learned aliases are covered by the corpus (corpus 0.3.0: `rivals` in `catalog/aliases.json`; `test_every_learned_alias_decides_a_scored_match`)
 - [ ] Aliases with words like "my" are stored per user
 - [x] An alias is checked against InvenTree when it is used (the matcher ignores one whose record cannot be matched; `check-setup` reports it by id, the run log by record)
 
