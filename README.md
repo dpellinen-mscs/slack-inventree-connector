@@ -5,8 +5,8 @@ Slack to InvenTree stock movements.
 Turn informal Slack stock posts ("2 APs on Sam's truck") into verified, auditable
 [InvenTree](https://inventree.org) stock movements, with a human in the loop where it matters.
 
-**Status:** early development. This version reads Slack and InvenTree and posts **dry runs** only:
-it never changes stock.
+**Status:** early development. Out of the box it only reads Slack and InvenTree and posts **dry
+runs**: it changes no stock until you set `writes.enabled = true` (see "What to expect" below).
 
 ## Quickstart: the first dry run
 
@@ -45,8 +45,9 @@ install an app. About 15 minutes.
    | Stock Location | view |
    | Stock Item | view |
 
-   Log in as that user, open its user settings and create an API token. This version only reads.
-   Writing stock later also needs *add* on *Stock Item*; `check-setup` (step 5) says so with a note.
+   Log in as that user, open its user settings and create an API token. These roles are enough for
+   dry runs. Writing stock (`writes.enabled`) also needs *add* on *Stock Item*; `check-setup` (step 5)
+   says so with a note.
 
 5. **Fill in `stockthread.toml`:** `workspace_id`, `app_id` and `channels` under `[slack]`, and `url`
    under `[inventree]`. Leave the rest as it is. Secrets go in the environment, never in the file:
@@ -100,8 +101,10 @@ What to expect in this version:
 - Posts made while the connector was stopped are read from the channel history when it starts
   again, up to `catch_up_hours` back (a day at most gets a reply), and their dry run says it was
   read late. Posts from before the very first start are left alone.
-- The database is one file, `stockthread.db`, next to the settings, readable by its owner only. It
-  holds the raw Slack events. Message text is blanked `storage.retention_days` (30) days after a post
+- The database is one file, `stockthread.db` (`storage.database`), readable by its owner only. A
+  relative path is taken from the directory the connector is started in, not from where the settings
+  file is: start it from the same directory every time, or give an absolute path. It holds the raw
+  Slack events. Message text is blanked `storage.retention_days` (30) days after a post
   is done with; ids, states and the audit log stay, so `trail` still shows what happened.
   [Operations](docs/operations.md) covers backing it up, restoring it and upgrading over it.
 - To see why a post got the reply it did, copy the link of any of its messages (*Copy link* in

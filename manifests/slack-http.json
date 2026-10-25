@@ -1,7 +1,7 @@
 {
   "display_information": {
     "name": "stockthread",
-    "description": "Turns stock posts into InvenTree movements. Dry runs only for now.",
+    "description": "Turns stock posts into InvenTree movements: dry runs by default, writes once an admin enables them.",
     "background_color": "#2c3e50"
   },
   "features": {
