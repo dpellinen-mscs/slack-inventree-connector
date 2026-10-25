@@ -154,6 +154,7 @@ from stockthread.store import (
     LockLost,
     NewPlan,
     NewQuestion,
+    PlanRow,
     QuestionStatus,
     ReviewItem,
     StateConflict,
@@ -1110,7 +1111,13 @@ class Worker:
         if now < self._apply_look_at:
             return None
         for button in self.store.apply_buttons_shown(limit=APPLY_LOOK_LIMIT):
-            closed = self._apply_closed(button)
+            try:
+                closed = self._apply_closed(button)
+            except LockLost:
+                raise
+            except Exception as error:  # one button the store cannot judge does not stop the others
+                _log_failure("Apply button of post", button.id, error)
+                continue
             if closed is not None:
                 return button, *closed
         self._apply_look_at = now + TAKE_DOWN_SPACING_SECONDS
@@ -1119,23 +1126,31 @@ class Worker:
     def _apply_closed(self, button: ApplyButton) -> tuple[str, str | None] | None:
         """How the plan of a dry-run reply's Apply button closed, as `replies.apply_closed` words it, and who approved
         it; None while a click on it could still approve it, or may yet. Closed only on what `_handle_apply` and
-        `approve_by_click` refuse for good: a later dry run that posted or read the post anew ("replaced"); the plan
-        approved, or further on ("approved"), its requests all rejected, cancelled or expired, or an undo of the
-        post asked for ("closed"); or its expiry passed ("expired"). With no current plan of the reply and no later
-        dry run, it waits: a revision may be on its way to make the plan again (`stale_plan`, then `unchanged`)."""
+        `approve_by_click` refuse for good: a write of a plan made from the reply's record began ("approved"); a later
+        dry run posted a reply or a notice ("replaced") or read the post anew ("closed"); the plan's requests are all
+        rejected, cancelled or expired, or an undo of the post was asked for ("closed"); or its expiry passed
+        ("expired"). An approved plan whose write has not begun waits: the writer may send it back to review
+        (`apply._back_to_review`), and a click then approves it again. With no current plan of the reply and no later
+        dry run, it waits too: a revision may be on its way to make the plan again (`stale_plan`, then `unchanged`)."""
         post, revision = button.post, button.revision
         if post in self._running:
             return None  # a reply on its way may replace it; until it is recorded the click still counts
         history = self.store.dry_run_history(post)
-        if any(record.revision > revision and record.outcome is not DryRunOutcome.UNCHANGED for record in history):
-            return "replaced", None
         clicked = [record.result for record in history if record.revision == revision]
+        digest = plan_hash(clicked[0]) if clicked and clicked[0] is not None else None
+        written = [plan for plan in self._plans(post) if plan.input_hash == digest and _write_began(plan)]
+        if written:
+            return "approved", written[-1].approved_by
+        later = {record.outcome for record in history if record.revision > revision}
+        if later & {DryRunOutcome.REPLIED, DryRunOutcome.RETRACTED}:
+            return "replaced", None
+        if later - {DryRunOutcome.UNCHANGED}:
+            return "closed", None
         plan = self.store.current_plan(post)
-        if plan is not None and clicked and clicked[0] is not None and plan_hash(clicked[0]) == plan.input_hash:
+        if plan is not None and digest is not None and plan.input_hash == digest:
             states = {row.state for row in plan.requests}
-            ended = {RequestState.REJECTED, RequestState.CANCELLED, RequestState.EXPIRED}
-            if plan.approved_by is not None or states - ended - {RequestState.PLANNED}:
-                return "approved", plan.approved_by
+            if RequestState.APPROVED in states:
+                return None
             if RequestState.EXPIRED in states:
                 return "expired", None
             if states != {RequestState.PLANNED} or self.store.undone_before(post, plan.revision):
@@ -1143,6 +1158,15 @@ class Worker:
         if plan_expired(self.store, post, self._now(), self.settings.slack.plan_expiry_hours):
             return "expired", None
         return None
+
+    def _plans(self, post: PostKey) -> list[PlanRow]:
+        """Every plan revision of the post, oldest first."""
+        plans: list[PlanRow] = []
+        while True:
+            try:
+                plans.append(self.store.plan(post, len(plans) + 1))
+            except KeyError:
+                return plans
 
     def _take_down_apply(self, button: ApplyButton, closed: str, approved_by: str | None) -> bool:
         """Edit the reply; False when it is gone or carries no Apply button to take out."""
@@ -2117,6 +2141,13 @@ def _as_changed(stored: NewMessage, changes: Sequence[Decision | None]) -> tuple
     if deleted:
         return MessageInput(original.ts, "", newest.edited_ts, deleted=True), source
     return MessageInput(newest.ts, newest.text, newest.edited_ts, newest.file_ids), source
+
+
+def _write_began(plan: PlanRow) -> bool:
+    """Whether a write of the plan began: a request of it is past `approved`, and not closed unwritten."""
+    unwritten = {RequestState.PLANNED, RequestState.APPROVED, RequestState.REJECTED, RequestState.CANCELLED,
+                 RequestState.EXPIRED}  # fmt: skip
+    return any(row.state not in unwritten for row in plan.requests)
 
 
 def _closed_already(blocks: Sequence[Any], closing: Mapping[str, Any]) -> bool:

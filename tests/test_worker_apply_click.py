@@ -622,7 +622,19 @@ def closing(worker: Worker, reply: int = 0) -> str | None:
     return str(last["elements"][0]["text"])
 
 
-def test_the_apply_button_is_taken_down_once_a_click_approved_the_plan(store: Store, clock: Clock) -> None:
+def written(store: Store) -> None:
+    """The plan's write began (its states set as the apply protocol leaves them)."""
+    with store._db:
+        store._db.execute("UPDATE requests SET state = 'verified'")
+
+
+def policy_wrote(store: Store) -> None:
+    """The policy approved the plan with no click, and its write began."""
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    written(store)
+
+
+def test_the_apply_button_is_taken_down_once_the_write_a_click_approved_began(store: Store, clock: Clock) -> None:
     clicking = Clicking(store)
     worker = replied(store, clock, clicking)
     assert shown(store) == [(1, "shown", 0)]
@@ -632,6 +644,10 @@ def test_the_apply_button_is_taken_down_once_a_click_approved_the_plan(store: St
     clock.at(PAST_THE_LOOK)
     worker.step()
     assert store.request(KEY).state is S.APPROVED
+    assert slack(worker).updates == []  # approved, not yet written: the writer may send it back to review
+    written(store)
+    clock.at("1790000036.000000")
+    worker.step()
     assert closing(worker) == f"This was approved by <@{LUIS}>. The receipt in this thread says what was written."
     [update] = slack(worker).updates
     kept = update["blocks"][:-1]
@@ -649,10 +665,69 @@ def test_the_apply_button_is_taken_down_once_a_click_approved_the_plan(store: St
 
 def test_a_plan_the_policy_approved_takes_its_button_down_with_no_name(store: Store, clock: Clock) -> None:
     worker = replied(store, clock, Clicking(store))
-    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    policy_wrote(store)
+    written(store)
     clock.at(PAST_THE_LOOK)
     worker.step()
     assert closing(worker) == "This was approved with no click. The receipt in this thread says what was written."
+
+
+def test_an_approved_plan_sent_back_to_review_keeps_its_button_for_a_click(store: Store, clock: Clock) -> None:
+    clicking = Clicking(store)
+    worker = replied(store, clock, clicking)
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    clock.at(PAST_THE_LOOK)
+    worker.step()
+    assert slack(worker).updates == []
+    # Stock changed since the plan (`apply._back_to_review`): it waits for a click again.
+    store.transition(KEY, expected=S.APPROVED, target=S.PLANNED, actor=Actor.APPLIER)
+    clock.at("1790000036.000000")
+    worker.step()
+    assert slack(worker).updates == []
+    click(store, worker)
+    worker.drain()
+    assert last_event(store) == (EventStatus.DONE, "approved")
+
+
+@pytest.mark.parametrize("outcome", [DryRunOutcome.SILENT, DryRunOutcome.REPLIED])
+def test_a_written_plan_says_approved_even_once_a_later_dry_run_ran(
+    store: Store, clock: Clock, outcome: DryRunOutcome
+) -> None:
+    worker = replied(store, clock, Clicking(store))
+    policy_wrote(store)
+    written(store)
+    later(store, outcome)
+    clock.at(PAST_THE_LOOK)
+    worker.step()
+    assert closing(worker) == "This was approved with no click. The receipt in this thread says what was written."
+
+
+def later(store: Store, outcome: DryRunOutcome) -> None:
+    """A thread reply joins the post, and its revision 2 is recorded with `outcome` and no plan."""
+    store.place_message(OWNER, PostKey(WORKSPACE, CHANNEL, "1790000020.000100"), user_id=SAM, thread_ts=ROOT,
+                        window_seconds=5)  # fmt: skip
+    posted = "1790000021.000100" if outcome is DryRunOutcome.REPLIED else None
+    store.finish_dry_run(OWNER, POST, outcome, posted, revision=2)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (DryRunOutcome.SILENT, "This movement can no longer be applied from here."),
+        (
+            DryRunOutcome.REPLIED,
+            "A newer reply in this thread replaced this one, so it can no longer be applied from here.",
+        ),
+    ],
+)
+def test_a_later_dry_run_closes_the_button_and_says_replaced_only_for_a_reply(
+    store: Store, clock: Clock, outcome: DryRunOutcome, expected: str
+) -> None:
+    worker = replied(store, clock, Clicking(store))
+    later(store, outcome)
+    clock.at(PAST_THE_LOOK)
+    worker.step()
+    assert closing(worker) == expected
 
 
 def test_a_reply_a_newer_one_replaced_loses_its_button_and_the_newer_keeps_its_own(store: Store, clock: Clock) -> None:
@@ -715,7 +790,7 @@ def test_a_plan_closed_with_nothing_approved_says_it_can_no_longer_be_applied(
 
 def test_a_button_that_cannot_be_taken_down_is_tried_with_backoff_then_left(store: Store, clock: Clock) -> None:
     worker = replied(store, clock, Clicking(store))
-    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    policy_wrote(store)
     slack(worker).read_failures = TAKE_DOWN_TRIES
     clock.at(PAST_THE_LOOK)
     worker.step()
@@ -737,7 +812,7 @@ def test_an_edit_that_went_through_unseen_counts_as_done_and_a_reply_with_no_but
 ) -> None:
     worker = replied(store, clock, Clicking(store))
     reply = slack(worker).posted[0]
-    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    policy_wrote(store)
     done = apply_closed("approved")
     slack(worker).edited["1790009999.000001"] = [*reply["blocks"][:-2], done]
     clock.at(PAST_THE_LOOK)
@@ -749,7 +824,7 @@ def test_an_edit_that_went_through_unseen_counts_as_done_and_a_reply_with_no_but
 def test_a_reply_with_no_apply_button_to_take_out_is_left(store: Store, clock: Clock) -> None:
     worker = replied(store, clock, Clicking(store))
     reply = slack(worker).posted[0]
-    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    policy_wrote(store)
     slack(worker).edited["1790009999.000001"] = reply["blocks"][:-2]  # someone else's edit, say
     clock.at(PAST_THE_LOOK)
     worker.step()
@@ -790,3 +865,44 @@ def test_questions_and_apply_buttons_take_turns() -> None:
     for _ in range(4):
         worker.take_down_buttons()
     assert turns == ["buttons", "Apply", "buttons", "Apply"]
+
+
+def test_a_plan_made_again_after_an_undo_takes_its_button_down(store: Store, clock: Clock) -> None:
+    """An edit that changes nothing makes the plan again after its undo; a click on it is refused, so the button goes.
+    The plan of the reply was written (and undone, as its receipt says), so the line says it was approved."""
+    worker = replied(store, clock, Clicking(store))
+    undone(store)
+    enqueue(store, edit("1790000040.000100", BACK, BACK + " "))
+    clock.at("1790000100.000000")
+    worker.step()
+    plan = store.current_plan(POST)
+    assert plan is not None
+    assert (plan.revision, {row.state for row in plan.requests}) == (2, {S.PLANNED})
+    assert closing(worker) == "This was approved with no click. The receipt in this thread says what was written."
+
+
+def test_a_plan_whose_post_was_undone_before_takes_its_button_down(store: Store, clock: Clock) -> None:
+    """A revised reply's own plan was never written, but an undo of the post's earlier plan closes it all the same."""
+    worker = replied(store, clock, Clicking(store))
+    undone(store)
+    enqueue(store, edit("1790000040.000100", BACK, "returned 3 Disc 40 from truck 1 to main stock"))
+    clock.at("1790000100.000000")
+    worker.step()
+    clock.at("1790000103.000000")
+    worker.step()
+    [revised] = [n for n, body in enumerate(slack(worker).posted) if (apply_button(body) or {}).get("value") == "2"]
+    assert closing(worker, 0) == "This was approved with no click. The receipt in this thread says what was written."
+    assert closing(worker, revised) == "This movement can no longer be applied from here."
+
+
+def test_a_button_waits_while_a_reply_of_its_post_is_on_its_way(store: Store, clock: Clock) -> None:
+    worker = replied(store, clock, Clicking(store))
+    policy_wrote(store)
+    worker._running[POST] = object()  # type: ignore[assignment]
+    clock.at(PAST_THE_LOOK)
+    worker.take_down_buttons()
+    assert slack(worker).updates == []
+    worker._running.clear()
+    clock.at("1790000036.000000")
+    worker.take_down_buttons()
+    assert closing(worker) == "This was approved with no click. The receipt in this thread says what was written."
