@@ -1919,7 +1919,13 @@ class Store:
 
     def _forget_post_taught(self, post_id: int) -> None:
         """Delete every alias a request of any plan revision of the post taught (ADR 0012). Call inside a
-        transaction."""
+        transaction. Only a `verified` request teaches, and an undo forgets as it begins, so a post with no
+        `verified` request taught nothing: most edits come before any write, and skip the aliases table."""
+        if not self._db.execute(
+            "SELECT 1 FROM requests r JOIN plans l ON l.id = r.plan_id WHERE l.post_id = ? AND r.state = ?",
+            (post_id, S.VERIFIED.value),
+        ).fetchone():
+            return
         taught = self._db.execute(
             "SELECT a.id, a.request_id FROM aliases a JOIN requests r ON r.id = a.request_id"
             " JOIN plans l ON l.id = r.plan_id WHERE l.post_id = ? ORDER BY a.id",
