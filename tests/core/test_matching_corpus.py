@@ -12,8 +12,8 @@ from typing import Any
 import pytest
 from corpus import eval_catalog
 
-from stockthread.core.matching import match_location, match_part
-from stockthread.core.model import Match, MatchStatus
+from stockthread.core.matching import match_location, match_part, same_words
+from stockthread.core.model import Match, MatchRule, MatchStatus
 
 EVAL = Path(__file__).resolve().parents[2] / "eval"
 
@@ -53,3 +53,25 @@ def as_expected(result: Match, kind: str) -> dict[str, Any]:
 def test_corpus_match(case: str, kind: str, text: str, poster: str, expected: dict[str, Any]) -> None:
     result = match_part(text, CATALOG, poster) if kind == "part" else match_location(text, CATALOG, poster)
     assert as_expected(result, kind) == expected
+
+
+def learned_aliases() -> list[tuple[str, str]]:
+    """(kind, text) of every alias in the corpus catalog a confirmation taught: those with `rivals`."""
+    aliases = json.loads((EVAL / "catalog" / "aliases.json").read_text(encoding="utf-8"))
+    return [
+        (kind, a["text"])
+        for kind, key in (("part", "parts"), ("location", "locations"))
+        for a in aliases[key]
+        if "rivals" in a
+    ]
+
+
+@pytest.mark.parametrize(("kind", "alias"), learned_aliases())
+def test_every_learned_alias_decides_a_scored_match(kind: str, alias: str) -> None:
+    """M4: learned aliases are covered by the corpus. Each decides, at the alias rule, every scored text it names. For
+    "ap" the expected value also needs the recheck against its rivals (ADR 0012): without it "APs" is the Disc 40."""
+    found = [(text, poster) for _, k, text, poster, _ in expectations() if k == kind and same_words(alias, text)]
+    assert found, f"no case scores the learned alias {alias!r}"
+    for text, poster in found:
+        result = match_part(text, CATALOG, poster) if kind == "part" else match_location(text, CATALOG, poster)
+        assert result.rule is MatchRule.ALIAS, text
