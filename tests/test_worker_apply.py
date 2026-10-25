@@ -9,6 +9,7 @@ import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -716,6 +717,45 @@ def test_an_undo_gets_a_new_receipt(store: Store) -> None:
     assert running.post_receipts() == 1
     assert [posted["text"] for posted in slack(running).posted] == ["Applied: 1 movement.", "Undone: 1 movement."]
     assert store.plan(POST, 1).receipt_ts == "1700000400.000002"
+
+
+def test_a_plan_whose_second_write_inventree_refused_is_partly_applied_and_its_first_undone(store: Store) -> None:
+    """ADR 0002: the plan stops at the first request that went wrong. Nothing is rolled back by itself: the receipt says
+    what went through, and offers an Undo of that alone."""
+    other = view(lines=(("Disc 40", "1"),), stock=(picked((58, "1")),))
+    store.place_message(OWNER, POST, user_id=SAM, thread_ts=None, window_seconds=5)
+    extraction = Extraction("rules", (TAKE.movement, other.movement))
+    record = _record(extraction, [TAKE, other], late=False, poster=SAM, messages=(), max_quantity=500)
+    result = json.loads(json.dumps(record))
+    made = plan_of(result)
+    assert made is not None
+    store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, "1700000100.000100", result=result, plan=NewPlan(*made))
+    judged = approve_by_policy(store, OWNER, POST, ON)
+    assert judged is not None
+    assert judged.allowed
+    inventree = FakeInvenTree()
+    inventree.items[58] = [1, 10, Decimal(1)]
+
+    step = stepper(store, inventree)
+
+    def second_refused(key: RequestKey) -> Applied:
+        inventree.answer = Outcome.REFUSED if key.sequence == 2 else Outcome.ACCEPTED
+        return step(key)
+
+    second = RequestKey(POST, 1, 2)
+    running = worker(store, second_refused, undoer(store, inventree))
+    while running.work_due():
+        pass
+    assert [store.request(key).state for key in (KEY, second)] == [S.VERIFIED, S.FAILED]
+    assert running.post_receipts() == 1
+    [posted] = slack(running).posted
+    assert posted["text"] == "Partly applied: 2 movements."
+    assert buttons(posted) == [store.request(KEY).marker_id]  # the refused write has nothing to undo
+    inventree.answer = Outcome.ACCEPTED
+    assert undoer(store, inventree)(KEY, TAKE, SAM).state is S.UNDONE
+    assert running.post_receipts() == 1
+    assert slack(running).posted[-1]["text"] == "Undone: 2 movements."
+    assert buttons(slack(running).posted[-1]) == []
 
 
 def test_a_plan_whose_record_cannot_be_rebuilt_gets_no_receipt_and_an_error(
