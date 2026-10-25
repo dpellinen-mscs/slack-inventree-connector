@@ -130,6 +130,9 @@ def test_a_plan_whose_second_write_failed_is_partly_applied_and_undo_restores_th
                 markers = [store.request(key).marker_id for key in (FIRST, SECOND)]
                 shown = receipt(movements, states, markers, {}, {}, inventree_url="", approved_by=None)
                 assert shown["text"] == "Partly applied: 2 movements."
+                heading = shown["blocks"][0]["text"]["text"]
+                assert "Check InvenTree before recording any of it again" in heading, heading
+                assert "post it again" not in heading, heading  # the recovered write may still land (ADR 0015)
                 undone = await undo_apply(
                     FIRST, movements[0], store=store, reader=reader, writer=w, lock=lock, lock_owner=OWNER,
                     user="U0DAN0001",

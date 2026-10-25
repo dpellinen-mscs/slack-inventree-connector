@@ -665,8 +665,23 @@ approved whole (`Store.approve_plan`), so it no longer waits for review. Why it 
 plan expired, the attempt limit) is in the trail."""
 NOT_SENT_AFTER = f"{NOT_SENT}, because an earlier movement did not go through"
 """Said instead when an earlier request of the plan went wrong (`failed`, or `verify_failed`, and maybe `accepted`
-since): the plan stops at the first request that went wrong (`Store.plan_stopped_before`) and sends the rest back."""
+since): the plan stops at the first request that went wrong (`Store.plan_stopped_before`) and sends the rest back.
+WENT_WRONG is narrower than what stops a plan on purpose. The receipt reads the states as they are now, not as they
+were at the stop: an earlier `undone` or `undo_failed` request went through before an undo came, and an earlier
+`expired` or `cancelled` one may have ended with its whole plan rather than stopped it. So the receipt names a cause
+only when the earlier write itself went wrong, and otherwise says just that the movement was not sent; both are true."""
 WENT_WRONG = frozenset({RequestState.FAILED, RequestState.VERIFY_FAILED, RequestState.ACCEPTED})
+
+PARTLY_UNSENT = "The rest was not applied: to record it, post it again."
+"""What a Partly applied receipt says of the rest when none of it is `failed`: nothing of it was sent, or InvenTree
+refused it, so a new post of it cannot write twice."""
+PARTLY_FAILED = (
+    "The rest was not applied. Check InvenTree before recording any of it again: a write that showed no change may"
+    " still land later."
+)
+"""Said instead when a request is `failed`: one concluded by recovery may still land (ADR 0015). A new post is a new
+post, which the guard against a second write of the same post (`Store._check_no_unknown_write`) does not stop, so the
+receipt does not invite one."""
 
 NOT_WRITTEN = frozenset(
     {RequestState.FAILED, RequestState.PLANNED, RequestState.REJECTED, RequestState.CANCELLED, RequestState.EXPIRED}
@@ -765,7 +780,7 @@ def receipt(
     elif all(state in NOT_WRITTEN | {RequestState.VERIFIED} for state in states):
         heading, text = (
             "*Partly applied.* What is marked applied below changed inventory, and it was read back to check it."
-            " The rest was not applied: to record it, post it again.",
+            f" {PARTLY_FAILED if RequestState.FAILED in states else PARTLY_UNSENT}",
             "Partly applied",
         )
     elif all(state in NOT_WRITTEN - {RequestState.PLANNED} | {RequestState.UNDONE} for state in states):

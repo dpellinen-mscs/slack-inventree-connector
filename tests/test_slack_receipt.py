@@ -139,11 +139,10 @@ def test_an_undo_of_some_movements_says_the_rest_stays_applied(states: tuple[Req
 @pytest.mark.parametrize(
     "states",
     [
-        (S.VERIFIED, S.FAILED),
         (S.VERIFIED, S.PLANNED),
-        (S.VERIFIED, S.FAILED, S.PLANNED),
         (S.VERIFIED, S.VERIFIED, S.EXPIRED),
         (S.CANCELLED, S.VERIFIED),
+        (S.VERIFIED, S.REJECTED),
     ],
 )
 def test_a_plan_applied_only_in_part_says_so_and_how_to_record_the_rest(states: tuple[RequestState, ...]) -> None:
@@ -153,6 +152,22 @@ def test_a_plan_applied_only_in_part_says_so_and_how_to_record_the_rest(states: 
         "*Partly applied.* What is marked applied below changed inventory, and it was read back to check it."
         " The rest was not applied: to record it, post it again. Approved by the write policy"
     )
+
+
+@pytest.mark.parametrize("states", [(S.VERIFIED, S.FAILED), (S.VERIFIED, S.FAILED, S.PLANNED), (S.FAILED, S.VERIFIED)])
+def test_a_plan_applied_in_part_with_a_failed_write_does_not_invite_a_second_post(
+    states: tuple[RequestState, ...],
+) -> None:
+    """A `failed` request concluded by recovery may still land (ADR 0015), and a new post would write it again."""
+    body = made(states)
+    assert body["text"] == f"Partly applied: {len(states)} movements."
+    shown = text_of(body)
+    assert shown.startswith(
+        "*Partly applied.* What is marked applied below changed inventory, and it was read back to check it."
+        " The rest was not applied. Check InvenTree before recording any of it again: a write that showed no change"
+        " may still land later. Approved by the write policy"
+    )
+    assert "post it again" not in shown
 
 
 @pytest.mark.parametrize(
