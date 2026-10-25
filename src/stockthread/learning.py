@@ -1,8 +1,8 @@
-"""What a plan an approver confirmed teaches (ADR 0012): each item and place text of it that a whole-word match, a
-fuzzy match or a person's pick in the thread decided becomes an alias of the record it was decided for. The worker
-stores them once every request of the plan is verified (`Worker.work_due`); a plan the policy approved, a dry run and
-anything a model suggested teach nothing. A name a person typed in the thread for a line or a place teaches the
-post's own text for it, not the typed name, under the same rules.
+"""What a plan an approver confirmed teaches (ADR 0012, narrowed while #174 is open): each item and place text of it
+that the whole-word and fuzzy rules fit to that one record alone becomes an alias of it. A pick among several records
+the text fits teaches nothing. The worker stores them once every request of the plan is verified (`Worker.work_due`);
+a plan the policy approved, a dry run and anything a model suggested teach nothing. A name a person typed in the
+thread for a line or a place teaches the post's own text for it, not the typed name, under the same rules.
 
 The gate writes no plan with a bare whole-word or fuzzy match (`Match.can_authorize_a_write`): the thread asks to
 confirm it first, and the poster's "yes" or pick makes it an answer match. Those rules stay listed so a plan that ever
