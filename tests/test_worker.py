@@ -3521,6 +3521,41 @@ def test_a_type_picked_is_validated_again_and_the_model_is_not_asked_again(store
     assert "contradiction" not in {reason["code"] for reason in record.result["movements"][0]["reasons"]}
 
 
+@pytest.mark.parametrize(
+    ("picked", "source"),
+    [(MovementType.TAKE_TO_VEHICLE, {"status": "matched", "rule": "default", "record": 10, "candidates": []}),
+     (MovementType.RETURN, None)],
+)  # fmt: skip
+def test_a_type_picked_for_a_post_that_states_no_source_takes_that_type_s_default_source(
+    store: Store, clock: Clock, picked: MovementType, source: dict[str, Any] | None
+) -> None:
+    unsourced = CandidateMovement(MovementType.UNCLEAR, (LineItem("Disc 40", Decimal(2)),), None, "truck 1")
+    llm = FakeLLM(Extraction(MODEL, (unsourced,)))
+    slack = FakeSlack()
+    defaulted = replace(CATALOG, default_sources={MovementType.TAKE_TO_VEHICLE: 10})
+    worker = Worker(approving(), store, OWNER, slack, lambda: defaulted, clock, llm=llm)
+    enqueue(store, message(ROOT, "shuffled 2 Disc 40 to truck 1"))
+    read_and_answered(worker, clock)
+    [reply] = slack.posted
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["movements"][0]["source"] is None  # an unclear type has no default
+    [item] = store.questions(KEY)
+    assert item.question["ask"] == "movement_type"
+    kinds = [kind for kind in MovementType if kind is not MovementType.UNCLEAR]
+    clicked(store, click_on({**reply, "channel": CHANNEL}, "1790009999.000001", kinds.index(picked), SAM), "1")
+    worker.step()
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    movement = record.result["movements"][0]
+    assert movement["type"] == picked.value
+    assert movement["source"] == source
+    codes = {reason["code"] for reason in movement["reasons"]}
+    assert ("implied_source" in codes) is (source is None)
+
+
 def test_no_to_a_doubt_about_the_reading_ends_the_plan(store: Store, clock: Clock) -> None:
     llm = FakeLLM(unclear(MovementType.RETURN))  # a return onto a truck: a contradiction
     slack = FakeSlack()

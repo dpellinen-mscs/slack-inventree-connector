@@ -35,7 +35,7 @@ from stockthread.catalog import assign_vehicles, load_catalog
 from stockthread.config import InvenTreeSettings, Settings, parse_settings
 from stockthread.core.marker import AttemptKind
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
-from stockthread.core.model import Operation, PostKey, RequestKey
+from stockthread.core.model import MovementType, Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import StockItem
 from stockthread.inventree import InvenTreeError, InvenTreeReader, ServerInfo, VersionCheck, check_version
@@ -63,6 +63,7 @@ def settings(
     catch_up_hours: int = 72,
     http_port: int = 3000,
     writes: bool = False,
+    default_source: dict[str, str] | None = None,
 ) -> Settings:
     data: dict[str, Any] = {
         "slack": {
@@ -81,6 +82,8 @@ def settings(
         data["llm"] = llm
     if vehicles:
         data["vehicles"] = vehicles
+    if default_source:
+        data["policy"] = {"default_source": default_source}
     return parse_settings(data, {**ENV, "SLACK_SIGNING_SECRET": "synthetic-secret", "LLM_API_KEY": llm_key})
 
 
@@ -1038,6 +1041,19 @@ def test_without_a_vehicles_section_nothing_is_logged(tmp_path: Path, caplog: py
     read = with_vehicles(lambda: CATALOG, settings(tmp_path / "stockthread.db"))
     assert read().vehicles == {}
     assert caplog.records == []
+
+
+def test_each_snapshot_gets_the_default_sources_and_one_not_found_is_logged_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    defaults = {"take_to_vehicle": "Warehouse/Main Stock", "take_to_site": "Vehicles"}
+    configured = settings(tmp_path / "stockthread.db", default_source=defaults)
+    read = with_vehicles(lambda: FLEET, configured)
+    assert read().default_sources == {MovementType.TAKE_TO_VEHICLE: 10}  # "Vehicles" is structural
+    assert read().default_sources == {MovementType.TAKE_TO_VEHICLE: 10}
+    assert [record.levelname for record in caplog.records] == ["WARNING"]
+    assert "policy.default_source: no stock location at the path set for take_to_site" in caplog.text
 
 
 def test_a_catalog_outage_passes_through_the_vehicles(tmp_path: Path) -> None:

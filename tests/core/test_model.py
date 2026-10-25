@@ -196,6 +196,6 @@ def test_every_other_match_is_a_review_reason(
     assert reason.source is ReasonSource.RULE
 
 
-def test_only_exact_normalized_alias_and_answer_authorize_a_write() -> None:
+def test_only_exact_normalized_alias_answer_and_default_authorize_a_write() -> None:
     authorizing = {rule for rule in MatchRule if Match(MatchStatus.MATCHED, rule=rule, record=7).can_authorize_a_write}
-    assert authorizing == {MatchRule.EXACT, MatchRule.NORMALIZED, MatchRule.ALIAS, MatchRule.ANSWER}
+    assert authorizing == {MatchRule.EXACT, MatchRule.NORMALIZED, MatchRule.ALIAS, MatchRule.ANSWER, MatchRule.DEFAULT}

@@ -310,6 +310,55 @@ def test_a_place_that_is_no_mapped_vehicle_needs_no_vehicle_rule() -> None:
     assert run([view(MovementType.TAKE_TO_SITE, destination=matched(13, MatchRule.ALIAS))]).allowed
 
 
+MAIN = 10
+"""The default source `unstated` takes."""
+
+
+def unstated(movement_type: MovementType = MovementType.TAKE_TO_VEHICLE, rule: MatchRule = MatchRule.DEFAULT) -> Any:
+    """A take-out whose post states no source, and whose source came from `rule`."""
+    plain = view(movement_type)
+    return replace(plain, movement=replace(plain.movement, source_text=None), source=matched(MAIN, rule))
+
+
+@pytest.mark.parametrize("movement_type", TAKE_OUTS)
+def test_a_default_source_applies_automatically_while_it_is_the_default(movement_type: MovementType) -> None:
+    assert run([unstated(movement_type)], default_sources={movement_type: MAIN}).allowed
+
+
+@pytest.mark.parametrize(
+    "defaults",
+    [None, {}, {MovementType.TAKE_TO_VEHICLE: 13}, {MovementType.TAKE_TO_SITE: MAIN}],
+    ids=["none given", "none set", "another place now", "another type's"],
+)
+def test_a_default_source_that_is_not_the_default_now_waits_for_apply(defaults: Any) -> None:
+    judgement = run([unstated()], default_sources=defaults)
+    assert judgement.verdict is Verdict.WAITS
+    assert judgement.why == "movement 1: its default source is not the default source now"
+    assert run([unstated()], default_sources=defaults, clicked_by=LUIS).allowed  # an approver may still apply it
+
+
+def test_a_default_source_counts_only_for_a_source_the_post_does_not_state() -> None:
+    stated = replace(view(), source=matched(MAIN, MatchRule.DEFAULT))
+    assert run([stated], default_sources={MovementType.TAKE_TO_VEHICLE: MAIN}).verdict is Verdict.WAITS
+
+
+def test_a_default_rule_never_makes_a_destination_or_a_part_automatic() -> None:
+    defaults = {MovementType.TAKE_TO_SITE: MAIN}
+    site = view(MovementType.TAKE_TO_SITE, destination=matched(SITE, MatchRule.DEFAULT))
+    assert run([site], default_sources=defaults).verdict is Verdict.WAITS
+    part = view(MovementType.TAKE_TO_SITE, items=(matched(1, MatchRule.DEFAULT),))
+    assert run([part], default_sources=defaults).verdict is Verdict.WAITS
+
+
+def test_a_default_source_that_is_someone_s_vehicle_waits_for_apply() -> None:
+    """A vehicle must be the poster's mapped one or named exactly; a default names neither."""
+    take = replace(unstated(MovementType.TAKE_TO_SITE), source=matched(MIKES_VAN, MatchRule.DEFAULT))
+    take = replace(take, destination=matched(SITE))
+    judgement = run([take], default_sources={MovementType.TAKE_TO_SITE: MIKES_VAN})
+    assert judgement.verdict is Verdict.WAITS
+    assert "a vehicle" in judgement.why
+
+
 def test_the_gate_reads_the_settings_it_is_given() -> None:
     data = {
         "slack": {"workspace_id": "T0ACME01", "app_id": "A0STOCK1", "approvers": [LUIS]},

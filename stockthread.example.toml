@@ -39,8 +39,10 @@ enabled = false               # the switch. Off: every movement is a dry-run
 # The rest wait for "Apply". [] makes every movement review-first.
 auto_apply = ["take_to_vehicle", "take_to_site"]
 max_quantity = 100            # a larger quantity is a review reason
-# Default source location per movement type. Unset: an implied source is a
-# review reason.
+# Default source location per movement type, by its whole path: a movement
+# of that type that states no source takes it, and can apply with no click.
+# Unset: an implied source is a review reason. Example:
+# default_source = { take_to_vehicle = "Warehouse/Main Stock", take_to_site = "Warehouse/Main Stock" }
 default_source = {}
 
 [apply]

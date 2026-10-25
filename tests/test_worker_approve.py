@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -399,3 +400,44 @@ def test_the_run_loops_approver_reads_the_version_and_vehicles_for_each_judgemen
     assert judgement is not None
     assert judgement.allowed
     assert store.request(KEY).state is S.APPROVED
+
+
+UNSOURCED = "2 Disc 40 on truck 1"
+DEFAULTED = replace(CATALOG, default_sources={MovementType.TAKE_TO_VEHICLE: 10})
+"""Main stock is the default source of a take to a vehicle (`policy.default_source`, `catalog.assign_default_sources`)."""
+
+
+def test_a_take_out_that_states_no_source_takes_the_default_and_applies_by_the_policy(
+    store: Store, clock: Clock
+) -> None:
+    approve = Approving(store, GateNow(ON.policy, ON.vehicles, dict(DEFAULTED.default_sources)))
+    slack = FakeSlack()
+    worker = Worker(settings(), store, OWNER, slack, lambda: DEFAULTED, clock, stock=stock, approve=approve)  # type: ignore[arg-type]
+    enqueue(store, message(ROOT, UNSOURCED))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    [reply] = slack.posted
+    shown = json.dumps(reply["blocks"])
+    assert "*Main stock* (not stated: the default source)" in shown
+    assert "No source location was stated" not in shown
+    [judgement] = approve.judged
+    assert judgement is not None
+    assert (judgement.verdict, judgement.why) == (Verdict.ALLOWED, "approved by the policy")
+    [request] = judgement.requests
+    assert [(item["pk"], item["quantity"]) for item in request.body["items"]] == [(57, "2")]  # at main stock
+    assert store.request(KEY).state is S.APPROVED
+
+
+def test_without_a_default_the_same_post_asks_for_its_source(store: Store, clock: Clock) -> None:
+    approve = Approving(store)
+    slack = FakeSlack()
+    worker = Worker(settings(), store, OWNER, slack, lambda: CATALOG, clock, stock=stock, approve=approve)  # type: ignore[arg-type]
+    enqueue(store, message(ROOT, UNSOURCED))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    [reply] = slack.posted
+    assert "No source location was stated" in json.dumps(reply["blocks"])
+    assert store.current_plan(POST) is None
+    assert approve.calls == []

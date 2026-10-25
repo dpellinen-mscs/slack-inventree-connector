@@ -25,6 +25,7 @@ from stockthread.setup_check import (
     Finding,
     Level,
     check_aliases,
+    check_default_sources,
     check_posters,
     check_roles,
     check_vehicles,
@@ -128,6 +129,18 @@ def test_each_vehicle_path_that_is_not_one_stock_location_says_why() -> None:
 def test_vehicle_paths_that_all_resolve_pass_and_none_set_says_nothing() -> None:
     assert levels(check_vehicles(CATALOG, {"U0SAM0001": "Vehicles/Truck 1"})) == [Level.OK]
     assert check_vehicles(CATALOG, {}) == []
+
+
+def test_each_default_source_path_that_is_not_one_stock_location_says_why() -> None:
+    defaults = {"take_to_vehicle": "Vehicles/Truck 1", "take_to_site": "Vehicles/Vans", "return": "nowhere"}
+    texts = [f.text for f in check_default_sources(CATALOG, defaults) if f.level is Level.ERROR]
+    assert texts == [
+        'policy.default_source: return: "nowhere" is not the whole path of any stock location'
+        " (paths match letter for letter)",
+        'policy.default_source: take_to_site: "Vehicles/Vans" is a structural location, which cannot hold stock',
+    ]
+    assert levels(check_default_sources(CATALOG, {"take_to_vehicle": "Vehicles/Truck 1"})) == [Level.OK]
+    assert check_default_sources(CATALOG, {}) == []
 
 
 def test_posters_without_a_vehicle_are_named() -> None:

@@ -14,13 +14,14 @@ Validation is `plan_requests`: a plan it refuses is blocked whole. The policy th
   found by the exact, normalized or alias rule, and a vehicle is the poster's mapped vehicle or was found by its
   exact location name (ADR 0004; a learned alias for a vehicle still waits). A vehicle is the destination of a take
   to a vehicle, or any source or destination that is someone's mapped vehicle; an unmapped vehicle a take to a site
-  starts from cannot be told from a shelf. A model flag is a review reason and
-  blocks before this.
+  starts from cannot be told from a shelf. A source the post does not state counts when it is the movement
+  type's `policy.default_source` both in the dry run and now. A model flag is a review reason and blocks before
+  this.
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -86,6 +87,7 @@ def judge(
     rejected: bool,
     poster_vehicle: int | None,
     vehicles: Collection[int],
+    default_sources: Mapping[MovementType, int] | None = None,
     clicked_by: str | None = None,
 ) -> Judgement:
     """Judge one plan of a post.
@@ -93,7 +95,8 @@ def judge(
     `answered`: any answer was applied to the plan, by button or typed reply, including a stock choice (it is
     then never automatic). This flag is the only safeguard for typed and stock answers: a typed name keeps the
     matcher's own rule, and a stock choice changes no match. `poster_vehicle`: the location of the vehicle
-    mapped to the poster, if any. `vehicles`: the locations of every mapped vehicle. `rejected`: a "no" ended
+    mapped to the poster, if any. `vehicles`: the locations of every mapped vehicle. `default_sources`: each
+    movement type's default source now (`policy.default_source`). `rejected`: a "no" ended
     the plan. `clicked_by`: who clicked Apply on it, if anyone. The requests' notes name the approver, or the poster
     when the policy approved it.
     """
@@ -111,7 +114,10 @@ def judge(
         return Judgement(Verdict.BLOCKED, f"not decided: {error}")
     if approver is not None:
         return Judgement(Verdict.ALLOWED, "approved by an approver", approver, requests)
-    if why := _not_automatic(views, policy, answered=answered, poster_vehicle=poster_vehicle, vehicles=vehicles):
+    defaults = default_sources or {}
+    if why := _not_automatic(
+        views, policy, answered=answered, poster_vehicle=poster_vehicle, vehicles=vehicles, defaults=defaults
+    ):
         return Judgement(Verdict.WAITS, why)
     return Judgement(Verdict.ALLOWED, "approved by the policy", None, requests)
 
@@ -123,6 +129,7 @@ def _not_automatic(
     answered: bool,
     poster_vehicle: int | None,
     vehicles: Collection[int],
+    defaults: Mapping[MovementType, int],
 ) -> str | None:
     """Why the policy may not approve this decided plan without a click, or None."""
     if answered:
@@ -135,7 +142,10 @@ def _not_automatic(
             return f"movement {number}: the model raised a flag"
         if not all(_by(match, _AUTOMATIC_RULES) for match in view.items):
             return f"movement {number}: a part was not found by an exact, normalized or alias rule"
-        for match in (view.source, view.destination):
+        if _is_default(view.source) and not _still_default(view, defaults):
+            return f"movement {number}: its default source is not the default source now"
+        source = None if _is_default(view.source) else view.source  # checked above
+        for match in (source, view.destination):
             if match is not None and not _by(match, _AUTOMATIC_RULES):
                 return f"movement {number}: a place was not found by an exact, normalized or alias rule"
         to_vehicle = movement.movement_type is MovementType.TAKE_TO_VEHICLE
@@ -147,6 +157,23 @@ def _not_automatic(
         if not all(_vehicle(match, poster_vehicle) for match in vehicle_places):
             return f"movement {number}: a vehicle is not the poster's mapped vehicle or found by its exact name"
     return None
+
+
+def _is_default(match: Match | None) -> bool:
+    return match is not None and match.rule is MatchRule.DEFAULT
+
+
+def _still_default(view: MovementView, defaults: Mapping[MovementType, int]) -> bool:
+    """The source came from the movement type's default, the post states none, and it is the default now."""
+    source = view.source
+    kind = view.movement.movement_type
+    return (
+        source is not None
+        and source.can_authorize_a_write
+        and view.movement.source_text is None
+        and kind in defaults
+        and source.record == defaults[kind]
+    )
 
 
 def _by(match: Match | None, rules: frozenset[MatchRule]) -> bool:

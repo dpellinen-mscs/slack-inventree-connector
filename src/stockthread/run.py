@@ -30,10 +30,10 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 from stockthread.applier import GateNow, approve_by_click, approve_by_policy, plan_expired, work_request
 from stockthread.apply import Applied, ApplyReader, Sender, undo_apply
-from stockthread.catalog import assign_vehicles, load_catalog, with_aliases
+from stockthread.catalog import assign_default_sources, assign_vehicles, load_catalog, with_aliases
 from stockthread.config import Settings
 from stockthread.core.matching import Catalog
-from stockthread.core.model import PostKey, RequestKey
+from stockthread.core.model import MovementType, PostKey, RequestKey
 from stockthread.core.requests import RequestState
 from stockthread.core.resolve import StockItem, stock_items
 from stockthread.gate import Judgement, Policy
@@ -44,6 +44,7 @@ from stockthread.setup_check import (
     Finding,
     Level,
     check_aliases,
+    check_default_sources,
     check_posters,
     check_roles,
     check_vehicles,
@@ -296,14 +297,16 @@ def inventree_steps(
 
     def step(key: RequestKey) -> Applied:
         vehicles: dict[str, int] = {}
+        defaults: dict[MovementType, int] = {}
         if store.request(key).state is RequestState.APPROVED:
-            vehicles = dict(catalog().vehicles)  # outside the step's loop: a refresh of the cache runs one of its own
+            current = catalog()  # outside the step's loop: a refresh of the cache runs one of its own
+            vehicles, defaults = dict(current.vehicles), dict(current.default_sources)
             beat()
 
         async def run() -> Applied:
             send_by = anyio.current_time() + limit - margin
             async with opened() as (reader, writer):
-                now = GateNow(Policy.of(settings, check_version(await reader.server_info())), vehicles)
+                now = GateNow(Policy.of(settings, check_version(await reader.server_info())), vehicles, defaults)
                 return await work_request(
                     key, store=store, reader=reader, writer=writer, lock=anyio.Lock(), lock_owner=owner,
                     gate_now=lambda: now, expired=expired, settle=settle, send_by=send_by,
@@ -331,12 +334,25 @@ def inventree_steps(
 
 
 def with_vehicles(load: Callable[[], Catalog], settings: Settings) -> Callable[[], Catalog]:
-    """Every snapshot gets the vehicles from the `[vehicles]` settings. A person whose vehicle is not a stock
-    location in the snapshot is named in the log, once until the list changes."""
+    """Every snapshot gets the vehicles from the `[vehicles]` settings, and the default sources from
+    `policy.default_source`. A person whose vehicle, or a movement type whose default source, is not a stock location
+    in the snapshot is named in the log, once until the list changes."""
     reported: list[tuple[str, ...] | None] = [None]
+    unsourced: list[tuple[str, ...] | None] = [None]
 
     def read() -> Catalog:
         catalog, missing = assign_vehicles(load(), settings.vehicles)
+        catalog, no_default = assign_default_sources(
+            catalog, {str(kind): path for kind, path in settings.policy.default_source.items()}
+        )
+        if no_default != unsourced[0]:
+            unsourced[0] = no_default
+            if no_default:
+                log.warning(
+                    "policy.default_source: no stock location at the path set for %s; a movement that states no"
+                    " source waits for a person",
+                    ", ".join(no_default),
+                )
         if missing != reported[0]:
             reported[0] = missing
             if missing:
@@ -392,11 +408,12 @@ def policy_approver(
     (`inventree_steps`)."""
 
     def approve(post: PostKey) -> Judgement | None:
-        vehicles = dict(catalog().vehicles)
+        current = catalog()
         beat()
         version = check(settings)
         beat()
-        return approve_by_policy(store, owner, post, GateNow(Policy.of(settings, version), vehicles))
+        now = GateNow(Policy.of(settings, version), dict(current.vehicles), dict(current.default_sources))
+        return approve_by_policy(store, owner, post, now)
 
     return approve
 
@@ -417,11 +434,11 @@ def click_approver(
     (`inventree_steps`)."""
 
     def approve(post: PostKey, revision: int, user: str, at: Decimal) -> Judgement | None:
-        vehicles = dict(catalog().vehicles)
+        current = catalog()
         beat()
         version = check(settings)
         beat()
-        now = GateNow(Policy.of(settings, version), vehicles)
+        now = GateNow(Policy.of(settings, version), dict(current.vehicles), dict(current.default_sources))
         return approve_by_click(
             store, owner, post, revision, user, now, at=at, expiry_hours=settings.slack.plan_expiry_hours
         )
@@ -436,7 +453,13 @@ def check_setup(settings: Settings) -> list[Finding]:
 
     async def read() -> list[Finding]:
         async with InvenTreeReader(settings.inventree, settings.secrets.inventree_token) as reader:
-            return await inventree_findings(reader, settings.vehicles, writes=settings.writes.enabled, aliases=aliases)
+            return await inventree_findings(
+                reader,
+                settings.vehicles,
+                writes=settings.writes.enabled,
+                aliases=aliases,
+                default_sources={str(kind): path for kind, path in settings.policy.default_source.items()},
+            )
 
     return [
         *asyncio.run(read()),
@@ -466,9 +489,10 @@ async def inventree_findings(
     *,
     writes: bool,
     aliases: Sequence[StoredAlias] = (),
+    default_sources: Mapping[str, str] | None = None,
 ) -> list[Finding]:
-    """Version, roles, `[vehicles]` paths, and the records `aliases` name. A catalog that cannot be read is a finding,
-    so the roles still print."""
+    """Version, roles, `[vehicles]` and `policy.default_source` paths, and the records `aliases` name. A catalog that
+    cannot be read is a finding, so the roles still print."""
     version = check_version(await reader.server_info())
     roles = await reader.user_roles()
     found = [
@@ -485,7 +509,12 @@ async def inventree_findings(
     except InvenTreeError as exc:
         unread = f"vehicles and aliases: not checked, the catalog could not be read: {exc}"
         return [*found, Finding(Level.ERROR, unread)]
-    return [*found, *check_vehicles(catalog, vehicles), *check_aliases(catalog, aliases)]
+    return [
+        *found,
+        *check_vehicles(catalog, vehicles),
+        *check_default_sources(catalog, default_sources or {}),
+        *check_aliases(catalog, aliases),
+    ]
 
 
 def llm_provider(settings: Settings) -> OpenAICompatible | None:

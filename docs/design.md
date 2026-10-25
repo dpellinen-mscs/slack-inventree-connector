@@ -1196,7 +1196,10 @@ can also steer the gate by what it omits. These rules close that path:
   review reason.
 - **Implied source.** `policy.default_source` can name a default source
   location per movement type. It is unset by default, and an implied
-  source is then a review reason.
+  source is then a review reason. A movement of a type with a default
+  takes it as its source, shown as the default in the reply, and the
+  policy counts it only while it is still the default
+  ([ADR 0020](decisions/0020-default-source.md)).
 
 A pipeline-level test (`tests/test_gate_model_output.py`) runs every
 corpus post through the worker with writes on, the model reading every

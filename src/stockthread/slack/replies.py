@@ -19,6 +19,7 @@ from stockthread.core.marker import is_marker_id
 from stockthread.core.model import (
     CandidateMovement,
     Match,
+    MatchRule,
     MatchStatus,
     MovementType,
     Operation,
@@ -131,6 +132,8 @@ def _number(value: Decimal) -> str:
 
 def _named(text: str | None, match: Match | None, names: Mapping[int, str], what: str, typed: str | None = None) -> str:
     written = f"“{escape(text)}”" if text else "(not stated)"
+    if text is None and match is not None and match.rule is MatchRule.DEFAULT:
+        written = "not stated: the default source"
     if typed is not None:
         typed_as = f"named in the thread as “{escape(typed)}”"
         written = f"{written}, {typed_as}" if text else typed_as

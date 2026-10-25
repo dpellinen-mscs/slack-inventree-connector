@@ -17,7 +17,7 @@ not make goes back to review at the write instead of being written; it is never 
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
 
@@ -34,7 +34,7 @@ from stockthread.apply import (
 )
 from stockthread.core.grouping import seconds
 from stockthread.core.marker import AttemptKind, Marker
-from stockthread.core.model import PostKey, RequestKey
+from stockthread.core.model import MovementType, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
 from stockthread.gate import Judgement, Policy, Verdict, judge
 from stockthread.plan_record import NotRebuilt, plan_hash, views_of
@@ -49,6 +49,9 @@ class GateNow:
     policy: Policy
     vehicles: Mapping[str, int]
     """Slack user id -> the stock location of the person's vehicle (`Catalog.vehicles` of the current catalog)."""
+    default_sources: Mapping[MovementType, int] = field(default_factory=dict)
+    """Movement type -> its default source now (`Catalog.default_sources` of the current catalog). A plan's source
+    taken from a default counts for the policy only while it is still that type's default."""
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,7 @@ def judge_plan(
         rejected=rebuilt.rejected,
         poster_vehicle=now.vehicles.get(rebuilt.poster),
         vehicles=frozenset(now.vehicles.values()),
+        default_sources=now.default_sources,
         clicked_by=clicked_by,
     )
 

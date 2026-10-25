@@ -24,7 +24,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
-from stockthread.core.model import Match, MatchRule, MatchStatus
+from stockthread.core.model import Match, MatchRule, MatchStatus, MovementType
 
 TYPO_RATIO = 0.8
 """Two words of 4 letters or more count as the same word at this `difflib` similarity (for example "ondrl")."""
@@ -83,6 +83,8 @@ class Catalog:
     location_aliases: tuple[Alias, ...] = ()
     vehicles: dict[str, int] = field(default_factory=dict)
     """Slack user id -> the location of the vehicle assigned to that user."""
+    default_sources: dict[MovementType, int] = field(default_factory=dict)
+    """Movement type -> the location `policy.default_source` names for it, for a movement that states no source."""
 
 
 def words(text: str) -> list[str]:
