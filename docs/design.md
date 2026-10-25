@@ -1988,7 +1988,10 @@ Deterministic. The rules run in this order:
   over. A plan the policy approved, a dry run, an unverified write, a
   text with a word like "my", "this" or "ones", a place named by a
   vehicle word alone, and a text the plan decided for two records teach
-  nothing. An undo forgets what its plan taught as it begins. Learning is
+  nothing. An undo forgets what its plan taught as it begins, and an
+  edit or deletion of any message of the post forgets what the post
+  taught as it is noted; one noted while the lesson is read stops it
+  (`Store.learn_alias` `read_through`). Learning is
   best effort: a read that fails teaches nothing, and the next
   confirmation does. The receipt names what was learned. Tested end to
   end on every pinned server (`tests/integration/test_learning_server.py`):

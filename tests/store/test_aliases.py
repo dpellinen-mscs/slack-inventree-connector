@@ -55,8 +55,8 @@ def verify(store: Store) -> None:
 
 def test_a_verified_confirmation_stores_an_alias_with_its_rivals(store: Store) -> None:
     verify(store)
-    store.learn_alias(OWNER, PART, " Disc 40 ", 1, rivals=[1, 2, 1], learned_from=KEY)
-    store.learn_alias(OWNER, LOCATION, "my truck", 11, rivals=[11], learned_from=KEY, user="U0SAM")
+    store.learn_alias(OWNER, PART, " Disc 40 ", 1, rivals=[1, 2, 1], learned_from=KEY, read_through=0)
+    store.learn_alias(OWNER, LOCATION, "my truck", 11, rivals=[11], learned_from=KEY, read_through=0, user="U0SAM")
     assert store.aliases(PART) == (Alias("Disc 40", 1, rivals=frozenset({1, 2})),)
     assert store.aliases(LOCATION) == (Alias("my truck", 11, "U0SAM", frozenset({11})),)
 
@@ -73,15 +73,15 @@ def test_only_a_verified_request_teaches_an_alias(store: Store, state: RequestSt
         )  # fmt: skip
         store.transition(KEY, expected=S.APPLYING, target=S.APPLIED, actor=Actor.APPLIER)
     with pytest.raises(StateConflict):
-        store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+        store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
     assert store.aliases(PART) == ()
 
 
 def test_a_later_confirmation_of_the_same_words_replaces_the_alias(store: Store) -> None:
     verify(store)
-    store.learn_alias(OWNER, PART, "Disc 40", 1, rivals=[1], learned_from=KEY)
-    store.learn_alias(OWNER, PART, "disc  40", 7, rivals=[1, 7], learned_from=KEY)
-    store.learn_alias(OWNER, PART, "disc 40", 9, rivals=[9], learned_from=KEY, user="U0SAM")
+    store.learn_alias(OWNER, PART, "Disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
+    store.learn_alias(OWNER, PART, "disc  40", 7, rivals=[1, 7], learned_from=KEY, read_through=0)
+    store.learn_alias(OWNER, PART, "disc 40", 9, rivals=[9], learned_from=KEY, read_through=0, user="U0SAM")
     assert store.aliases(PART) == (
         Alias("disc  40", 7, rivals=frozenset({1, 7})),
         Alias("disc 40", 9, "U0SAM", frozenset({9})),
@@ -92,12 +92,12 @@ def test_a_later_confirmation_of_the_same_words_replaces_the_alias(store: Store)
 def test_learning_an_alias_needs_the_lock_and_is_audited(store: Store, tmp_path: Path) -> None:
     verify(store)
     with pytest.raises(LockLost):
-        store.learn_alias("another-instance", PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+        store.learn_alias("another-instance", PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
     with pytest.raises(ValueError, match="at least one word"):
-        store.learn_alias(OWNER, PART, " -- ", 1, rivals=[1], learned_from=KEY)
+        store.learn_alias(OWNER, PART, " -- ", 1, rivals=[1], learned_from=KEY, read_through=0)
     with pytest.raises(KeyError):
-        store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=RequestKey(POST, 1, 2))
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+        store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=RequestKey(POST, 1, 2), read_through=0)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
     raw = sqlite3.connect(tmp_path / "stockthread.db")
     events = raw.execute("SELECT event, request_id, alias_id FROM audit_log WHERE event = 'alias_learned'").fetchall()
     raw.close()
@@ -109,7 +109,7 @@ def test_the_worker_s_catalog_carries_the_aliases_stored_now(store: Store) -> No
     catalog = with_aliases(lambda: Catalog(parts=parts, locations=()), store)
     assert match_part("disc 40", catalog()).rule is MatchRule.WORDS
     verify(store)
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
     assert match_part("disc 40", catalog()).rule is MatchRule.ALIAS
 
 
@@ -118,8 +118,8 @@ def test_aliases_the_matcher_ignores_are_logged_once_until_the_list_changes(
 ) -> None:
     """M4 DoD: an alias that points to an inactive part or a deleted location is ignored and reported."""
     verify(store)
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
-    store.learn_alias(OWNER, LOCATION, "the yard", 5, rivals=[5], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
+    store.learn_alias(OWNER, LOCATION, "the yard", 5, rivals=[5], learned_from=KEY, read_through=0)
     snapshots = iter([(), (), PARTS, (PartRecord(1, "AP-NV-D40", "Norvane Disc 40", active=False),)])
     catalog = with_aliases(lambda: Catalog(parts=next(snapshots), locations=()), store)
     caplog.set_level("WARNING", logger="stockthread.catalog")
@@ -151,8 +151,8 @@ def test_aliases_the_matcher_ignores_are_logged_once_until_the_list_changes(
 def test_a_confirmation_replaces_every_alias_the_matcher_takes_for_its_text(store: Store) -> None:
     """Plurals fold: "patch cables" and "patch cable" are one alias, or the question would never stop (review #142)."""
     verify(store)
-    store.learn_alias(OWNER, PART, "patch cable", 1, rivals=[1], learned_from=KEY)
-    store.learn_alias(OWNER, PART, "patch cables", 7, rivals=[1, 7], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "patch cable", 1, rivals=[1], learned_from=KEY, read_through=0)
+    store.learn_alias(OWNER, PART, "patch cables", 7, rivals=[1, 7], learned_from=KEY, read_through=0)
     assert store.aliases(PART) == (Alias("patch cables", 7, rivals=frozenset({1, 7})),)
     parts = (PartRecord(1, "PC-1", "Patch Cable 1m", ""), PartRecord(7, "PC-3", "Patch Cable 3m", ""))
     catalog = with_aliases(lambda: Catalog(parts=parts, locations=()), store)
@@ -161,8 +161,8 @@ def test_a_confirmation_replaces_every_alias_the_matcher_takes_for_its_text(stor
 
 def test_learning_again_is_audited_with_the_alias(store: Store, tmp_path: Path) -> None:
     verify(store)
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
-    store.learn_alias(OWNER, PART, "Disc 40", 2, rivals=[1, 2], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
+    store.learn_alias(OWNER, PART, "Disc 40", 2, rivals=[1, 2], learned_from=KEY, read_through=0)
     raw = sqlite3.connect(tmp_path / "stockthread.db")
     events = raw.execute("SELECT event, alias_id FROM audit_log WHERE alias_id IS NOT NULL ORDER BY id").fetchall()
     raw.close()
@@ -187,7 +187,7 @@ def test_learning_again_is_audited_with_the_alias(store: Store, tmp_path: Path) 
 )
 def test_the_database_keeps_aliases_whole(store: Store, tmp_path: Path, statement: str, message: str) -> None:
     verify(store)
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
     raw = sqlite3.connect(tmp_path / "stockthread.db", isolation_level=None)
     with pytest.raises(sqlite3.IntegrityError, match=message):
         raw.execute(statement)
@@ -202,8 +202,8 @@ PARTS = (PartRecord(1, "AP-NV-D40", "Norvane Disc 40 Access Point", ""),)
 
 def test_the_stored_aliases_say_where_each_was_learned(store: Store) -> None:
     verify(store)
-    store.learn_alias(OWNER, LOCATION, "my truck", 11, rivals=[11], learned_from=KEY, user="U0SAM")
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[2, 1], learned_from=KEY)
+    store.learn_alias(OWNER, LOCATION, "my truck", 11, rivals=[11], learned_from=KEY, read_through=0, user="U0SAM")
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[2, 1], learned_from=KEY, read_through=0)
     first, second = store.stored_aliases()
     assert (first.id, first.kind, first.text, first.record, first.user) == (2, PART, "disc 40", 1, None)
     assert (first.rivals, first.learned_from) == (frozenset({1, 2}), KEY)
@@ -215,7 +215,7 @@ def test_removing_an_alias_restores_the_earlier_match_and_is_audited(store: Stor
     """DoD (M4): removing an alias restores the earlier behavior, at the worker's next catalog read."""
     catalog = with_aliases(lambda: Catalog(parts=PARTS, locations=()), store)
     verify(store)
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
     assert match_part("disc 40", catalog()).rule is MatchRule.ALIAS
     removed = store.remove_alias(1)
     assert (removed.text, removed.record, removed.learned_from) == ("disc 40", 1, KEY)
@@ -234,14 +234,16 @@ def test_removing_an_alias_restores_the_earlier_match_and_is_audited(store: Stor
 
 def test_an_admin_removes_an_alias_while_the_connector_holds_the_lock(store: Store, tmp_path: Path) -> None:
     verify(store)
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
     other = Store.open(tmp_path / "stockthread.db")  # the command line's own connection, without the lock
     try:
         other.remove_alias(1)
     finally:
         other.close()
     assert store.aliases(PART) == ()
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)  # the same words may be taught again
+    store.learn_alias(
+        OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0
+    )  # the same words may be taught again
     assert store.aliases(PART) == (Alias("disc 40", 1, rivals=frozenset({1})),)
 
 
@@ -267,10 +269,10 @@ def test_an_alias_an_admin_typed_has_no_source(store: Store, tmp_path: Path) -> 
 def test_a_removed_alias_s_id_is_never_given_again(store: Store) -> None:
     """The audit log and `aliases remove` name aliases by id: a new alias never takes a removed one's (review)."""
     verify(store)
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
-    store.learn_alias(OWNER, PART, "disc 50", 2, rivals=[2], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
+    store.learn_alias(OWNER, PART, "disc 50", 2, rivals=[2], learned_from=KEY, read_through=0)
     store.remove_alias(2)
-    store.learn_alias(OWNER, PART, "red cable", 3, rivals=[3], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "red cable", 3, rivals=[3], learned_from=KEY, read_through=0)
     assert [(alias.id, alias.text) for alias in store.stored_aliases()] == [(1, "disc 40"), (3, "red cable")]
 
 
@@ -318,8 +320,8 @@ def aliases(config: Path, *args: str) -> int:
 
 def test_the_command_lists_exports_and_removes(store: Store, config: Path, capsys: pytest.CaptureFixture[str]) -> None:
     verify(store)
-    store.learn_alias(OWNER, PART, "Disc 40", 1, rivals=[1, 2], learned_from=KEY)
-    store.learn_alias(OWNER, LOCATION, "my truck", 11, rivals=[11], learned_from=KEY, user="U0SAM")
+    store.learn_alias(OWNER, PART, "Disc 40", 1, rivals=[1, 2], learned_from=KEY, read_through=0)
+    store.learn_alias(OWNER, LOCATION, "my truck", 11, rivals=[11], learned_from=KEY, read_through=0, user="U0SAM")
     assert aliases(config, "list") == 0
     out = capsys.readouterr().out.splitlines()
     assert out[0] == "part aliases:"
@@ -375,6 +377,41 @@ def test_a_confirmation_never_takes_over_an_alias_an_admin_typed(store: Store) -
         " VALUES ('part', 'Disc 40', 'disc 40', 1, '2026-10-01', '2026-10-01')"
     )
     verify(store)
-    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
     (typed,) = store.stored_aliases()
     assert (typed.text, typed.learned_from, typed.rivals) == ("Disc 40", None, None)  # an undo cannot forget it
+
+
+def test_an_edit_of_a_post_forgets_every_alias_it_taught_and_no_other(store: Store, tmp_path: Path) -> None:
+    other = PostKey(POST.workspace_id, POST.channel_id, "1700000999.000100")
+    store.create_post(other)
+    store.create_plan(other, "1" * 64, (Operation.TRANSFER,))
+    verify(store)
+    other_key = RequestKey(other, 1, 1)
+    store.transition(other_key, expected=S.PLANNED, target=S.APPROVED, actor=Actor.HUMAN)
+    marker = store.next_marker(other_key, AttemptKind.APPLY)
+    store.begin_attempt(
+        other_key, AttemptKind.APPLY, expected=S.APPROVED, actor=Actor.APPLIER, snapshot={},
+        request_body={"items": [], "location": 4, "notes": write_notes(marker, "U0SAM")}, lock_owner=OWNER,
+    )  # fmt: skip
+    store.transition(other_key, expected=S.APPLYING, target=S.APPLIED, actor=Actor.APPLIER)
+    store.transition(other_key, expected=S.APPLIED, target=S.VERIFIED, actor=Actor.APPLIER)
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=0)
+    store.learn_alias(OWNER, LOCATION, "my truck", 11, rivals=[11], learned_from=KEY, read_through=0, user="U0SAM")
+    store.learn_alias(OWNER, PART, "disc 60", 2, rivals=[2], learned_from=other_key, read_through=0)
+    store.note_revision(OWNER, POST, slack_event_id=None)
+    assert [alias.text for alias in store.stored_aliases()] == ["disc 60"]
+    with sqlite3.connect(tmp_path / "stockthread.db") as raw:
+        events = raw.execute("SELECT actor FROM audit_log WHERE event = 'alias_forgotten'").fetchall()
+    assert events == [("ingest",), ("ingest",)]
+
+
+def test_no_alias_is_learned_from_a_reading_an_edit_came_after(store: Store) -> None:
+    verify(store)
+    store.note_revision(OWNER, POST, slack_event_id=None)
+    through = store.post_changes_through(POST)
+    with pytest.raises(StateConflict, match="edited or deleted after the lesson was read"):
+        store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=through - 1)
+    assert store.stored_aliases() == ()
+    store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=through)
+    assert [alias.text for alias in store.stored_aliases()] == ["disc 40"]
