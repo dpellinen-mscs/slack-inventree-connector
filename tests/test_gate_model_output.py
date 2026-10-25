@@ -4,9 +4,10 @@ model's flags never turns a post the policy does not approve into one it approve
 quantity, a part or a place the post does not state is never approved by the policy.
 
 The model's answer has no score to vary (`llm.extract.OUTPUT_SCHEMA`): what it can steer the gate by is what it
-omits and what it makes up. The model reads every post here, not only those the rules decline, so the gate does
-not lean on the rules having read a post first. Each post's catalog knows its words as an admin's aliases, and
-every place holds plenty of stock, so that only the rules and the gate stand in the way.
+omits and what it makes up. What it can omit is its flags, and a source the post states, which a default source would
+otherwise fill. The model reads every post here, not only those the rules decline, so the gate does not lean on the
+rules having read a post first. Each post's catalog knows its words as an admin's aliases, and every place holds
+plenty of stock, so that only the rules and the gate stand in the way.
 Take-outs have a default source (`policy.default_source`, ADR 0020), as most of them state none.
 """
 
@@ -299,3 +300,23 @@ def test_an_answer_that_makes_something_up_is_never_approved_by_the_policy(
         if output is None:
             continue
         assert verdict(migrated, tmp_path / f"{name}.db", case, output) is not Verdict.ALLOWED, name
+
+
+def without_source(output: dict[str, Any]) -> dict[str, Any] | None:
+    """Every movement's source left out, the model's own flags kept: the default source must not fill a source the
+    post states (ADR 0020)."""
+    varied = copy.deepcopy(output)
+    sourced = [movement for movement in varied["movements"] if movement["source_text"] is not None]
+    for movement in sourced:
+        movement["source_text"] = None
+    return varied if sourced else None
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])
+def test_an_answer_that_leaves_out_a_stated_source_is_never_approved_by_the_policy(
+    migrated: Path, tmp_path: Path, case: dict[str, Any]
+) -> None:
+    output = without_source(json.loads(ANSWERS[case["id"]]["output"]))
+    if output is None:
+        pytest.skip("the recorded answer names no source")
+    assert verdict(migrated, tmp_path / "stockthread.db", case, output) is not Verdict.ALLOWED

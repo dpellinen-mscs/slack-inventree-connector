@@ -101,7 +101,7 @@ from stockthread.core.questions import (
 from stockthread.core.requests import UNDOABLE, RequestState
 from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
-from stockthread.core.validate import in_stocking_unit, photo_not_read, validate
+from stockthread.core.validate import DETAIL_SOURCE_LEFT_OUT, in_stocking_unit, photo_not_read, validate
 from stockthread.gate import Judgement
 from stockthread.inventree import InvenTreeError
 from stockthread.learning import lessons
@@ -1749,7 +1749,7 @@ class Worker:
             if source is None:
                 # A picked type takes its own default source, or none.
                 source = (
-                    _default_source(movement, catalog)
+                    _default_source(movement, catalog, reasons)
                     if _is_default(view.source) or (n in effects.types and view.source is None)
                     else view.source
                 )
@@ -1953,8 +1953,9 @@ class Worker:
         for movement in extraction.movements:
             items = [_part(item.item_text, catalog, poster) for item in movement.line_items]
             stocking = _stocking(items, catalog)
-            source = _location(movement.source_text, catalog, poster) or _default_source(movement, catalog)
-            reasons = _by_default(self._reasons(movement, extraction, messages, late, stocking), source)
+            reasons = self._reasons(movement, extraction, messages, late, stocking)
+            source = _location(movement.source_text, catalog, poster) or _default_source(movement, catalog, reasons)
+            reasons = _by_default(reasons, source)
             views.append(
                 MovementView(
                     movement=movement,
@@ -2247,9 +2248,13 @@ def _by_default(reasons: Sequence[ReviewReason], source: Match | None) -> tuple[
     return tuple(reason for reason in reasons if reason.code is not ReasonCode.IMPLIED_SOURCE)
 
 
-def _default_source(movement: CandidateMovement, catalog: Catalog) -> Match | None:
-    """The movement type's `policy.default_source`, for a movement that states no source; else None."""
+def _default_source(movement: CandidateMovement, catalog: Catalog, reasons: Sequence[ReviewReason]) -> Match | None:
+    """The movement type's `policy.default_source`, for a movement that states no source; else None. A text that
+    names a source the reading left out ("from shelf B") gets none: the default is for an unstated source, and a
+    model must not move stock from it by leaving the stated one out (`validate.DETAIL_SOURCE_LEFT_OUT`)."""
     if movement.source_text is not None or movement.movement_type not in catalog.default_sources:
+        return None
+    if any(reason.code is ReasonCode.IMPLIED_SOURCE and reason.detail == DETAIL_SOURCE_LEFT_OUT for reason in reasons):
         return None
     return Match(MatchStatus.MATCHED, MatchRule.DEFAULT, catalog.default_sources[movement.movement_type])
 

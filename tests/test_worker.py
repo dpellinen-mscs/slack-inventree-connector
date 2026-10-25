@@ -41,6 +41,7 @@ from stockthread.core.model import (
 )
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import STATUS_OK, SourcePick, StockItem, Take
+from stockthread.core.validate import DETAIL_SOURCE_LEFT_OUT
 from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.plan_record import plan_hash, views_of
@@ -3554,6 +3555,25 @@ def test_a_type_picked_for_a_post_that_states_no_source_takes_that_type_s_defaul
     assert movement["source"] == source
     codes = {reason["code"] for reason in movement["reasons"]}
     assert ("implied_source" in codes) is (source is None)
+
+
+def test_a_source_the_model_leaves_out_is_not_filled_by_the_default(store: Store, clock: Clock) -> None:
+    """ADR 0020: the post says "from shelf B" and the model's reading has no source, so the default source (main
+    stock) must not stand in for it: the source is asked for, as with no default."""
+    unsourced = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "truck 1")
+    llm = FakeLLM(Extraction(MODEL, (unsourced,)))
+    slack = FakeSlack()
+    defaulted = replace(CATALOG, default_sources={MovementType.TAKE_TO_VEHICLE: 10})
+    worker = Worker(approving(), store, OWNER, slack, lambda: defaulted, clock, llm=llm)
+    enqueue(store, message(ROOT, "shuffled 2 Disc 40 from shelf B to truck 1"))
+    read_and_answered(worker, clock)
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    [movement] = record.result["movements"]
+    assert movement["source"] is None
+    assert {"code": "implied_source", "source": "rule", "detail": DETAIL_SOURCE_LEFT_OUT} in movement["reasons"]
+    assert [item.question["ask"] for item in store.questions(KEY)] == ["name_location"]
 
 
 def test_no_to_a_doubt_about_the_reading_ends_the_plan(store: Store, clock: Clock) -> None:
