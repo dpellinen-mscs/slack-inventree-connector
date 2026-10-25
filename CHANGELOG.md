@@ -38,6 +38,9 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Added
 
+- An integration test of alias learning end to end on the pinned InvenTree servers: the worker as `stockthread run`
+  builds it, from a post's question and Apply click to the next post applied with no click, and asked again once a
+  new part fits the words.
 - Alias learning (ADR 0012): once every request of a plan an approver clicked Apply on is verified, each of the
   poster's own texts in it that a person confirmed or corrected in the thread becomes an alias of its part or
   location, and the receipt names it ("Learned from this Apply: “norvane 40” means Norvane Disc 40 Access Point.").

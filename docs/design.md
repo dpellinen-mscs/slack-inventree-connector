@@ -1985,7 +1985,12 @@ Deterministic. The rules run in this order:
   vehicle word alone, and a text the plan decided for two records teach
   nothing. An undo forgets what its plan taught as it begins. Learning is
   best effort: a read that fails teaches nothing, and the next
-  confirmation does. The receipt names what was learned.
+  confirmation does. The receipt names what was learned. Tested end to
+  end on every pinned server (`tests/integration/test_learning_server.py`):
+  a whole-word take-out is asked, waits for Apply and teaches its text; the
+  same words then apply with no click; a new part that fits them is a
+  question again; a dry run with writes off and an expired plan teach
+  nothing.
 
 ## 11. Testing strategy
 
