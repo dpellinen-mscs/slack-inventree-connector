@@ -143,6 +143,7 @@ payloads whose channel or message does not fit the stored id.
   - [x] The Apply button: an approver's click approves a plan that waits
     - [x] A click's approval: only an approver, only the current plan revision before its expiry, judged by the gate with the click (`applier.approve_by_click`)
     - [x] The button on a reply that made a plan, with writes on, and the worker's click handler, bound to the stored reply (`Worker._handle_apply`, `run.click_approver`)
+    - [x] The button taken down once its plan is written, replaced, closed or expired, with a line that says which (`Worker.take_down_buttons`, migration 0022)
 - [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
   - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`, run by `run.run` at start)
