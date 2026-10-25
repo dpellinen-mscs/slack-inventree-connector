@@ -31,12 +31,15 @@ from stockthread.slack.replies import (
     NO_APPROVERS,
     REASONS,
     MovementView,
+    apply_closed,
     click_feedback,
     dry_run_reply,
     escape,
     question_closed,
     shows_everything,
+    with_apply,
     with_no_apply,
+    without_apply,
     without_question,
 )
 from stockthread.store import Answered
@@ -286,6 +289,36 @@ def test_without_question_keeps_what_comes_before_the_marked_divider() -> None:
     assert without_question(reply) is None  # an unmarked divider is part of the reply
     assert without_question([]) is None
     assert without_question([*reply, "junk", *question]) is None
+
+
+def test_without_apply_takes_out_the_button_and_the_line_above_it() -> None:
+    reply = {"text": "Dry run", "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "Moves 2 Disc 40"}}]}
+    shown = with_apply(reply, 1)["blocks"]
+    assert without_apply(shown) == reply["blocks"]
+    # As Slack returns them: every block with a block_id, every text with its `verbatim` flag.
+    returned = [{"block_id": f"b{n}", **block} for n, block in enumerate(shown[:-1])] + [shown[-1]]
+    returned[-2] = {**returned[-2], "text": {**returned[-2]["text"], "verbatim": False}}
+    assert without_apply(returned) == returned[:-2]
+    assert without_apply(reply["blocks"]) is None
+    assert without_apply(shown[-1:]) is None  # no line above the button: not the reply's own
+    assert without_apply([shown[0], shown[0], shown[-1]]) is None
+    assert without_apply([*shown[:-1], "junk", shown[-1]]) is None
+    assert without_apply([]) is None
+
+
+def test_a_closed_apply_button_says_what_became_of_the_plan() -> None:
+    def text(closed: str, by: str | None = None) -> str:
+        return str(apply_closed(closed, by)["elements"][0]["text"])
+
+    receipt = "The receipt in this thread says what was written."
+    assert text("approved", "U0LUIS0005") == f"This was approved by <@U0LUIS0005>. {receipt}"
+    assert text("approved") == f"This was approved with no click. {receipt}"
+    assert text("approved", "<!channel>") == f"This was approved. {receipt}"
+    assert text("replaced").startswith("A newer reply in this thread replaced this one")
+    assert text("expired").startswith("This plan expired")
+    assert text("closed") == "This movement can no longer be applied from here."
+    with pytest.raises(ValueError, match="no such closing"):
+        apply_closed("approve")
 
 
 def test_a_closed_question_says_who_answered_only_by_a_slack_user_id() -> None:

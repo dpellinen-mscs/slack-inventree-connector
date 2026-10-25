@@ -366,7 +366,8 @@ def test_the_aliases_are_read_without_changing_the_database(tmp_path: Path) -> N
     Store.open(path).close()
     assert _stored_aliases(str(path)) == ((), [])
     raw = sqlite3.connect(path, isolation_level=None)
-    raw.execute("DROP TABLE aliases")  # back to schema 20
+    raw.execute("DROP TABLE apply_buttons")  # back to schema 20
+    raw.execute("DROP TABLE aliases")
     raw.execute("ALTER TABLE audit_log DROP COLUMN alias_id")
     raw.execute("PRAGMA user_version = 20")
     aliases, findings = _stored_aliases(str(path))

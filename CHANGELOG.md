@@ -38,6 +38,10 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Added
 
+- The Apply button is taken out of its dry-run reply once the plan is approved (by a click or the policy), replaced
+  by a newer reply, closed with nothing written, or expired. The reply ends with a line that says which, and who
+  approved it. Replies posted before this version keep their buttons; a click on them is still checked against the
+  database. Database migration 0022 adds the `apply_buttons` table.
 - An integration test of alias learning end to end on the pinned InvenTree servers: the worker as `stockthread run`
   builds it, from a post's question and Apply click to the next post applied with no click, and asked again once a
   new part fits the words.

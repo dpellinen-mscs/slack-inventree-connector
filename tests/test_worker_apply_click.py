@@ -17,14 +17,22 @@ from stockthread.applier import GateNow, approve_by_click
 from stockthread.config import Settings, parse_settings
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.core.model import MovementType, PostKey, RequestKey
-from stockthread.core.requests import RequestState
+from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import STATUS_OK, StockItem
 from stockthread.gate import Judgement, Policy, Verdict
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, ServerInfo, VersionCheck, check_version
 from stockthread.run import click_approver
-from stockthread.slack.replies import APPLY_ACTION, APPLY_BLOCK, CLICK_FEEDBACK, NO_APPLY_TEXT, with_apply
+from stockthread.slack.replies import (
+    APPLY_ACTION,
+    APPLY_BLOCK,
+    APPLY_LINE,
+    CLICK_FEEDBACK,
+    NO_APPLY_TEXT,
+    apply_closed,
+    with_apply,
+)
 from stockthread.store import DryRunOutcome, EventStatus, StateConflict, Store, WriteBlocked
-from stockthread.worker import APPLY_FEEDBACK, Worker
+from stockthread.worker import APPLY_FEEDBACK, TAKE_DOWN_BACKOFF_SECONDS, TAKE_DOWN_TRIES, Worker
 
 S = RequestState
 OWNER = "instance-a"
@@ -62,6 +70,10 @@ class FakeSlack:
     def __init__(self) -> None:
         self.posted: list[dict[str, Any]] = []
         self.notes: list[dict[str, Any]] = []
+        self.updates: list[dict[str, Any]] = []
+        self.edited: dict[str, list[dict[str, Any]]] = {}
+        """Blocks of a reply as it stands after an edit, by its ts."""
+        self.read_failures = 0
 
     def chat_postMessage(self, **kwargs: Any) -> dict[str, Any]:
         self.posted.append(kwargs)
@@ -70,6 +82,33 @@ class FakeSlack:
     def chat_postEphemeral(self, **kwargs: Any) -> dict[str, Any]:
         self.notes.append(kwargs)
         return {"ok": True}
+
+    def conversations_replies(self, **kwargs: Any) -> dict[str, Any]:
+        """The thread's root, then the replies posted within the bounds, as Slack returns them (with its own fields)."""
+        if self.read_failures:
+            self.read_failures -= 1
+            raise ConnectionError("synthetic outage")
+        listed: list[dict[str, Any]] = [{"type": "message", "user": SAM, "text": "a post", "ts": kwargs["ts"]}]
+        for n, reply in enumerate(self.posted, start=1):
+            ts = f"1790009999.{n:06d}"
+            if kwargs["oldest"] <= ts <= kwargs["latest"]:
+                blocks = self.edited.get(ts) or [_as_slack_returns(block) for block in reply["blocks"]]
+                listed.append({"type": "message", "bot_id": "B0STOCKBOT", "app_id": APP, "ts": ts,
+                               "thread_ts": ROOT, "text": reply["text"], "blocks": blocks})  # fmt: skip
+        return {"ok": True, "messages": listed[: kwargs["limit"]], "has_more": False}
+
+    def chat_update(self, **kwargs: Any) -> dict[str, Any]:
+        self.updates.append(kwargs)
+        self.edited[kwargs["ts"]] = list(kwargs["blocks"])
+        return {"ok": True, "ts": kwargs["ts"]}
+
+
+def _as_slack_returns(block: dict[str, Any]) -> dict[str, Any]:
+    """Slack gives each block a block_id when it has none, and each text its `verbatim` flag."""
+    returned = {"block_id": f"b{len(json.dumps(block)) % 997}", **block}
+    if isinstance(block.get("text"), dict):
+        returned["text"] = {**block["text"], "verbatim": False}
+    return returned
 
 
 class Clock:
@@ -561,3 +600,193 @@ def test_a_click_approves_a_plan_its_posts_second_dry_run_made_after_an_answer(s
     assert last_event(store) == (EventStatus.DONE, "approved")
     assert clicking.calls == [(POST, 1, LUIS)]
     assert store.plan(POST, 1).approved_by == LUIS
+
+
+PAST_THE_LOOK = "1790000033.000000"
+"""Past TAKE_DOWN_SPACING_SECONDS after the reply's own step looked through the Apply buttons and found none due."""
+
+
+def shown(store: Store) -> list[tuple[int, str, int]]:
+    return store._db.execute("SELECT revision, buttons, buttons_tries FROM apply_buttons ORDER BY id").fetchall()
+
+
+def closing(worker: Worker, reply: int = 0) -> str | None:
+    """The line the reply posted `reply`-th ends with once edited, or None while it is not edited."""
+    blocks = slack(worker).edited.get(f"1790009999.{reply + 1:06d}")
+    if blocks is None:
+        return None
+    assert not [block for block in blocks if block.get("block_id") == APPLY_BLOCK]
+    assert not [block for block in blocks if (block.get("text") or {}).get("text") == APPLY_LINE]
+    last = blocks[-1]
+    assert last["type"] == "context"
+    return str(last["elements"][0]["text"])
+
+
+def test_the_apply_button_is_taken_down_once_a_click_approved_the_plan(store: Store, clock: Clock) -> None:
+    clicking = Clicking(store)
+    worker = replied(store, clock, clicking)
+    assert shown(store) == [(1, "shown", 0)]
+    worker.step()
+    assert slack(worker).updates == []  # the plan waits: the button stays
+    click(store, worker)
+    clock.at(PAST_THE_LOOK)
+    worker.step()
+    assert store.request(KEY).state is S.APPROVED
+    assert closing(worker) == f"This was approved by <@{LUIS}>. The receipt in this thread says what was written."
+    [update] = slack(worker).updates
+    kept = update["blocks"][:-1]
+    assert kept == [_as_slack_returns(block) for block in slack(worker).posted[0]["blocks"][:-2]]  # the reply as it was
+    assert shown(store) == [(1, "removed", 0)]
+    assert "apply_removed" in [row[0] for row in store._db.execute("SELECT event FROM audit_log")]
+    clock.at("1790000400.000000")
+    worker.step()
+    assert len(slack(worker).updates) == 1  # taken down once
+
+    click(store, worker)  # a click Slack sent before the edit approves nothing more
+    worker.drain()
+    assert last_event(store) == (EventStatus.DROPPED, "already_approved")
+
+
+def test_a_plan_the_policy_approved_takes_its_button_down_with_no_name(store: Store, clock: Clock) -> None:
+    worker = replied(store, clock, Clicking(store))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    clock.at(PAST_THE_LOOK)
+    worker.step()
+    assert closing(worker) == "This was approved with no click. The receipt in this thread says what was written."
+
+
+def test_a_reply_a_newer_one_replaced_loses_its_button_and_the_newer_keeps_its_own(store: Store, clock: Clock) -> None:
+    worker = replied(store, clock, Clicking(store))
+    enqueue(store, edit("1790000040.000100", BACK, "returned 3 Disc 40 from truck 1 to main stock"))
+    clock.at("1790000100.000000")
+    worker.step()
+    clock.at("1790000103.000000")
+    worker.step()
+    assert closing(worker, 0) == (
+        "A newer reply in this thread replaced this one, so it can no longer be applied from here."
+    )
+    assert closing(worker, 1) is None
+    assert shown(store) == [(1, "removed", 0), (2, "shown", 0)]
+
+
+def test_an_edit_that_reads_the_same_keeps_the_button_of_the_reply_that_stands(store: Store, clock: Clock) -> None:
+    worker = replied(store, clock, Clicking(store))
+    enqueue(store, edit("1790000040.000100", BACK, BACK + " "))
+    clock.at("1790000100.000000")
+    worker.step()
+    clock.at("1790000103.000000")
+    worker.step()
+    assert len(slack(worker).posted) == 1
+    assert slack(worker).updates == []
+    assert shown(store) == [(1, "shown", 0)]
+
+
+def test_with_its_plan_taken_back_and_no_newer_reply_yet_the_button_waits(store: Store, clock: Clock) -> None:
+    worker = replied(store, clock, Clicking(store))
+    store.stale_plan(OWNER, POST)  # a revision is on its way, and may make the plan again
+    clock.at("1790000100.000000")
+    worker.step()
+    assert slack(worker).updates == []
+    assert shown(store) == [(1, "shown", 0)]
+
+
+@pytest.mark.parametrize(("at", "expired"), [("1790086400.000100", False), ("1790086400.000101", True)])
+def test_the_button_is_taken_down_when_its_plan_expires_as_a_click_would_be_refused(
+    store: Store, clock: Clock, at: str, expired: bool
+) -> None:
+    worker = replied(store, clock, Clicking(store))
+    clock.at(at)
+    worker.step()
+    expected = "This plan expired, so nothing from this post will be applied. To record it, post it again."
+    assert closing(worker) == (expected if expired else None)
+
+
+@pytest.mark.parametrize("state", ["rejected", "cancelled"])
+def test_a_plan_closed_with_nothing_approved_says_it_can_no_longer_be_applied(
+    store: Store, clock: Clock, state: str
+) -> None:
+    worker = replied(store, clock, Clicking(store))
+    with store._db:
+        store._db.execute("UPDATE requests SET state = ?", (state,))
+    clock.at(PAST_THE_LOOK)
+    worker.step()
+    assert closing(worker) == "This movement can no longer be applied from here."
+
+
+def test_a_button_that_cannot_be_taken_down_is_tried_with_backoff_then_left(store: Store, clock: Clock) -> None:
+    worker = replied(store, clock, Clicking(store))
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    slack(worker).read_failures = TAKE_DOWN_TRIES
+    clock.at(PAST_THE_LOOK)
+    worker.step()
+    assert shown(store) == [(1, "shown", 1)]
+    worker.step()
+    assert shown(store) == [(1, "shown", 1)]  # not before its backoff
+    at = 1790000033
+    for tries, wait in enumerate([TAKE_DOWN_BACKOFF_SECONDS, 2 * TAKE_DOWN_BACKOFF_SECONDS], start=2):
+        at += wait
+        clock.at(f"{at}.000000")
+        worker.step()
+        assert shown(store)[0][2] == tries
+    assert shown(store) == [(1, "left", 3)]
+    assert slack(worker).updates == []
+
+
+def test_an_edit_that_went_through_unseen_counts_as_done_and_a_reply_with_no_button_is_left(
+    store: Store, clock: Clock
+) -> None:
+    worker = replied(store, clock, Clicking(store))
+    reply = slack(worker).posted[0]
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    done = apply_closed("approved")
+    slack(worker).edited["1790009999.000001"] = [*reply["blocks"][:-2], done]
+    clock.at(PAST_THE_LOOK)
+    worker.step()
+    assert shown(store) == [(1, "removed", 0)]
+    assert slack(worker).updates == []
+
+
+def test_a_reply_with_no_apply_button_to_take_out_is_left(store: Store, clock: Clock) -> None:
+    worker = replied(store, clock, Clicking(store))
+    reply = slack(worker).posted[0]
+    store.approve_plan(OWNER, POST, 1, actor=Actor.POLICY)
+    slack(worker).edited["1790009999.000001"] = reply["blocks"][:-2]  # someone else's edit, say
+    clock.at(PAST_THE_LOOK)
+    worker.step()
+    assert shown(store) == [(1, "left", 0)]
+    assert slack(worker).updates == []
+
+
+def test_questions_and_apply_buttons_take_turns() -> None:
+    worker = Worker.__new__(Worker)
+    turns: list[str] = []
+    worker._apply_turn = False
+    item = type("Item", (), {"id": 2})()
+
+    def due(now: Decimal) -> tuple[Any, str, None] | None:
+        return (type("B", (), {"id": 1})(), "approved", None)
+
+    def one(what: str, *args: Any) -> int:
+        turns.append(what.split()[0])
+        return 1
+
+    class Quiet:
+        def expire_questions(self, *args: Any) -> int:
+            return 0
+
+        def closed_with_buttons(self, limit: int) -> list[tuple[object, None]]:
+            return [(item, None)]
+
+        buttons_failed = buttons_taken_down = apply_failed = apply_taken_down = None
+
+    worker.store = Quiet()  # type: ignore[assignment]
+    worker.owner = OWNER
+    worker.settings = settings()
+    worker.clock = Clock()
+    worker._quiet_until = worker._take_down_quiet_until = Decimal(0)
+    worker.stopping = lambda: False  # type: ignore[method-assign]
+    worker._apply_due = due  # type: ignore[method-assign]
+    worker._take_down_one = one  # type: ignore[method-assign]
+    for _ in range(4):
+        worker.take_down_buttons()
+    assert turns == ["buttons", "Apply", "buttons", "Apply"]

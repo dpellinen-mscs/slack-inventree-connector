@@ -62,7 +62,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
 
-from stockthread.applier import plan_views, undo_refusal
+from stockthread.applier import plan_expired, plan_views, undo_refusal
 from stockthread.apply import Applied
 from stockthread.config import Settings
 from stockthread.core import extract_rules
@@ -126,6 +126,7 @@ from stockthread.slack.replies import (
     CLICK_FEEDBACK,
     UNDO_ACTION,
     MovementView,
+    apply_closed,
     click_feedback,
     dry_run_reply,
     gate_reasons,
@@ -139,12 +140,14 @@ from stockthread.slack.replies import (
     with_apply,
     with_no_apply,
     with_question,
+    without_apply,
     without_question,
 )
 from stockthread.store import (
     MAX_EVENT_ATTEMPTS,
     AliasKind,
     Answered,
+    ApplyButton,
     Button,
     DryRunOutcome,
     EventStatus,
@@ -186,10 +189,13 @@ TAKE_DOWN_SPACING_SECONDS = 2
 """One reply is edited to take a closed question's buttons down at most this often: two calls each, within the
 50 a minute that `conversations.replies` and `chat.update` each allow."""
 TAKE_DOWN_TRIES = 3
-"""Failed attempts on one question before the connector gives up on taking its buttons down."""
+"""Failed attempts on one question or Apply button before the connector gives up on taking it down."""
 TAKE_DOWN_BACKOFF_SECONDS = 60
 """After a failed attempt no buttons are taken down for this long (doubled for the question's each further
 failure), or for as long as Slack asks, if longer."""
+APPLY_LOOK_LIMIT = 500
+"""The Apply buttons still shown that one look reads, fewest failed tries first (`Worker._apply_due`). Each is open
+for at most `slack.plan_expiry_hours`, so this many is far more than a small team's posts in that time."""
 NOTE_QUIET_SECONDS = 60
 """After a note to a clicker fails, no note is sent for this long: a slow Slack never holds the queue up."""
 MAX_NOTED = 1000
@@ -325,6 +331,8 @@ class _Sent:
     """The question the reply asks, stored with its buttons once the reply is posted."""
     plan: NewPlan | None = None
     """The plan the reply makes when it could apply in full, stored with it (ADR 0016)."""
+    apply: bool = False
+    """The reply carries an Apply button (`with_apply`), stored with it so it is taken down once the plan closes."""
 
 
 Undoer = Callable[[RequestKey, MovementView, str], Applied]
@@ -451,6 +459,10 @@ class Worker:
     """(channel, ts): thread replies whose author was told they may not answer."""
     _take_down_quiet_until: Decimal = Decimal(0)
     """No buttons are taken down before this time."""
+    _apply_turn: bool = False
+    """The next take-down is of an Apply button, when one is due: questions and Apply buttons take turns."""
+    _apply_look_at: Decimal = Decimal(0)
+    """The Apply buttons shown are not looked through again before this time, after a look found none to take down."""
     _expire_at: Decimal = Decimal(0)
     """No stored text is expired before this time."""
 
@@ -1028,39 +1040,135 @@ class Worker:
 
     def take_down_buttons(self) -> int:
         """Take a question out of the reply it was asked in, once it is answered, a newer reply replaced it, or its
-        plan expired (design section 4, "Interactivity"): the reply is read back from Slack, and edited to end with a
-        line that says what became of the question. Best effort, one reply per TAKE_DOWN_SPACING_SECONDS, fewest
-        failed tries first; the clicks are checked against the store whatever Slack shows. Returns 1 when a reply
-        was edited or given up on."""
+        plan expired; and an Apply button out of its dry-run reply, once its plan is closed (`_apply_closed`; design
+        section 4, "Interactivity"). The reply is read back from Slack, and edited to end with a line that says what
+        became of the question or the plan. Best effort, one reply per TAKE_DOWN_SPACING_SECONDS, questions and Apply
+        buttons in turn, fewest failed tries first; the clicks are checked against the store whatever Slack shows.
+        Returns 1 when a reply was edited or given up on."""
         now = self._now()
         if self.stopping() or now < max(self._quiet_until, self._take_down_quiet_until):
             return 0
         # From the same time as a click's expiry (`_refuse_answer`).
         self.store.expire_questions(self.owner, now - self.settings.slack.plan_expiry_hours * 3600)
         listed = self.store.closed_with_buttons(limit=1)
+        due = self._apply_due(now) if self._apply_turn or not listed else None
+        if due is not None:
+            self._apply_turn = False
+            button, closed, approved_by = due
+            return self._take_down_one(
+                "Apply button of post",
+                button.id,
+                lambda: self._take_down_apply(button, closed, approved_by),
+                self.store.apply_failed,
+                self.store.apply_taken_down,
+            )
         if not listed:
             return 0
+        self._apply_turn = True
         item, answered_by = listed[0]
+        return self._take_down_one(
+            "buttons of question",
+            item.id,
+            lambda: self._take_down(item, answered_by),
+            self.store.buttons_failed,
+            self.store.buttons_taken_down,
+        )
+
+    def _take_down_one(
+        self,
+        what: str,
+        row_id: int,
+        edit: Callable[[], bool],
+        failed: Callable[[str, int], int],
+        taken_down: Callable[..., None],
+    ) -> int:
+        now = self._now()
         self.beat()
         self._take_down_quiet_until = now + TAKE_DOWN_SPACING_SECONDS
         try:
-            removed = self._take_down(item, answered_by)
+            removed = edit()
         except PosterBusy:
             return 0  # another call is still on its way: nothing was tried
         except Exception as error:
-            _log_failure("buttons of question", item.id, error)
-            tries = self.store.buttons_failed(self.owner, item.id)
-            # Every failure pauses all take-downs, the last try of this question too: the next question waits
-            # out the same outage or rate limit instead of spending its tries in it.
+            _log_failure(what, row_id, error)
+            tries = failed(self.owner, row_id)
+            # Every failure pauses all take-downs, the last try of this one too: the next one waits out the same
+            # outage or rate limit instead of spending its tries in it.
             wait = max(TAKE_DOWN_BACKOFF_SECONDS * 2 ** (min(tries, TAKE_DOWN_TRIES) - 1), _retry_after(error))
             self._take_down_quiet_until = now + wait
             if tries < TAKE_DOWN_TRIES:
                 return 0
             removed = False
-        self.store.buttons_taken_down(self.owner, item.id, removed=removed)
+        taken_down(self.owner, row_id, removed=removed)
         if not removed:
-            log.warning("buttons of question %s: left in Slack", item.id)
+            log.warning("%s %s: left in Slack", what, row_id)
         return 1
+
+    def _apply_due(self, now: Decimal) -> tuple[ApplyButton, str, str | None] | None:
+        """The first Apply button shown whose plan is closed, with how (`_apply_closed`). The buttons are looked
+        through at most every TAKE_DOWN_SPACING_SECONDS while none is due."""
+        if now < self._apply_look_at:
+            return None
+        for button in self.store.apply_buttons_shown(limit=APPLY_LOOK_LIMIT):
+            closed = self._apply_closed(button)
+            if closed is not None:
+                return button, *closed
+        self._apply_look_at = now + TAKE_DOWN_SPACING_SECONDS
+        return None
+
+    def _apply_closed(self, button: ApplyButton) -> tuple[str, str | None] | None:
+        """How the plan of a dry-run reply's Apply button closed, as `replies.apply_closed` words it, and who approved
+        it; None while a click on it could still approve it, or may yet. Closed only on what `_handle_apply` and
+        `approve_by_click` refuse for good: a later dry run that posted or read the post anew ("replaced"); the plan
+        approved, or further on ("approved"), its requests all rejected, cancelled or expired, or an undo of the
+        post asked for ("closed"); or its expiry passed ("expired"). With no current plan of the reply and no later
+        dry run, it waits: a revision may be on its way to make the plan again (`stale_plan`, then `unchanged`)."""
+        post, revision = button.post, button.revision
+        if post in self._running:
+            return None  # a reply on its way may replace it; until it is recorded the click still counts
+        history = self.store.dry_run_history(post)
+        if any(record.revision > revision and record.outcome is not DryRunOutcome.UNCHANGED for record in history):
+            return "replaced", None
+        clicked = [record.result for record in history if record.revision == revision]
+        plan = self.store.current_plan(post)
+        if plan is not None and clicked and clicked[0] is not None and plan_hash(clicked[0]) == plan.input_hash:
+            states = {row.state for row in plan.requests}
+            ended = {RequestState.REJECTED, RequestState.CANCELLED, RequestState.EXPIRED}
+            if plan.approved_by is not None or states - ended - {RequestState.PLANNED}:
+                return "approved", plan.approved_by
+            if RequestState.EXPIRED in states:
+                return "expired", None
+            if states != {RequestState.PLANNED} or self.store.undone_before(post, plan.revision):
+                return "closed", None
+        if plan_expired(self.store, post, self._now(), self.settings.slack.plan_expiry_hours):
+            return "expired", None
+        return None
+
+    def _take_down_apply(self, button: ApplyButton, closed: str, approved_by: str | None) -> bool:
+        """Edit the reply; False when it is gone or carries no Apply button to take out."""
+        found = self.slack.conversations_replies(
+            channel=button.post.channel_id,
+            ts=button.post.ts,
+            oldest=button.message_ts,
+            latest=button.message_ts,
+            inclusive=True,
+            limit=2,  # the thread's root always comes first
+        )
+        reply = next((m for m in found["messages"] if m.get("ts") == button.message_ts), None)
+        if reply is None or not posted_by_app(reply, self.settings.slack.app_id):
+            return False
+        blocks = reply.get("blocks") or []
+        closing = apply_closed(closed, approved_by)
+        kept = without_apply(blocks)
+        if kept is None:
+            return _closed_already(blocks, closing)  # an edit whose call ran out of time went through
+        self.slack.chat_update(
+            channel=button.post.channel_id,
+            ts=button.message_ts,
+            text=str(reply.get("text") or ""),
+            blocks=[*kept, closing],
+        )
+        return True
 
     def _take_down(self, item: ReviewItem, answered_by: str | None) -> bool:
         """Edit the reply; False when it is gone or carries no question to take out."""
@@ -1375,10 +1483,12 @@ class Worker:
             )
             return True
         plan = _plan(key, decided)
+        apply = False
         if plan is not None and asked is None and self.approve_click is not None:
             try:  # an approver approves only what they were shown (ADR 0016): a reply cut short gets no button
                 complete = shows_everything(views, parts, locations)
                 body = with_apply(body, post.revision) if complete else with_no_apply(body)
+                apply = complete
             except Exception as error:  # the reply still says it could apply; the plan waits for a newer reply
                 _log_failure("apply button", key.ts, error)
         # Closed first: a sibling that arrives from here on starts its own post. A crash after posting and
@@ -1397,6 +1507,7 @@ class Worker:
                 answers,
                 question=asked,
                 plan=plan,
+                apply=apply,
             ),
         )
         return True
@@ -1779,6 +1890,7 @@ class Worker:
             answers=sent.answers,
             question=sent.question,
             plan=sent.plan,
+            apply=sent.apply and bool(valid),
         )
         self._judge_later(key, sent.revision, sent.plan, now)
         if sent.outcome is DryRunOutcome.RETRACTED:

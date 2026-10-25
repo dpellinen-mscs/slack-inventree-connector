@@ -540,12 +540,53 @@ def with_apply(reply: Mapping[str, Any], revision: int) -> dict[str, Any]:
     }
     blocks = [
         *reply["blocks"],
-        _section("An approver can apply it now."),
+        _section(APPLY_LINE),
         {"type": "actions", "block_id": APPLY_BLOCK, "elements": [button]},
     ]
     if len(blocks) > MAX_BLOCKS:
         raise ValueError("a reply with its Apply button has more blocks than Slack allows")
     return {"text": reply["text"], "blocks": blocks}
+
+
+APPLY_LINE = "An approver can apply it now."
+
+
+def without_apply(blocks: Sequence[Any]) -> list[dict[str, Any]] | None:
+    """The blocks of a reply as Slack returns them, without its Apply button: everything before the line
+    `with_apply` puts above the actions block marked APPLY_BLOCK. None when there is no such block right after that
+    line, or a block is not an object."""
+    if not all(isinstance(block, Mapping) for block in blocks):
+        return None
+    for n, block in enumerate(blocks):
+        if block.get("type") == "actions" and block.get("block_id") == APPLY_BLOCK:
+            line = blocks[n - 1] if n else {}
+            text = line.get("text")
+            if line.get("type") != "section" or not isinstance(text, Mapping) or text.get("text") != APPLY_LINE:
+                return None
+            return [dict(kept) for kept in [*blocks[: n - 1], *blocks[n + 1 :]]]
+    return None
+
+
+def apply_closed(closed: str, approved_by: str | None = None) -> dict[str, Any]:
+    """The line that stands where a reply's Apply button was, once its plan is closed (`Worker.take_down_apply`):
+    `closed` is "approved" (by `approved_by`'s click, or by the policy when None), "replaced" by a newer reply,
+    "expired", or "closed" (undone, rejected or cancelled)."""
+    if closed == "approved":
+        if approved_by is None:
+            text = "This was approved with no click. The receipt in this thread says what was written."
+        elif _SLACK_USER.fullmatch(approved_by):
+            text = f"This was approved by <@{approved_by}>. The receipt in this thread says what was written."
+        else:
+            text = "This was approved. The receipt in this thread says what was written."
+    elif closed == "replaced":
+        text = "A newer reply in this thread replaced this one, so it can no longer be applied from here."
+    elif closed == "expired":
+        text = "This plan expired, so nothing from this post will be applied. To record it, post it again."
+    elif closed == "closed":
+        text = "This movement can no longer be applied from here."
+    else:
+        raise ValueError(f"no such closing: {closed}")
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
 
 
 NO_APPLY_TEXT = (

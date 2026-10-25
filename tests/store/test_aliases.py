@@ -356,7 +356,8 @@ def test_the_command_reads_but_never_creates_or_migrates(
     assert not (tmp_path / "stockthread.db").exists()
     Store.open(tmp_path / "stockthread.db").close()
     raw = sqlite3.connect(tmp_path / "stockthread.db", isolation_level=None)
-    raw.execute("DROP TABLE aliases")  # back to schema 20, which `Store.open` would migrate
+    raw.execute("DROP TABLE apply_buttons")  # back to schema 20, which `Store.open` would migrate
+    raw.execute("DROP TABLE aliases")
     raw.execute("ALTER TABLE audit_log DROP COLUMN alias_id")
     raw.execute("PRAGMA user_version = 20")
     assert aliases(config, "remove", "1") == 2
