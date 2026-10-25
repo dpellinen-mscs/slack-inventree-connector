@@ -756,6 +756,59 @@ def test_an_edit_that_reads_the_same_keeps_the_button_of_the_reply_that_stands(s
     assert shown(store) == [(1, "shown", 0)]
 
 
+def edited_away_and_back(store: Store, worker: Worker, clock: Clock, first: str) -> int:
+    """Plan revision 1's requests are left `first`; an edit then makes plan 2, and an edit back plan 3, whose movements,
+    and so its digest, are plan 1's. Each edit posts a reply with its own button. Returns which post is plan 3's reply
+    (a receipt of plan 1 may come first)."""
+    with store._db:
+        store._db.execute(
+            "UPDATE requests SET state = ? WHERE plan_id = (SELECT id FROM plans WHERE revision = 1)", (first,)
+        )
+    other = "returned 3 Disc 40 from truck 1 to main stock"
+    enqueue(store, edit("1790000040.000100", BACK, other))
+    clock.at("1790000100.000000")
+    worker.step()
+    enqueue(store, edit("1790000140.000100", other, BACK))
+    clock.at("1790000200.000000")
+    worker.step()
+    texts = [posted["text"] for posted in slack(worker).posted]
+    assert texts[-1] == "Revised dry run: 1 movement, nothing changed."
+    plan = store.current_plan(POST)
+    assert plan is not None
+    assert (plan.revision, plan.input_hash) == (3, store.plan(POST, 1).input_hash)
+    clock.at("1790000203.000000")
+    worker.step()
+    clock.at("1790000206.000000")
+    worker.step()
+    return len(texts) - 1
+
+
+def test_a_write_from_before_the_reply_does_not_close_the_button_of_the_plan_made_again(
+    store: Store, clock: Clock
+) -> None:
+    """Plan 1's write was refused (nothing changed), so a click on the reply that makes the same plan again counts."""
+    clicking = Clicking(store)
+    worker = replied(store, clock, clicking)
+    third = edited_away_and_back(store, worker, clock, "failed")
+    assert third == 3  # after the "Not applied" receipt of plan 1
+    assert [row[:2] for row in shown(store)] == [(1, "removed"), (2, "removed"), (3, "shown")]
+    assert closing(worker, 0) == "This was approved with no click. The receipt in this thread says what was written."
+    assert closing(worker, third) is None
+    click(store, worker, reply=third)
+    worker.drain()
+    assert last_event(store) == (EventStatus.DONE, "approved")
+    assert store.request(RequestKey(POST, 3, 1)).state is S.APPROVED
+
+
+def test_a_write_from_before_the_reply_that_was_undone_closes_the_plan_made_again_with_no_approver(
+    store: Store, clock: Clock
+) -> None:
+    worker = replied(store, clock, Clicking(store))
+    third = edited_away_and_back(store, worker, clock, "undone")
+    assert [row[:2] for row in shown(store)] == [(1, "removed"), (2, "removed"), (3, "removed")]
+    assert closing(worker, third) == "This movement can no longer be applied from here."
+
+
 def test_with_its_plan_taken_back_and_no_newer_reply_yet_the_button_waits(store: Store, clock: Clock) -> None:
     worker = replied(store, clock, Clicking(store))
     store.stale_plan(OWNER, POST)  # a revision is on its way, and may make the plan again

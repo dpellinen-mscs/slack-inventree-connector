@@ -1138,7 +1138,13 @@ class Worker:
         history = self.store.dry_run_history(post)
         clicked = [record.result for record in history if record.revision == revision]
         digest = plan_hash(clicked[0]) if clicked and clicked[0] is not None else None
-        written = [plan for plan in self._plans(post) if plan.input_hash == digest and _write_began(plan)]
+        # Only a plan revision made from the reply's record counts, or made again by a later unchanged dry run: one from
+        # before the reply (a write refused, then an edit and an edit back) leaves a click on this reply allowed.
+        written = [
+            plan
+            for plan in self._plans(post)
+            if plan.revision > button.plans_before and plan.input_hash == digest and _write_began(plan)
+        ]
         if written:
             return "approved", written[-1].approved_by
         later = {record.outcome for record in history if record.revision > revision}

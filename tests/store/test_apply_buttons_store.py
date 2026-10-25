@@ -45,8 +45,8 @@ def test_a_reply_with_an_apply_button_is_stored_with_it_and_listed_until_taken_d
     store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, REPLY, result=RESULT, plan=PLAN, apply=True)
     revise(store, apply=True)
     first, second = store.apply_buttons_shown(limit=10)
-    assert (first.post, first.revision, first.message_ts) == (POST, 1, REPLY)
-    assert (second.post, second.revision, second.message_ts) == (POST, 2, REVISED)
+    assert (first.post, first.revision, first.message_ts, first.plans_before) == (POST, 1, REPLY, 0)
+    assert (second.post, second.revision, second.message_ts, second.plans_before) == (POST, 2, REVISED, 1)
     assert store.apply_failed(OWNER, first.id) == 1
     assert store.apply_buttons_shown(limit=10) == [second, first]  # fewest failed tries first
     assert store.apply_buttons_shown(limit=1) == [second]
@@ -90,7 +90,7 @@ def test_taking_down_needs_the_lock(store: Store) -> None:
                  lambda: store.apply_failed(OWNER, button.id)):  # fmt: skip
         with pytest.raises(Exception, match="lock"):
             call()
-    assert store.apply_buttons_shown(limit=10) == [ApplyButton(button.id, POST, 1, REPLY)]
+    assert store.apply_buttons_shown(limit=10) == [ApplyButton(button.id, POST, 1, REPLY, 0)]
 
 
 @pytest.mark.parametrize(
@@ -100,6 +100,7 @@ def test_taking_down_needs_the_lock(store: Store) -> None:
         ("UPDATE apply_buttons SET buttons = 'left'", "taken down once"),
         ("UPDATE apply_buttons SET message_ts = '1790000099.000100'", "stays on the reply"),
         ("UPDATE apply_buttons SET revision = 2", "stays on the reply"),
+        ("UPDATE apply_buttons SET plans_before = 3", "stays on the reply"),
         ("UPDATE apply_buttons SET post_id = 2", "stays on the reply"),
         ("UPDATE apply_buttons SET id = 7", "stays on the reply"),
         ("DELETE FROM apply_buttons", "never deleted"),

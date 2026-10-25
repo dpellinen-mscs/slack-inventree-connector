@@ -296,6 +296,9 @@ class ApplyButton:
     revision: int
     """The dry-run revision whose reply carries the button."""
     message_ts: str
+    plans_before: int
+    """The newest plan revision of the post before the reply was recorded (0 for none): a plan revision after it was
+    made from the reply's record, or made again by a later unchanged dry run; one up to it was not."""
 
 
 class QuestionStatus(StrEnum):
@@ -953,8 +956,8 @@ class Store:
         and its requests that have not started a write are cancelled.
 
         `apply` says the reply carries an Apply button (`slack.replies.with_apply`): it is stored in the same
-        transaction (migration 0022), so `Worker.take_down_apply` can take it down once the plan is closed. Only a reply
-        that made a plan, with its ts, carries one.
+        transaction (migration 0022), so `Worker._take_down_apply` can take it down once the plan is closed. Only a
+        reply that made a plan, with its ts, carries one.
         """
         posted = (DryRunOutcome.REPLIED, DryRunOutcome.RETRACTED)
         if plan is not None and (outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or result is None):
@@ -1056,8 +1059,12 @@ class Store:
             self._replace_plan(post_id, self._if_newest(post_id, plan, through, changes, 0))
 
     def _show_apply(self, post_id: int, revision: int, reply_ts: str | None) -> None:
+        (before,) = self._db.execute(
+            "SELECT coalesce(max(revision), 0) FROM plans WHERE post_id = ?", (post_id,)
+        ).fetchone()
         self._db.execute(
-            "INSERT INTO apply_buttons (post_id, revision, message_ts) VALUES (?, ?, ?)", (post_id, revision, reply_ts)
+            "INSERT INTO apply_buttons (post_id, revision, message_ts, plans_before) VALUES (?, ?, ?, ?)",
+            (post_id, revision, reply_ts, int(before)),
         )
 
     def _if_newest(
@@ -1272,13 +1279,14 @@ class Store:
 
     def apply_buttons_shown(self, limit: int) -> list[ApplyButton]:
         """Replies whose Apply button is still shown (migration 0022): fewest failed tries first, then oldest. Whether
-        a button's plan is closed is the caller's to judge (`Worker.take_down_apply`)."""
+        a button's plan is closed is the caller's to judge (`Worker._apply_closed`)."""
         rows = self._db.execute(
-            "SELECT a.id, p.workspace_id, p.channel_id, p.ts, a.revision, a.message_ts FROM apply_buttons a"
-            " JOIN posts p ON p.id = a.post_id WHERE a.buttons = 'shown' ORDER BY a.buttons_tries, a.id LIMIT ?",
+            "SELECT a.id, p.workspace_id, p.channel_id, p.ts, a.revision, a.message_ts, a.plans_before"
+            " FROM apply_buttons a JOIN posts p ON p.id = a.post_id WHERE a.buttons = 'shown'"
+            " ORDER BY a.buttons_tries, a.id LIMIT ?",
             (limit,),
         ).fetchall()
-        return [ApplyButton(int(row[0]), PostKey(*row[1:4]), int(row[4]), str(row[5])) for row in rows]
+        return [ApplyButton(int(row[0]), PostKey(*row[1:4]), int(row[4]), str(row[5]), int(row[6])) for row in rows]
 
     def apply_taken_down(self, owner: str, button_id: int, *, removed: bool) -> None:
         """The reply no longer shows its Apply button (`removed`), or the connector gave up on it."""

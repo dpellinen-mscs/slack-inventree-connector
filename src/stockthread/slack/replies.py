@@ -568,7 +568,7 @@ def without_apply(blocks: Sequence[Any]) -> list[dict[str, Any]] | None:
 
 
 def apply_closed(closed: str, approved_by: str | None = None) -> dict[str, Any]:
-    """The line that stands where a reply's Apply button was, once its plan is closed (`Worker.take_down_apply`):
+    """The line that stands where a reply's Apply button was, once its plan is closed (`Worker._take_down_apply`):
     `closed` is "approved" (by `approved_by`'s click, or by the policy when None), "replaced" by a newer reply,
     "expired", or "closed" (undone, rejected or cancelled)."""
     if closed == "approved":
