@@ -93,6 +93,12 @@ Learning as built (agent, 2026-10-24; `learning.lessons`, `Worker._learn`):
   whether or not it succeeds (`Store.begin_attempt`, audited as
   `alias_forgotten`), rather than offering to: an undo says the plan may
   have been wrong.
+- An edit or deletion of any message of the post (the poster's words, an
+  answer, a reply) forgets every alias the post taught, as soon as it is
+  noted (`Store.note_revision`, audited as `alias_forgotten` by `ingest`):
+  it may take back what the alias was learned from. The stock stays moved
+  until someone undoes it. A lesson read before an edit that was noted
+  before it is stored is refused.
 
 ## Consequences
 

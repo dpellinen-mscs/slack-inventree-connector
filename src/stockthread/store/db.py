@@ -785,7 +785,9 @@ class Store:
 
         Every event is noted, so each later edit of a message makes its post due again. Idempotent: once per
         event, and once per message for a note without an event. The post of the message, or the post it keys,
-        loses its current plan at once, as in `place_message`.
+        loses its current plan at once, as in `place_message`, and forgets every alias it taught (ADR 0012): an edit
+        or deletion may take back the words or the answer the alias was learned from, and the stock it moved stays
+        moved until someone undoes it.
         """
         with self._transaction():
             self._check_lock(owner)
@@ -815,6 +817,7 @@ class Store:
                 key,
             ).fetchall():
                 self._replace_plan(int(post_id), None)
+                self._forget_post_taught(int(post_id))
 
     def post_change_bodies(self, key: PostKey, through: int) -> dict[str, list[str | None]]:
         """Each noted edit or deletion of a message of the post, or of the message it is keyed on, up to the
@@ -1914,6 +1917,24 @@ class Store:
             self._db.execute("DELETE FROM aliases WHERE id = ?", (alias_id,))
             self._audit(actor, "alias_forgotten", post_id=post_id, request_id=taught_by, alias_id=alias_id)
 
+    def _forget_post_taught(self, post_id: int) -> None:
+        """Delete every alias a request of any plan revision of the post taught (ADR 0012). Call inside a
+        transaction. Only a `verified` request teaches, and an undo forgets as it begins, so a post with no
+        `verified` request taught nothing: most edits come before any write, and skip the aliases table."""
+        if not self._db.execute(
+            "SELECT 1 FROM requests r JOIN plans l ON l.id = r.plan_id WHERE l.post_id = ? AND r.state = ?",
+            (post_id, S.VERIFIED.value),
+        ).fetchone():
+            return
+        taught = self._db.execute(
+            "SELECT a.id, a.request_id FROM aliases a JOIN requests r ON r.id = a.request_id"
+            " JOIN plans l ON l.id = r.plan_id WHERE l.post_id = ? ORDER BY a.id",
+            (post_id,),
+        ).fetchall()
+        for alias_id, taught_by in taught:
+            self._db.execute("DELETE FROM aliases WHERE id = ?", (alias_id,))
+            self._audit("ingest", "alias_forgotten", post_id=post_id, request_id=taught_by, alias_id=alias_id)
+
     def next_marker(self, key: RequestKey, kind: AttemptKind) -> Marker:
         """The marker the next attempt of `kind` will carry, to build its request body with. `begin_attempt` checks
         the body against the marker it assigns, so a request moved on in between fails there, not in InvenTree."""
@@ -2391,6 +2412,7 @@ class Store:
         *,
         rivals: Collection[int],
         learned_from: RequestKey,
+        read_through: int,
         user: str | None = None,
     ) -> None:
         """Store `text` as a confirmed alias of part or location `record` (ADR 0012), confirmed in request
@@ -2398,8 +2420,10 @@ class Store:
         records the whole-word and fuzzy rules fit it to now (`matching.part_rivals`, `location_rivals`). Every alias
         of the kind and user the matcher takes for the same text ("patch cable" for "patch cables") is replaced by
         this one, unless one of them is an alias an admin typed (no rivals): then nothing changes. StateConflict, and
-        nothing changes, when the request is not verified. `owner` must hold the instance
-        lock."""
+        nothing changes, when the request is not verified. `read_through`: the newest noted edit or deletion of a
+        message of the post (`post_changes_through`) when the text the lesson came from was read; StateConflict, and
+        nothing changes, when one was noted since: an edit or deletion forgets what the post taught (`note_revision`),
+        and one that came between reading and learning must too. `owner` must hold the instance lock."""
         if not words(text) or record <= 0:
             raise ValueError("an alias names one record with at least one word")
         key = " ".join(words(text))
@@ -2408,6 +2432,8 @@ class Store:
             request, _, post_id = self._request(learned_from)
             if request.state is not S.VERIFIED:
                 raise StateConflict(f"request {learned_from} is {request.state}: only a verified one teaches an alias")
+            if self._changes_through(post_id) > read_through:
+                raise StateConflict("a message of the post was edited or deleted after the lesson was read")
             stored = json.dumps(sorted(set(rivals)))
             now = self._now()
             # One alias per text as the matcher reads it: "patch cables" replaces "patch cable" (plurals folded).

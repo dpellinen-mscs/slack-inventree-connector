@@ -836,7 +836,8 @@ class Worker:
             made = [
                 r for r in self.store.dry_run_history(key.post) if r.result and plan_hash(r.result) == plan.input_hash
             ]
-            read = self._messages(key.post, made[-1].changes_through or 0) if made else "unreadable"
+            through = (made[-1].changes_through or 0) if made else 0
+            read = self._messages(key.post, through) if made else "unreadable"
             if isinstance(read, str):
                 log.warning("post %s: nothing learned from plan revision %d (%s)", key.post.ts, key.revision, read)
                 return
@@ -852,7 +853,7 @@ class Worker:
             try:
                 self.store.learn_alias(
                     self.owner, lesson.kind, lesson.text, lesson.record, rivals=lesson.rivals,
-                    learned_from=plan.requests[lesson.movement - 1].key,
+                    learned_from=plan.requests[lesson.movement - 1].key, read_through=through,
                 )  # fmt: skip
                 taught += 1
             except LockLost:

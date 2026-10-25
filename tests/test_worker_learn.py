@@ -383,3 +383,34 @@ def test_only_the_posters_own_messages_say_a_text(store: Store) -> None:
     running.work_due()
     assert store.request(KEY).state is S.VERIFIED
     assert store.stored_aliases() == ()  # "Norvane 40" is in Luis's reply, not in Sam's post
+
+
+def test_an_edit_or_deletion_after_the_write_forgets_what_the_post_taught(store: Store, tmp_path: Path) -> None:
+    """The edit may take back the words the alias was learned from; the stock it moved stays moved until undone."""
+    clicked(store)
+    running = worker(store, FakeInvenTree())
+    running.work_due()
+    [alias] = store.stored_aliases()
+    store.note_revision(OWNER, POST, slack_event_id=None)
+    assert store.stored_aliases() == ()
+    assert store.request(KEY).state is S.VERIFIED
+    with sqlite3.connect(tmp_path / "stockthread.db") as raw:
+        forgotten = raw.execute("SELECT actor, alias_id FROM audit_log WHERE event = 'alias_forgotten'").fetchall()
+    assert forgotten == [("ingest", alias.id)]
+
+
+def test_an_edit_noted_while_the_lesson_is_read_teaches_nothing(store: Store, caplog: pytest.LogCaptureFixture) -> None:
+    """The edit lands after the post's messages were read and before the alias is stored: forgetting it at the edit
+    would find nothing yet, so learning refuses."""
+    clicked(store)
+
+    def catalog() -> Catalog:
+        store.note_revision(OWNER, POST)
+        return CATALOG
+
+    running = worker(store, FakeInvenTree(), catalog)
+    with caplog.at_level(logging.WARNING):
+        running.work_due()
+    assert store.request(KEY).state is S.VERIFIED
+    assert store.stored_aliases() == ()
+    assert "an alias of plan revision 1 not learned (StateConflict)" in caplog.text
