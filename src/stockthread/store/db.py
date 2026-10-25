@@ -2414,10 +2414,10 @@ class Store:
         records the whole-word and fuzzy rules fit it to now (`matching.part_rivals`, `location_rivals`). Every alias
         of the kind and user the matcher takes for the same text ("patch cable" for "patch cables") is replaced by
         this one, unless one of them is an alias an admin typed (no rivals): then nothing changes. StateConflict, and
-        nothing changes, when the request is not verified. `read_through`: the newest noted edit or deletion of a message
-        of the post (`post_changes_through`) when the text the lesson came from was read; StateConflict, and nothing
-        changes, when one was noted since: an edit or deletion forgets what the post taught (`note_revision`), and one
-        that came between reading and learning must too. `owner` must hold the instance lock."""
+        nothing changes, when the request is not verified. `read_through`: the newest noted edit or deletion of a
+        message of the post (`post_changes_through`) when the text the lesson came from was read; StateConflict, and
+        nothing changes, when one was noted since: an edit or deletion forgets what the post taught (`note_revision`),
+        and one that came between reading and learning must too. `owner` must hold the instance lock."""
         if not words(text) or record <= 0:
             raise ValueError("an alias names one record with at least one word")
         key = " ".join(words(text))
