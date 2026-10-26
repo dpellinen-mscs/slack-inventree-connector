@@ -659,8 +659,15 @@ def _one_clause(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     if not fields or set.intersection(*fields):
         return set()
     first, last = min(set.union(*fields)), max(set.union(*fields))
-    # A line's own words run from where its quantity may start to the end of its item.
-    own = [(m.start() - len(_SEPARATOR.split(text[: m.start()])[-1]), m.end()) for found in lines for m in found]
+    # A line's own words run from where its quantity may start, never before its clause, to the end of its item.
+    own = [
+        (
+            max(m.start() - len(_SEPARATOR.split(text[: m.start()])[-1]), max(s for s in starts if s <= m.start())),
+            m.end(),
+        )
+        for found in lines
+        for m in found
+    ]
     own += [
         (m.start(), m.end())
         for item in movement.line_items

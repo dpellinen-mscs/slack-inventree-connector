@@ -402,3 +402,21 @@ def test_one_take_mixed_from_two_is_never_approved_by_the_policy(
     """Every field is in the post, but no message holds them together: a movement nobody typed (#200)."""
     output = {"readable": True, "movements": [_take(quantity, source, destination)], "post_flags": []}
     assert verdict(migrated, tmp_path / "stockthread.db", TWO_TAKES, output) is not Verdict.ALLOWED
+
+
+def test_a_take_mixed_with_a_rival_sentence_is_never_approved_by_the_policy(migrated: Path, tmp_path: Path) -> None:
+    """The rival sentence names no place with "from" or "to"; only its number shows it is another movement."""
+    text = "took 2 Disc 40 from main stock to truck 1. then 4 Disc 40 for the smith job"
+    case = {
+        **TWO_TAKES,
+        "id": "synthetic-rival-sentence",
+        "post": {
+            "channel": CHANNELS[0],
+            "user": SAM,
+            "messages": [{"ts": "1790009002.000100", "user": SAM, "text": text}],
+        },
+    }
+    read_apart = {"readable": True, "movements": [_take(2, "main stock", "truck 1")], "post_flags": []}
+    assert verdict(migrated, tmp_path / "apart.db", case, read_apart) is Verdict.ALLOWED
+    output = {"readable": True, "movements": [_take(4, "main stock", "truck 1")], "post_flags": []}
+    assert verdict(migrated, tmp_path / "stockthread.db", case, output) is not Verdict.ALLOWED

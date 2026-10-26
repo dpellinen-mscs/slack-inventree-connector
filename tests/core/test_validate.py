@@ -837,8 +837,16 @@ def test_the_item_counts_in_the_clause_that_states_its_quantity() -> None:
         ("Truck 1:\n2 Disc 40\nVan 3:\n4 Disc 40", None),
         ("van 3 took four Disc 40. truck 1 took 2 Disc 40", None),
         ("took 2 Disc 40 to truck 1, also 4 Disc 40 to van 3", None),
+        ("took 2 Disc 40 from main stock to truck 1. van 3 took 4 Disc 40", "main stock"),
+        ("took 2 Disc 40 to truck 1. van 3 took 4 Disc 40", None),
+        ("took 2 Disc 40 to truck 1! van 3 took 4 Disc 40", None),
+        ("took 2 Disc 40 to truck 1? van 3 took 4 Disc 40", None),
+        ("took 2 Disc 40 to truck 1 then van 3 took 4 Disc 40", None),
+        ("took 2 Disc 40 to truck 1 also van 3 took 4 Disc 40", None),
+        ("took 2 Disc 40 to truck 1 plus van 3 took 4 Disc 40", None),
     ],
 )
 def test_a_rival_movement_with_no_place_word_is_seen_by_its_number(text: str, source: str | None) -> None:
-    """The other clause names its place with no "from" or "to", but states a number this movement does not use."""
+    """The other clause names its place with no "from" or "to", but states a number this movement does not use. A
+    sentence stop or "then"/"also"/"plus" ends a clause too, so the line's own words never reach back over it."""
     assert mixed(take(quantity="4", source_text=source), text)
