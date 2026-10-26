@@ -18,6 +18,9 @@ reply too long to show in full carries no Apply button. An approved plan is neve
   approver: its "my truck" would be read as the poster's truck, so the policy no longer writes it with no click.
 - A take-out whose text has a return word ("returned", "brought back", "back to") needs a person: a model that
   reads a return as a take-out no longer gets it written with no click (#199).
+- Post text quoted in a reply shows `*`, `_`, `~` and backticks in their full-width forms, so it cannot fake the bold
+  name of a matched record. More wordings that instruct the connector ("ignore your instructions", "bot:", "skip the
+  review") flag the post, and "at shelf B" names a source that a default source no longer fills (#201).
 - A receipt of a plan whose writes went through only in part says "Partly applied" (it said "Check this"), names
   the movements that changed inventory, and says to post the rest again. A movement the plan never sent says so,
   and no longer claims it waits for review: a plan is approved whole, so no click can approve the rest of it.

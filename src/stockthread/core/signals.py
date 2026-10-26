@@ -9,8 +9,9 @@ from __future__ import annotations
 import re
 
 SUSPICIOUS = re.compile(
-    r"\b(ignore (all |any )?(the )?(previous|prior|above|earlier) (instructions|rules)|system\s*:|without review"
-    r"|writes? (are|is) (now )?(on|enabled)|mark (this|it) as (confirmed|approved)|you are now|disregard)",
+    r"\b(ignore\b[\w ,']{0,30}\b(instructions|rules|prompt)|(system|assistant|bot|ai)\s*:|without review"
+    r"|skip(ping)? (the )?(review|approval|check)s?|writes? (are|is) (now )?(on|enabled)"
+    r"|mark (this|it) as (confirmed|approved)|you are now|disregard)",
     re.IGNORECASE,
 )
 """Text that tries to instruct the connector."""
