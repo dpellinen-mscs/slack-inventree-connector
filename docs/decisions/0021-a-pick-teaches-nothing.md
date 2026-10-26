@@ -34,8 +34,9 @@ admins to add deliberate aliases by hand."
    - It replaces a learned alias for the same text, and refuses while another admin's alias stands for it: removing
      that one first is a deliberate step. Audited as `alias_added` and `alias_replaced`, by `admin`.
    - Records are given by id, as in the record's InvenTree address. Without `--yes` the command stores nothing: it
-     prints the part's name and IPN or the location's path, and the learned aliases it would replace, so a wrong id
-     shows before any post can use it.
+     prints the part's name and IPN or the location's path, the other records the whole-word or fuzzy rule fits the
+     text to now (posts that would have asked which one no longer ask), and the learned aliases it would replace, so
+     a wrong id shows before any post can use it.
 
 ## Consequences
 

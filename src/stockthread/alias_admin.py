@@ -11,7 +11,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from stockthread.core.matching import Catalog, match_location, match_part, words
+from stockthread.core.matching import Catalog, location_rivals, match_location, match_part, part_rivals, words
 from stockthread.core.model import MatchRule, MatchStatus
 from stockthread.learning import ARTICLES, DEICTIC, VEHICLE_WORDS
 from stockthread.printable import printable
@@ -131,5 +131,18 @@ def shadowed(catalog: Catalog, kind: AliasKind, text: str) -> str | None:
     if match.status is MatchStatus.UNMATCHED or match.rule not in (MatchRule.EXACT, MatchRule.NORMALIZED):
         return None
     records = (match.record,) if match.record is not None else match.candidates
-    named = ", ".join(str(record) for record in records)
-    return f"it is the name of {kind.value} {named}, which the matcher tries before any alias"
+    if len(records) == 1:
+        return f"it is the name of {kind.value} {records[0]}, which the matcher tries before any alias"
+    listed = ", ".join(str(record) for record in records[:-1]) + f" and {records[-1]}"
+    return f"it is the name of {kind.value}s {listed}, which the matcher tries before any alias"
+
+
+def rivals(catalog: Catalog, kind: AliasKind, text: str, record: int) -> str | None:
+    """The other records the whole-word or fuzzy rule fits `text` to now, or None. An admin alias is never rechecked
+    and authorizes a write with no click (ADR 0004), so a post that would have asked which one no longer asks."""
+    fits = part_rivals(text, catalog) if kind is AliasKind.PART else location_rivals(text, catalog, "")
+    others = sorted(fits - {record})
+    if not others:
+        return None
+    listed = ", ".join(f"{kind.value} {pk} {named(catalog, kind, pk)}" for pk in others)
+    return f"{quoted(text.strip())} also fits {listed}: a post that says it is no longer asked which one it means"

@@ -18,6 +18,7 @@ from stockthread.alias_admin import (
     named,
     quoted,
     refused,
+    rivals,
     shadowed,
     unmatchable,
 )
@@ -278,8 +279,11 @@ def add_alias_command(path: Path, kind: AliasKind, text: str, record: int, *, st
         print(f"ERROR not added: {why}", file=sys.stderr)
         return 1
     target = f"{kind.value} {record}, {named(catalog, kind, record)}"
+    also = rivals(catalog, kind, text, record)
     if not store:
         print(f"would add {quoted(text.strip())} -> {target}, for everyone's posts")
+        if also:
+            print(also)
         for alias in replaced:
             print(f"would replace the learned {describe(alias).lstrip()}")
         print("nothing stored: run it again with --yes to store it")
@@ -300,6 +304,8 @@ def add_alias_command(path: Path, kind: AliasKind, text: str, record: int, *, st
     finally:
         writer.close()
     print(f"added {describe(added).lstrip()}: {named(catalog, kind, record)}")
+    if also:
+        print(also)
     for alias in replaced:
         print(f"replaced the learned {describe(alias).lstrip()}")
     print("posts read from now on use it; `stockthread aliases remove <id>` forgets it")

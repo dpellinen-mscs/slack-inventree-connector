@@ -468,6 +468,8 @@ ADMIN_CATALOG = Catalog(
         PartRecord(2, "PSU-24", "Power Supply 24V"),
         PartRecord(3, "OLD", "Old Bridge", active=False),
         PartRecord(4, "TPL", "Bridge Template", template=True),
+        PartRecord(5, "PC-1", "Patch Cable 1 m"),
+        PartRecord(6, "PC-2", "Patch Cable 2 m"),
     ),
     locations=(
         LocationRecord(10, "Warehouse"),
@@ -511,6 +513,22 @@ def test_the_command_shows_what_it_would_add_and_stores_nothing_without_yes(
     assert out[0].startswith('added 2  "ubiquity psu" -> part 2')
     assert out[1].startswith('replaced the learned 1  "ubiquity psus" -> part 1')
     assert [(alias.text, alias.record) for alias in store.stored_aliases()] == [("ubiquity psu", 2)]
+
+
+def test_the_command_says_which_other_records_the_text_fits_now(
+    store: Store, config: Path, inventree: list[int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#190 review: an admin alias is never rechecked, so the dry run and the add both say which posts stop asking."""
+    also = (
+        '"cable" also fits part 6 "Patch Cable 2 m" (IPN "PC-2"): a post that says it is no longer asked which one it'
+        " means"
+    )
+    assert aliases(config, "add", "part", "cable", "5") == 0
+    assert capsys.readouterr().out.splitlines()[1] == also
+    assert aliases(config, "add", "part", "cable", "5", "--yes") == 0
+    assert capsys.readouterr().out.splitlines()[1] == also
+    assert aliases(config, "add", "location", "yard shelf", "12") == 0
+    assert "also fits" not in capsys.readouterr().out
 
 
 def test_the_command_adds_an_alias_an_admin_typed(
@@ -569,7 +587,7 @@ def test_the_command_adds_an_alias_an_admin_typed(
         ),
         (
             ("location", "Shelf A", "10"),
-            "ERROR not added: it is the name of location 12, 13, which the matcher tries before any alias",
+            "ERROR not added: it is the name of locations 12 and 13, which the matcher tries before any alias",
         ),
     ],
 )
