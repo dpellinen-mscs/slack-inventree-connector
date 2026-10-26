@@ -110,6 +110,7 @@ Learning as built (agent, 2026-10-24; `learning.lessons`, `Worker._learn`):
   writing on a guess.
 - A wrong confirmation teaches a wrong alias. Undo of the movement must
   offer to forget the alias it taught, and the receipt names the alias
-  that was learned.
+  that was learned. As built, the undo forgets the alias as it
+  begins rather than offering to (above).
 - Revisit if the clicks in the first days turn out to be a real burden
   (option B in #28: a whole-word match applies when it is the only fit).

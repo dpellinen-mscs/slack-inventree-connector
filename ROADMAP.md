@@ -37,7 +37,7 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [x] Project scaffold: package layout, formatter, linter, type checker, test runner ([0006](docs/decisions/0006-python-tooling.md))
 - [x] CI: format, lint, types and unit tests on every PR, with dependency caching
 - [x] Configuration: typed settings from environment and file, validated at startup, secrets redacted in every log and error
-- [ ] Domain model: post, plan revision with input hash, request, line item, match result, review reason, decision
+- [x] Domain model: post, plan revision with input hash, request, line item, match result, review reason, decision
 - [x] Audit store: schema, migrations, append-only log, request keys, marker and snapshot columns ([0009](docs/decisions/0009-audit-store.md))
 - [x] InvenTree test harness: pinned versions in Docker, seeded from `eval/catalog/`, torn down after each run, with one PostgreSQL job
 - [ ] Characterization tests for every InvenTree behavior the design relies on (design section 11)
@@ -79,7 +79,7 @@ The quickstart reaches the first dry-run in about 15 minutes.
 ## M2: review and clarification
 
 - [x] Review items with explicit reasons, stored in the audit trail (every reason in each dry run's record, the question with its reason code; `stockthread trail` prints them for one post)
-- [ ] One focused question per post in the thread, with buttons for short candidate lists
+- [x] One focused question per post in the thread, with buttons for short candidate lists
   - [x] Which question: `core/questions.py` picks one per post by tier (design section 4, "Questions")
   - [x] The question in the thread, with buttons and a stored button row (in the dry-run reply; migration 0010)
   - [x] Stale buttons removed from Slack when a revision replaces the reply (and once a question is answered; migration 0012)
@@ -91,15 +91,15 @@ The quickstart reaches the first dry-run in about 15 minutes.
 - [x] Authorization: who may answer and who may approve, by button and by thread reply
   - [x] Poster or approver, approvers only for approval questions, by button and by thread reply (#85)
   - [x] The "poster or approver only" note for a clean thread reply from someone else (#86)
-- [ ] Plan revisions: an edit, a deletion or a new thread message makes a plan stale
+- [x] Plan revisions: an edit, a deletion or a new thread message makes a plan stale
   - [x] A new message after the dry run gets a revised dry run, or a notice that the reply no longer stands
   - [x] An edit or a deletion after the dry run starts a revision by itself
   - [x] A revision reads an edited message's new text (and so does the first dry run; a deleted message drops out)
-- [ ] Source selection: choose concrete stock items for each line, serials included
+- [x] Source selection: choose concrete stock items for each line, serials included
   - [x] The pick rule: OK and unallocated items only, one covering item before a split, oldest first, serials, differing batch or supplier part asks (`core/resolve.py`)
   - [x] In the dry run: read each line's stock once its part, place and quantity are settled, show the pick, and raise its reasons
   - [x] Ask the stock question as a choice of stock items, yes or no to a split, or read the stock again (by button)
-- [ ] Plan expiry
+- [x] Plan expiry
   - [x] A question whose plan expired is taken out of its reply, says so, and takes no answer (migration 0014)
   - [x] One expiry time per post for its questions and its revisions (migration 0015, #74)
   - [x] An approved plan is never written past its expiry; one whose first write began is finished (`applier.work_request`, `applier.plan_expired`)
@@ -118,10 +118,10 @@ payloads whose channel or message does not fit the stored id.
 - [x] Request builder for transfer, remove, add and count
   - [x] The request of one movement: path and body for each operation, checked strictly (`core/write_request.py`; accepted by both pinned versions in `tests/integration/test_built_requests.py`)
   - [x] A decided plan becomes its requests, one per movement, in the post's order (`plan.py`)
-- [ ] Write gate: switch, policy and deterministic validation must all pass, at approval and again before the write
+- [x] Write gate: switch, policy and deterministic validation must all pass, at approval and again before the write
   - [x] The judgement: blocked, waits for Apply, or allowed with its requests (`gate.py`)
   - [x] Judged at approval and again before the write, on the rebuilt views with the settings, vehicles, answers and plan state read then (`applier.approve_by_policy`, `applier.work_request`)
-- [ ] Apply protocol: writer lock, marker check, snapshot, single write, read-back
+- [x] Apply protocol: writer lock, marker check, snapshot, single write, read-back
   - [x] Marker search: every attempt of one request, whole markers only (`InvenTreeReader.marker_entries`)
   - [x] Marker check: the markers found agree with the recorded states of every request of the post (`core/marker_check.py`, `Store.recorded_requests`)
   - [x] Marker check against InvenTree: search, and a missing marker excused only by every item's 404 (`apply.check_post_markers`)
@@ -144,26 +144,26 @@ payloads whose channel or message does not fit the stored id.
     - [x] A click's approval: only an approver, only the current plan revision before its expiry, judged by the gate with the click (`applier.approve_by_click`)
     - [x] The button on a reply that made a plan, with writes on, and the worker's click handler, bound to the stored reply (`Worker._handle_apply`, `run.click_approver`)
     - [x] The button taken down once its plan is written, replaced, closed or expired, with a line that says which (`Worker.take_down_buttons`, migration 0022)
-- [ ] Unknown outcomes: quarantine, recovery, and new attempts only by a human
+- [x] Unknown outcomes: quarantine, recovery, and new attempts only by a human
   - [x] Recovery of an unknown apply after the settle time: marker, then read-back or comparison with the snapshot (`apply.recover_request`)
   - [x] A crash in `applying` or `undoing` becomes unknown at start (`Store.conclude_crashed_writes`, run by `run.run` at start)
   - [x] Recovery of an unknown undo (`apply.recover_undo`, ADR 0018)
   - [x] The worker runs recovery (`Worker.work_due`)
 - [x] Plans with several requests, and the `partially_applied` state: read from the request states, not stored; the receipt says "Partly applied" (`replies.receipt`; on a real server: `test_partial_plan_server.py`)
-- [ ] Receipt in the thread with the exact changes and a link to InvenTree
+- [x] Receipt in the thread with the exact changes and a link to InvenTree
   - [x] The message: each movement's state, its exact changes, links to InvenTree and its marker (`replies.receipt`); due once no write of the plan is due or in flight and one concluded unreported, recorded with the states it reported (`Store.receipts_due`, `Store.receipt_posted`, migration 0019)
   - [x] Posted by the worker, with the Undo button; a receipt out of date by the time Slack returned is replaced (`Worker.post_receipts`)
-- [ ] Undo by button, authorized and idempotent, built from the observed history
+- [x] Undo by button, authorized and idempotent, built from the observed history
   - [x] The undo request, built from the apply's history entries and refused when the stock moved on since (`inverse.reversals`, `check_undo`, `undo_request`)
   - [x] The undo attempt: store, send, read-back (`apply.undo_apply`, ADR 0017)
   - [x] Whether a person may ask for an undo now: state, `undo.max_age_hours`, earlier undos, poster or approver (`Store.undo_refusal`, `applier.undo_refusal`)
   - [x] The Undo button: on the receipt with a confirm dialog, checked against the newest receipt, the clicker and the store, then `undo_apply` (`replies.receipt`'s `undo`, `Worker._handle_undo`)
   - [x] A new receipt in the thread that reports an undo: due once the undo concluded, headed "Undone" or "Partly undone" (migration 0020: `receipt_state` takes `undone` and `undo_failed`; an undo forgets the reported state)
   - [x] Recovery of an unknown undo run by the worker (`Worker.work_due`)
-- [ ] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
+- [x] Default policy ([0004](docs/decisions/0004-default-write-policy.md)): clear take-outs apply automatically, other movement types wait for "Apply", `policy.auto_apply` per movement type
   - [x] `policy.default_source`: a movement that states no source takes its type's default, which the policy counts while it is still the default ([0020](docs/decisions/0020-default-source.md))
 - [x] Instance lock: one connector per database (`Store.acquire_lock`, heartbeat, `run.run`; `test_run.py`)
-- [ ] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word and fuzzy matches that fit one record as aliases (a pick among candidates teaches nothing, [0021](docs/decisions/0021-a-pick-teaches-nothing.md)), for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo offers to forget the alias
+- [x] Alias storage, read into the matcher's alias rule; a plan that was confirmed, applied and verified stores its whole-word and fuzzy matches that fit one record as aliases (a pick among candidates teaches nothing, [0021](docs/decisions/0021-a-pick-teaches-nothing.md)), for parts and locations, with no further question ([0012](docs/decisions/0012-first-confirmation-becomes-alias.md)); undo forgets the alias it taught (0012 as built: it forgets rather than offers to)
   - [x] Storage (migration 0021, `Store.learn_alias` from a verified request only, `Store.aliases`), read into the run loop's catalog (`catalog.with_aliases`), a learned alias rechecked against new rivals (`matching._rechecked`)
   - [x] Learning: a verified plan an approver's click applied stores each text the whole-word and fuzzy rules fit to its one record (a pick among several teaches nothing while #174 is open); the receipt names them; an undo forgets them
     - [x] A clicked plan, once every request is verified, stores the poster's texts a person confirmed or corrected that fit their record alone (a pick among candidates teaches nothing, [0021](docs/decisions/0021-a-pick-teaches-nothing.md)); the receipt names them (`learning.lessons`, `Worker._learn`, `Store.aliases_taught_by`)
