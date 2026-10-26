@@ -166,6 +166,7 @@ turn them on again in *Event Subscriptions*; catch-up reads what was missed, wit
 - [Research notes](docs/research/): InvenTree, Slack, prior art
 - [Eval corpus](eval/): synthetic Slack posts with expected results
 - [Changelog](CHANGELOG.md)
+- [Releasing](docs/releasing.md): versions, and the steps of a release (none published yet)
 - [Contributing](CONTRIBUTING.md): set up the project and run the checks
 
 ## License
