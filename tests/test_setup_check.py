@@ -14,12 +14,13 @@ from pydantic import SecretStr
 
 from stockthread import __main__ as cli
 from stockthread import run
-from stockthread.config import InvenTreeSettings, parse_settings
+from stockthread.config import InvenTreeSettings, PolicySettings, parse_settings
 from stockthread.core.matching import Alias, Catalog, LocationRecord, PartRecord, stale_aliases
 from stockthread.core.model import MovementType, PostKey
 from stockthread.inventree import InvenTreeReader
 from stockthread.run import _stored_aliases, inventree_findings
 from stockthread.setup_check import (
+    DEFAULT_AUTO_APPLY,
     MINIMUM_ROLES,
     ROLE_LABELS,
     WRITE_ROLES,
@@ -399,12 +400,12 @@ def test_with_writes_off_the_policy_has_nothing_to_say() -> None:
 
 
 def test_writes_on_with_no_approvers_warns_that_the_policy_still_writes() -> None:
-    """Threat model T17: nobody can click Apply or Undo, yet clear take-outs still apply with no click."""
+    """Threat model T17: nobody can click Apply and only the poster can Undo, yet clear take-outs still apply."""
     assert check_policy(writes=True, approvers=(), auto_apply=TAKE_OUTS) == [
         Finding(
             Level.WARN,
-            "approvers: none in slack.approvers, so nobody can click Apply or Undo or answer for an approver;"
-            " the policy still applies with no click: take_to_vehicle, take_to_site",
+            "approvers: none in slack.approvers, so nobody can click Apply or answer for an approver, and only"
+            " the poster can Undo; the policy still applies with no click: take_to_vehicle, take_to_site",
         )
     ]
     [finding] = check_policy(writes=True, approvers=(), auto_apply=())
@@ -413,13 +414,18 @@ def test_writes_on_with_no_approvers_warns_that_the_policy_still_writes() -> Non
 
 def test_an_auto_apply_beyond_the_take_outs_warns() -> None:
     assert check_policy(writes=True, approvers=("U0DAN0001", "U0DAN0001"), auto_apply=TAKE_OUTS) == [
-        Finding(Level.OK, "approvers: 1 may click Apply and Undo")
+        Finding(Level.OK, "approvers: 1 may click Apply, and Undo on any post")
     ]
     assert check_policy(
         writes=True, approvers=("U0DAN0001",), auto_apply=(MovementType.TAKE_TO_SITE, MovementType.RETURN)
     )[1:] == [
         Finding(Level.WARN, "policy: auto_apply has return, beyond the shipped take-outs: those apply with no click")
     ]
+
+
+def test_the_shipped_take_outs_are_the_config_default() -> None:
+    """Else the shipped default itself would warn as beyond the shipped take-outs."""
+    assert PolicySettings().auto_apply == DEFAULT_AUTO_APPLY
 
 
 def test_the_setup_check_reports_the_policy_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

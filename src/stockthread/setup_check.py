@@ -135,9 +135,9 @@ DEFAULT_AUTO_APPLY = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
 
 
 def check_policy(*, writes: bool, approvers: Collection[str], auto_apply: Sequence[str]) -> list[Finding]:
-    """Who can write stock with writes on (threat model T17): with no approvers nobody can click Apply or Undo, yet
-    the policy still applies its movement types; and a movement type beyond the shipped `auto_apply` applies with
-    no click too. Nothing to say with writes off: nothing is written."""
+    """Who can write stock with writes on (threat model T17): with no approvers nobody can click Apply, and only the
+    poster can Undo (`applier.undo_refusal`), yet the policy still applies its movement types; and a movement type
+    beyond the shipped `auto_apply` applies with no click too. Nothing to say with writes off: nothing is written."""
     if not writes:
         return []
     found = []
@@ -147,12 +147,12 @@ def check_policy(*, writes: bool, approvers: Collection[str], auto_apply: Sequen
         found.append(
             Finding(
                 Level.WARN,
-                "approvers: none in slack.approvers, so nobody can click Apply or Undo or answer for an approver;"
-                f" the policy still applies with no click: {automatic}",
+                "approvers: none in slack.approvers, so nobody can click Apply or answer for an approver, and only"
+                f" the poster can Undo; the policy still applies with no click: {automatic}",
             )
         )
     else:
-        found.append(Finding(Level.OK, f"approvers: {len(set(approvers))} may click Apply and Undo"))
+        found.append(Finding(Level.OK, f"approvers: {len(set(approvers))} may click Apply, and Undo on any post"))
     beyond = [kind.value for kind in kinds if kind not in DEFAULT_AUTO_APPLY]
     if beyond:
         found.append(

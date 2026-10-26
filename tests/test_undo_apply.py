@@ -558,6 +558,13 @@ async def test_the_poster_or_an_approver_may_ask_for_an_undo(store: Store, user:
     assert asked == refusal
 
 
+@pytest.mark.anyio
+async def test_the_poster_may_ask_for_an_undo_with_no_approvers(store: Store) -> None:
+    """What check-setup's no-approvers warning says (`setup_check.check_policy`): only the poster can Undo."""
+    await applied(store)
+    assert undo_refusal(store, KEY, user="U0SAM0001", poster="U0SAM0001", approvers=(), max_age=WEEK) is None
+
+
 def test_who_asks_is_checked_before_the_store(store: Store) -> None:
     asked = undo_refusal(store, KEY, user="U0ALEX001", poster="U0SAM0001", approvers=(), max_age=WEEK)
     assert asked == "only the poster or an approver may undo this movement"

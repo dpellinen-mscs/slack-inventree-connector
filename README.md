@@ -61,8 +61,8 @@ install an app. About 15 minutes.
 
    `check-config` prints the settings it will use, with every secret hidden, or says what is wrong.
    Then `.venv/bin/stockthread check-setup` reads InvenTree. With writes on, it first warns when
-   `slack.approvers` is empty (nobody can click Apply or Undo, yet the policy still applies clear
-   take-outs) or `policy.auto_apply` goes beyond the take-outs. It reports the server version, the roles
+   `slack.approvers` is empty (nobody can click Apply and only the poster can Undo, yet the policy
+   still applies clear take-outs) or `policy.auto_apply` goes beyond the take-outs. It reports the server version, the roles
    of the token's user (what is missing, and what is more than needed), any `[vehicles]` path that
    is not a stock location, and any learned alias whose part or location can no longer be matched
    (the matcher ignores it). It exits with 1 when something must be fixed. It only reads.
