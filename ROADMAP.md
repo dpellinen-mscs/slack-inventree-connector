@@ -37,7 +37,7 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [x] Project scaffold: package layout, formatter, linter, type checker, test runner ([0006](docs/decisions/0006-python-tooling.md))
 - [x] CI: format, lint, types and unit tests on every PR, with dependency caching
 - [x] Configuration: typed settings from environment and file, validated at startup, secrets redacted in every log and error
-- [ ] Domain model: post, plan revision with input hash, request, line item, match result, review reason, decision
+- [x] Domain model: post, plan revision with input hash, request, line item, match result, review reason, decision
 - [x] Audit store: schema, migrations, append-only log, request keys, marker and snapshot columns ([0009](docs/decisions/0009-audit-store.md))
 - [x] InvenTree test harness: pinned versions in Docker, seeded from `eval/catalog/`, torn down after each run, with one PostgreSQL job
 - [ ] Characterization tests for every InvenTree behavior the design relies on (design section 11)
