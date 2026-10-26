@@ -366,10 +366,11 @@ def test_the_command_reads_but_never_creates_or_migrates(
     raw.execute("ALTER TABLE audit_log DROP COLUMN alias_id")
     raw.execute("PRAGMA user_version = 20")
     assert aliases(config, "remove", "1") == 2
+    assert aliases(config, "history") == 2  # before 0023 there is no alias_kind to read
     assert raw.execute("PRAGMA user_version").fetchone() == (20,)  # still not migrated
     assert raw.execute("SELECT count(*) FROM sqlite_schema WHERE name = 'aliases'").fetchone() == (0,)
     raw.close()
-    assert capsys.readouterr().err.count("ERROR ") == 5
+    assert capsys.readouterr().err.count("ERROR ") == 6
     assert cli.main(["aliases"]) == 0
     assert "list" in capsys.readouterr().out
 
