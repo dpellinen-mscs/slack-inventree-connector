@@ -218,7 +218,7 @@ an inactive part or a deleted location is ignored and reported.
 - [x] Upgrade and backup notes for the audit store ([operations](docs/operations.md))
 - [x] Supported version matrix for InvenTree and Slack transports ([versions](docs/versions.md), checked against CI)
 - [ ] Prepublication audit: full-history leak scan, license headers, docs check, private vulnerability reporting on
-- [ ] Release process, without publishing until Dan says so
+- [x] Release process, without publishing until Dan says so ([releasing](docs/releasing.md); versions and changelog checked by `tests/test_release.py`; where to publish is Dan's)
 - [x] Any unit but a count (feet, metres, a box) asks for the quantity in the part's stocking unit, and no request
   is built for a line that still has a unit (#151)
 - [x] Read each part's InvenTree unit; the quantity question names it ("in m"), or pieces when the part has
