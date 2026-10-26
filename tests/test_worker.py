@@ -41,7 +41,7 @@ from stockthread.core.model import (
 )
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import STATUS_OK, SourcePick, StockItem, Take
-from stockthread.core.validate import DETAIL_SOURCE_LEFT_OUT
+from stockthread.core.validate import DETAIL_OTHER_AUTHOR, DETAIL_SOURCE_LEFT_OUT
 from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.plan_record import plan_hash, views_of
@@ -1874,6 +1874,27 @@ def test_a_reading_of_a_post_with_a_photo_waits_for_a_person(
     unread = {"code": ReasonCode.PHOTO_NOT_READ.value, "source": "rule", "detail": ""}
     assert (unread in movement["reasons"]) is with_photo
     assert (ReasonCode.PHOTO_NOT_READ.value in [gate[0] for gate in movement["gate"]]) is with_photo
+
+
+@pytest.mark.parametrize("replier", [SAM, LUIS])
+def test_a_reading_with_someone_else_s_thread_reply_waits_for_a_person(
+    store: Store, slack: FakeSlack, clock: Clock, replier: str
+) -> None:
+    """T6: Luis's reply in Sam's thread is read with Sam's post, where "my truck" would be Sam's. The poster did
+    not say it all, so the policy never approves it; Sam's own reply raises nothing."""
+    llm = FakeLLM(read())
+    worker = worker_with(llm, store, slack, clock)
+    enqueue(store, message(ROOT, "anyone want lunch?"))
+    enqueue(store, message(OTHER, GAVE, user=replier, thread_ts=ROOT))
+    read_and_answered(worker, clock)
+    assert llm.calls == [["anyone want lunch?", GAVE]]
+    record = store.dry_run(LLM_KEY)
+    assert record is not None
+    assert record.result is not None
+    [movement] = record.result["movements"]
+    other = {"code": ReasonCode.ACTOR_NOT_POSTER.value, "source": "rule", "detail": DETAIL_OTHER_AUTHOR}
+    assert (other in movement["reasons"]) is (replier == LUIS)
+    assert (ReasonCode.ACTOR_NOT_POSTER.value in [gate[0] for gate in movement["gate"]]) is (replier == LUIS)
 
 
 def test_a_post_the_model_declines_gets_no_reply(store: Store, slack: FakeSlack, clock: Clock, path: Path) -> None:

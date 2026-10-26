@@ -101,7 +101,13 @@ from stockthread.core.questions import (
 from stockthread.core.requests import UNDOABLE, RequestState
 from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
-from stockthread.core.validate import DETAIL_SOURCE_LEFT_OUT, in_stocking_unit, photo_not_read, validate
+from stockthread.core.validate import (
+    DETAIL_OTHER_AUTHOR,
+    DETAIL_SOURCE_LEFT_OUT,
+    in_stocking_unit,
+    photo_not_read,
+    validate,
+)
 from stockthread.gate import Judgement
 from stockthread.inventree import InvenTreeError
 from stockthread.learning import lessons
@@ -1381,6 +1387,8 @@ class Worker:
         for answering in tries:
             kept_out = {message.ts for message in answering.values()}
             messages = [message for message in all_messages if message.ts not in kept_out]
+            # A message by someone else read as part of the post: the poster did not say all of it (T6).
+            others = any(authors.get(message.ts) != poster for message in messages if not message.deleted)
             seen = tuple(message.ts for message in messages)
             try:
                 # Only answers are new: the post reads as it did, so the reading that stands is kept rather than
@@ -1435,7 +1443,7 @@ class Worker:
                 catalog = self.catalog()
                 self.beat()  # a catalog read can take a while
             try:
-                views = self._views(extraction, messages, poster, catalog, late)
+                views = self._views(extraction, messages, poster, catalog, late, others)
                 reading = _digest(record(views, late))
                 if answering and reading != _row(history)[0]:
                     continue  # the post reads otherwise: answers start over
@@ -1443,13 +1451,13 @@ class Worker:
                 if candidate and candidate[0].id in answering:
                     author = authors[candidate[1].ts]
                     taken = self._take_answer(
-                        candidate, views, effects, extraction, all_messages, late, catalog, poster, author
+                        candidate, views, effects, extraction, all_messages, late, catalog, poster, author, others
                     )
                     if not taken:
                         continue  # not an answer, or not from someone who may answer: read with the post
                     answers = self.store.post_answers_through(key)
                     effects = self._replay(key, history, reading, answers, views, answering, catalog, poster)
-                views = self._answered(views, effects, extraction, all_messages, late, catalog)
+                views = self._answered(views, effects, extraction, all_messages, late, catalog, others)
             except LockLost:
                 raise
             except Exception as error:
@@ -1677,11 +1685,12 @@ class Worker:
         catalog: Catalog,
         poster: str,
         author: str,
+        others: bool,
     ) -> bool:
         """Whether the candidate message reads cleanly as the answer to its question, judged on the reading that
         stands with the answers given so far, and was recorded as that answer."""
         item, message, question, allowed = candidate
-        answered = self._answered(views, effects, extraction, messages, late, catalog)
+        answered = self._answered(views, effects, extraction, messages, late, catalog, others)
         if not 0 <= question.movement < len(answered):
             return False
         movement = answered[question.movement].movement
@@ -1724,6 +1733,7 @@ class Worker:
         messages: Sequence[MessageInput],
         late: bool,
         catalog: Catalog,
+        others: bool,
     ) -> list[MovementView]:
         """The views with the answers' effects: a picked type is validated again, a picked or confirmed record
         replaces its match, and a cleared reason is left out. A quantity or serials typed in the thread replace the
@@ -1744,7 +1754,7 @@ class Worker:
                     ),
                 )
             if n in effects.types or n in effects.retyped or stocking != _stocking(view.items, catalog):
-                reasons = self._reasons(movement, extraction, messages, late, stocking)
+                reasons = self._reasons(movement, extraction, messages, late, others, stocking)
             source = effects.places.get((n, "source"))
             if source is None:
                 # A picked type takes its own default source, or none.
@@ -1948,12 +1958,13 @@ class Worker:
         poster: str,
         catalog: Catalog,
         late: bool,
+        others: bool,
     ) -> list[MovementView]:
         views = []
         for movement in extraction.movements:
             items = [_part(item.item_text, catalog, poster) for item in movement.line_items]
             stocking = _stocking(items, catalog)
-            reasons = self._reasons(movement, extraction, messages, late, stocking)
+            reasons = self._reasons(movement, extraction, messages, late, others, stocking)
             source = _location(movement.source_text, catalog, poster) or _default_source(movement, catalog, reasons)
             reasons = _by_default(reasons, source)
             views.append(
@@ -1983,18 +1994,22 @@ class Worker:
         extraction: Extraction,
         messages: Sequence[MessageInput],
         late: bool,
+        others: bool,
         stocking: Sequence[str | None] = (),
     ) -> tuple[ReviewReason, ...]:
-        """The movement's reasons. `stocking`: the units of each line's part, for a part that can authorize a write
-        (`_stocking`)."""
+        """The movement's reasons. `others`: a message read is not the poster's. `stocking`: the units of each
+        line's part, for a part that can authorize a write (`_stocking`)."""
         text = "\n".join(message.text for message in messages if not message.deleted)
         lateness = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if late else ()
         # No extractor sees a photo's pixels (design section 13): the photo may show other items, another
         # quantity or serials, so a person checks the reading against it.
         unread = (ReviewReason(ReasonCode.PHOTO_NOT_READ, ReasonSource.RULE),) if photo_not_read(messages) else ()
+        # Another person's reply joined to the post: "my truck" there is read as the poster's (T6).
+        mixed = (ReviewReason(ReasonCode.ACTOR_NOT_POSTER, ReasonSource.RULE, DETAIL_OTHER_AUTHOR),) if others else ()
         return (
             lateness
             + unread
+            + mixed
             + validate(
                 movement,
                 text,

@@ -59,6 +59,7 @@ _DETAILS = (
     "no number|no text|type unclear",
     "vague quantity word in the text",
     "correction word in the text|someone else is named as the actor|a person is mentioned",
+    "a message in the post is by someone else",
     f"no word in the text supports ({_KINDS})",
     "question or request|plan or condition|a time ahead|negation|hedge|source|destination",
     "the text does not put the (source|destination) on that side",
