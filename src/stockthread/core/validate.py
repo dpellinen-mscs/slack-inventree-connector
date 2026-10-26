@@ -96,6 +96,8 @@ DETAIL_SOURCE_LEFT_OUT = 'the text has "from", "off", "out of" or an arrow, but 
 """The detail of the implied source a text that names one raises: a default source never settles it (ADR 0020)."""
 DETAIL_OTHER_AUTHOR = "a message in the post is by someone else"
 """ACTOR_NOT_POSTER for a post whose messages are not all the poster's: its "my truck" is read as the poster's."""
+DETAIL_MIXED = "the fields come from different clauses, and another clause names a place on the same side"
+"""The detail of the reason a movement drawn from several clauses raises when the text names a rival place (#200)."""
 DETAIL_NOT_A_COUNT = "a unit other than a count"
 """The detail of the reason a line in feet, metres or any unit but a count raises."""
 DETAIL_UNIT_IN_ITEM = "the item starts with a unit word"
@@ -164,6 +166,7 @@ def validate(
     reasons |= _from_text(movement, text, own, kinds)
     reasons |= _grounding(movement, text)
     reasons |= _places(movement, text)
+    reasons |= _one_clause(movement, text)
     reasons |= _contradictions(movement)
     reasons |= {
         _rule(ReasonCode.QUANTITY_ABOVE_LIMIT, f"line {n}: above policy.max_quantity")
@@ -613,6 +616,50 @@ def _places(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         if not after_heading and not any(re.search(pattern, text[: m.start()].rstrip() + " ") for m in found):
             reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, f"the text does not put the {side} on that side"))
     return reasons
+
+
+_CLAUSE_END = re.compile(r"\n|[.!?;](?=\s|$)|(?<!\d),|,(?!\d)|\b(and|then)\b")
+"""Where a clause ends: a message or line, a sentence, a comma that is not in a number, "and", "then"."""
+_NAMES_A_PLACE = {"source": re.compile(rf"{_FROM}\s+\w"), "destination": re.compile(rf"{_TO}\s+\w")}
+
+
+def _one_clause(movement: CandidateMovement, text: str) -> set[ReviewReason]:
+    """A movement whose fields no single clause holds all of may mix two movements: "took 2 ONTs from shelf A to
+    van 3" and "took 4 ONTs from shelf B to van 4" read as 4 ONTs from shelf A to van 3 (#200). It is doubted when
+    another clause among those it draws on names a place on a side whose place the movement takes from elsewhere.
+    An item counts where its quantity is stated. A list under a heading ("Van 3 from shelf A:" then a line per item)
+    names no rival and passes, as does a clause of another movement after the last one drawn on."""
+    starts = [0] + [m.end() for m in _CLAUSE_END.finditer(text)]
+
+    def clauses(found: list[re.Match[str]]) -> set[int]:
+        return {sum(start <= m.start() for start in starts) - 1 for m in found}
+
+    fields = [
+        clauses(
+            [
+                m
+                for m in _occurrences(item.item_text, text)
+                if item.quantity is None or item.quantity in _stated(text[: m.start()])
+            ]
+        )
+        for item in movement.line_items
+        if item.item_text
+    ]
+    sides = {
+        side: clauses(_occurrences(place, text))
+        for side, place in (("source", movement.source_text), ("destination", movement.destination_text))
+        if place
+    }
+    fields = [found for found in (*fields, *sides.values()) if found]  # a field not in the text is doubted already
+    if not fields or set.intersection(*fields):
+        return set()
+    first, last = min(set.union(*fields)), max(set.union(*fields))
+    rival = any(
+        first <= n <= last and n not in own
+        for side, own in sides.items()
+        for n in clauses(list(_NAMES_A_PLACE[side].finditer(text)))
+    )
+    return {_rule(ReasonCode.MOVEMENT_UNCLEAR, DETAIL_MIXED)} if rival else set()
 
 
 def _contradictions(movement: CandidateMovement) -> set[ReviewReason]:

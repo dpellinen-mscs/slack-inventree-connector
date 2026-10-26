@@ -20,7 +20,14 @@ from stockthread.core.model import (
     ReasonSource,
     ReviewReason,
 )
-from stockthread.core.validate import DETAIL_SOURCE_LEFT_OUT, in_stocking_unit, photo_not_read, stocking_unit, validate
+from stockthread.core.validate import (
+    DETAIL_MIXED,
+    DETAIL_SOURCE_LEFT_OUT,
+    in_stocking_unit,
+    photo_not_read,
+    stocking_unit,
+    validate,
+)
 
 
 def take(item: str = "Disc 40", quantity: str | None = "2", **fields: Any) -> CandidateMovement:
@@ -753,3 +760,63 @@ def test_an_implied_source_says_when_the_text_names_one_the_reading_left_out(tex
     assert implied == ReviewReason(
         ReasonCode.IMPLIED_SOURCE, ReasonSource.RULE, DETAIL_SOURCE_LEFT_OUT if left_out else ""
     )
+
+
+TWO_MOVEMENTS = (
+    "took 2 Disc 40 from main stock to truck 1\ntook 4 Disc 40 from receiving to van 3",
+    "took 2 Disc 40 from main stock to truck 1. Took 4 Disc 40 from receiving to van 3",
+    "took 2 Disc 40 from main stock to truck 1 and 4 Disc 40 from receiving to van 3",
+    "took 2 Disc 40 from main stock to truck 1, 4 Disc 40 from receiving to van 3",
+)
+"""Two movements stated in two messages, sentences or clauses (#200)."""
+
+
+def mixed(movement: CandidateMovement, text: str) -> bool:
+    return any(reason.detail == DETAIL_MIXED for reason in validate(movement, text, max_quantity=100))
+
+
+@pytest.mark.parametrize("text", TWO_MOVEMENTS)
+@pytest.mark.parametrize(
+    ("quantity", "source", "destination"),
+    [("4", "main stock", "truck 1"), ("2", "main stock", "van 3"), ("2", "receiving", "van 3"),
+     ("4", "receiving", "truck 1"), ("2", "receiving", "truck 1"), ("4", "main stock", "van 3")],
+)  # fmt: skip
+def test_a_movement_mixed_from_two_stated_movements_is_doubted(
+    text: str, quantity: str, source: str, destination: str
+) -> None:
+    """Each field is in the text, but not together: the movement nobody typed must wait for a person (#200)."""
+    movement = take(quantity=quantity, source_text=source, destination_text=destination)
+    assert ReasonCode.MOVEMENT_UNCLEAR in codes(movement, text)
+    assert mixed(movement, text)
+
+
+@pytest.mark.parametrize("text", TWO_MOVEMENTS)
+def test_each_of_two_stated_movements_read_apart_is_not_doubted(text: str) -> None:
+    assert not mixed(take(), text)
+    assert not mixed(take(quantity="4", source_text="receiving", destination_text="van 3"), text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "took 2 Disc 40 from main stock\nto truck 1",
+        "Truck 1 restock from main stock:\n- 2 Disc 40\n- 3 Disc 60",
+        "took 2 Disc 40 and 3 Disc 60 from main stock to truck 1",
+        "took 2 Disc 40 and 3 Disc 60 from main stock to truck 1, and returned 1 S8 switch to receiving",
+        "heading to truck 1\ntook 2 Disc 40 and 3 Disc 60 from main stock",
+    ],
+)
+def test_one_movement_told_over_several_clauses_with_no_rival_place_is_not_doubted(text: str) -> None:
+    """A heading over a list, sibling messages, items joined by "and", or another movement after the last clause
+    this one draws on: no other place on the same side among its clauses."""
+    lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(3)))
+    movement = take(source_text="main stock", destination_text="truck 1")
+    if "3 Disc 60" in text:
+        movement = replace(movement, line_items=lines)
+    assert not mixed(movement, text)
+
+
+def test_the_item_counts_in_the_clause_that_states_its_quantity() -> None:
+    """ "Disc 40" is in both clauses; only the second says 4."""
+    text = "took 2 Disc 40 from main stock to truck 1\ntook 4 Disc 40 from receiving to van 3"
+    assert mixed(take(quantity="4"), text)
