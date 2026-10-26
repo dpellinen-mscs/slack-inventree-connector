@@ -40,7 +40,7 @@ Settings are checked once, at startup:
 | `slack.workspace_id` | required | The workspace id (`T...`). Events from any other workspace are dropped. Enterprise Grid org installs are not supported yet. |
 | `slack.app_id` | required | The app id (`A...`). Events for any other app are dropped. |
 | `slack.channels` | `[]` | Channel ids (`C...` or `G...`) the connector acts in. Empty means it acts nowhere. |
-| `slack.approvers` | `[]` | Slack user ids (`U...` or `W...`) that may click Apply and Undo, and answer questions only an approver may answer. Empty means nobody can, while `policy.auto_apply` still applies clear movements with writes on (`check-setup` warns). |
+| `slack.approvers` | `[]` | Slack user ids (`U...` or `W...`) that may click Apply, click Undo on any post, and answer questions only an approver may answer. The poster of a post may always Undo it. Empty means nobody can click Apply, while `policy.auto_apply` still applies clear movements with writes on. |
 | `slack.catch_up_hours` | `72` | After downtime, read posts missed this far back (at most 720). `0` turns catch-up off. A caught-up post is marked late and needs an approver. |
 | `slack.group_window_seconds` | `5` | Messages from one person this close together (at most 300) are read as one post, such as a photo and its caption. `0` reads each message alone. |
 | `slack.plan_expiry_hours` | `24` | A plan, its questions and its Apply button expire after this long (1 to 720). A post older than this, found by catch-up, is stored and gets no reply. |
