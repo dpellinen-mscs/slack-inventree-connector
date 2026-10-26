@@ -44,6 +44,7 @@ from stockthread.setup_check import (
     Finding,
     Level,
     check_aliases,
+    check_policy,
     check_posters,
     check_roles,
     check_vehicles,
@@ -439,6 +440,9 @@ def check_setup(settings: Settings) -> list[Finding]:
             return await inventree_findings(reader, settings.vehicles, writes=settings.writes.enabled, aliases=aliases)
 
     return [
+        *check_policy(
+            writes=settings.writes.enabled, approvers=settings.slack.approvers, auto_apply=settings.policy.auto_apply
+        ),
         *asyncio.run(read()),
         *check_posters(posters_seen(settings.storage.database), settings.vehicles),
         *unread,

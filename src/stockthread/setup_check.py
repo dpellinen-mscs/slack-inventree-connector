@@ -1,10 +1,10 @@
 """The setup check (`stockthread check-setup`): what an admin should fix before the first dry run (design section 5,
 "Locations" and "Least privilege").
 
-It reads only: the InvenTree version, the roles of the token's user, the parts and stock locations, which Slack
-users have posted in the watched channels, and the stored aliases (from the local database, ids only). Every finding
-is a fixed sentence about settings, roles, paths or record ids; nothing of a message is printed, not even an alias's
-text.
+It reads only: the settings for writes, approvers and the policy, the InvenTree version, the roles of the token's
+user, the parts and stock locations, which Slack users have posted in the watched channels, and the stored aliases
+(from the local database, ids only). Every finding is a fixed sentence about settings, roles, paths or record ids;
+nothing of a message is printed, not even an alias's text.
 
 Pure: facts in, findings out. `run.check_setup` gathers the facts.
 """
@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from stockthread.core.matching import Catalog
+from stockthread.core.model import MovementType
 from stockthread.store import AliasKind, StoredAlias
 
 MINIMUM_ROLES: Mapping[str, frozenset[str]] = {
@@ -126,6 +127,40 @@ def check_vehicles(catalog: Catalog, vehicles: Mapping[str, str]) -> list[Findin
         found.append(Finding(Level.ERROR, f'vehicles: {user}: "{path}" {why}'))
     if vehicles and not found:
         found.append(Finding(Level.OK, f"vehicles: every one of the {len(vehicles)} paths is a stock location"))
+    return found
+
+
+DEFAULT_AUTO_APPLY = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
+"""`policy.auto_apply` as shipped (ADR 0004): the movement types the policy may apply with no click."""
+
+
+def check_policy(*, writes: bool, approvers: Collection[str], auto_apply: Sequence[str]) -> list[Finding]:
+    """Who can write stock with writes on (threat model T17): with no approvers nobody can click Apply or Undo, yet
+    the policy still applies its movement types; and a movement type beyond the shipped `auto_apply` applies with
+    no click too. Nothing to say with writes off: nothing is written."""
+    if not writes:
+        return []
+    found = []
+    kinds = [MovementType(kind) for kind in auto_apply]  # the settings hold them as strings
+    automatic = ", ".join(kind.value for kind in kinds) or "nothing"
+    if not approvers:
+        found.append(
+            Finding(
+                Level.WARN,
+                "approvers: none in slack.approvers, so nobody can click Apply or Undo or answer for an approver;"
+                f" the policy still applies with no click: {automatic}",
+            )
+        )
+    else:
+        found.append(Finding(Level.OK, f"approvers: {len(set(approvers))} may click Apply and Undo"))
+    beyond = [kind.value for kind in kinds if kind not in DEFAULT_AUTO_APPLY]
+    if beyond:
+        found.append(
+            Finding(
+                Level.WARN,
+                f"policy: auto_apply has {', '.join(beyond)}, beyond the shipped take-outs: those apply with no click",
+            )
+        )
     return found
 
 

@@ -13,9 +13,10 @@ import pytest
 from pydantic import SecretStr
 
 from stockthread import __main__ as cli
-from stockthread.config import InvenTreeSettings
+from stockthread import run
+from stockthread.config import InvenTreeSettings, parse_settings
 from stockthread.core.matching import Alias, Catalog, LocationRecord, PartRecord, stale_aliases
-from stockthread.core.model import PostKey
+from stockthread.core.model import MovementType, PostKey
 from stockthread.inventree import InvenTreeReader
 from stockthread.run import _stored_aliases, inventree_findings
 from stockthread.setup_check import (
@@ -25,6 +26,7 @@ from stockthread.setup_check import (
     Finding,
     Level,
     check_aliases,
+    check_policy,
     check_posters,
     check_roles,
     check_vehicles,
@@ -387,3 +389,51 @@ def test_the_quickstart_lists_exactly_the_roles_a_dry_run_needs() -> None:
     assert listed == dry_run
     for name, perms in WRITE_ROLES.items():
         assert all(f"*{perm}* on *{ROLE_LABELS[name]}*" in readme for perm in perms)
+
+
+TAKE_OUTS = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
+
+
+def test_with_writes_off_the_policy_has_nothing_to_say() -> None:
+    assert check_policy(writes=False, approvers=(), auto_apply=(*TAKE_OUTS, MovementType.CONSUME)) == []
+
+
+def test_writes_on_with_no_approvers_warns_that_the_policy_still_writes() -> None:
+    """Threat model T17: nobody can click Apply or Undo, yet clear take-outs still apply with no click."""
+    assert check_policy(writes=True, approvers=(), auto_apply=TAKE_OUTS) == [
+        Finding(
+            Level.WARN,
+            "approvers: none in slack.approvers, so nobody can click Apply or Undo or answer for an approver;"
+            " the policy still applies with no click: take_to_vehicle, take_to_site",
+        )
+    ]
+    [finding] = check_policy(writes=True, approvers=(), auto_apply=())
+    assert finding.text.endswith("with no click: nothing")
+
+
+def test_an_auto_apply_beyond_the_take_outs_warns() -> None:
+    assert check_policy(writes=True, approvers=("U0DAN0001", "U0DAN0001"), auto_apply=TAKE_OUTS) == [
+        Finding(Level.OK, "approvers: 1 may click Apply and Undo")
+    ]
+    assert check_policy(
+        writes=True, approvers=("U0DAN0001",), auto_apply=(MovementType.TAKE_TO_SITE, MovementType.RETURN)
+    )[1:] == [
+        Finding(Level.WARN, "policy: auto_apply has return, beyond the shipped take-outs: those apply with no click")
+    ]
+
+
+def test_the_setup_check_reports_the_policy_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def nothing_from_inventree(*args: Any, **kwargs: Any) -> list[Finding]:
+        return []
+
+    monkeypatch.setattr(run, "inventree_findings", nothing_from_inventree)
+    settings = parse_settings(
+        {
+            "slack": {"workspace_id": "T0ACME01", "app_id": "A0STOCK1", "channels": ["C0STOCK01"]},
+            "inventree": {"url": "http://inventree.local:8000"},
+            "storage": {"database": str(tmp_path / "stockthread.db")},
+            "writes": {"enabled": True},
+        },
+        {"SLACK_BOT_TOKEN": "xoxb-synthetic", "SLACK_APP_TOKEN": "xapp-synthetic", "INVENTREE_TOKEN": "inv-synthetic"},
+    )
+    assert run.check_setup(settings)[0].text.startswith("approvers: none in slack.approvers")
