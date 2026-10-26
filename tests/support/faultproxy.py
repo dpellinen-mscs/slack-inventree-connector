@@ -239,3 +239,10 @@ class FaultProxy:
     def log(self) -> list[Entry]:
         with self._state.lock:
             return list(self._state.log)
+
+    def drain(self) -> list[Entry]:
+        """The log so far, which is then emptied, and the used-up rules dropped: a run of hours stays small."""
+        with self._state.lock:
+            entries, self._state.log = self._state.log, []
+            self._state.rules = [rule for rule in self._state.rules if rule.times > 0]
+            return entries

@@ -103,6 +103,11 @@ class FakeSocketMode:
             if not self._lock.wait_for(lambda: envelope_id in self.acked, timeout):
                 raise TimeoutError(f"{envelope_id} was not acked")
 
+    def unacked(self) -> int:
+        """Envelopes sent or waiting that have no ack yet."""
+        with self._lock:
+            return len(self._unacked)
+
     def drop(self) -> None:
         """Shut the socket at once, with no close frame: a crashed proxy or a reset connection."""
         with self._lock:
