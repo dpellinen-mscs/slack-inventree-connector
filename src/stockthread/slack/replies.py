@@ -126,16 +126,34 @@ def escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+_EMPHASIS = str.maketrans({"*": "\N{FULLWIDTH ASTERISK}", "_": "\N{FULLWIDTH LOW LINE}", "~": "\N{FULLWIDTH TILDE}",
+                           "`": "\N{FULLWIDTH GRAVE ACCENT}"})  # fmt: skip
+
+
+_MARKS_BACK = {ord(wide): mark for mark, wide in _EMPHASIS.items()}
+"""The notification text is not mrkdwn: there the post's own marks are shown as typed."""
+
+
+def plain(text: str) -> str:
+    """Post text for Slack mrkdwn: escaped, and with no bold, italic, strike or code either, so a quoted item cannot
+    fake the bold name of a matched record (threat model T6). The marks are shown as their full-width forms."""
+    return escape(text).translate(_EMPHASIS)
+
+
+def quoted(text: str) -> str:
+    return f"“{plain(text)}”"
+
+
 def _number(value: Decimal) -> str:
     return format(value.normalize(), "f") if value == value.to_integral_value() else format(value, "f")
 
 
 def _named(text: str | None, match: Match | None, names: Mapping[int, str], what: str, typed: str | None = None) -> str:
-    written = f"“{escape(text)}”" if text else "(not stated)"
+    written = quoted(text) if text else "(not stated)"
     if text is None and match is not None and match.rule is MatchRule.DEFAULT:
         written = "not stated: the default source"
     if typed is not None:
-        typed_as = f"named in the thread as “{escape(typed)}”"
+        typed_as = f"named in the thread as {quoted(typed)}"
         written = f"{written}, {typed_as}" if text else typed_as
     if match is None:
         return written
@@ -164,7 +182,7 @@ def _line(view: MovementView, index: int, parts: Mapping[int, str]) -> str:
     movement = view.movement
     item = movement.line_items[index]
     quantity = "?" if item.quantity is None else _number(item.quantity)
-    unit = f" {escape(item.unit)}" if item.unit else ""
+    unit = f" {plain(item.unit)}" if item.unit else ""
     pack = f" of {_number(item.pack_size)}" if item.pack_size is not None else ""
     named = _named(item.item_text, view.items[index], parts, "part", view.named.get(index))
     pick = view.stock[index] if view.stock else None
@@ -363,10 +381,10 @@ def question_message(
     view = views[question.movement]
     movement = view.movement
     item = movement.line_items[question.line] if question.line is not None else None
-    written = f"“{escape(item.item_text)}”" if item is not None and item.item_text else None
+    written = quoted(item.item_text) if item is not None and item.item_text else None
     side = question.side or "destination"
     place_text = movement.source_text if side == "source" else movement.destination_text
-    place = f"“{escape(place_text)}”" if place_text else f"the {side}"
+    place = quoted(place_text) if place_text else f"the {side}"
     names = locations if question.side else parts
     record = escape(names.get(question.candidates[0], f"#{question.candidates[0]}")) if question.candidates else ""
     ask = question.ask
@@ -424,7 +442,7 @@ def question_message(
         )
     if len(views) > 1:
         text = f"Movement {question.movement + 1}: {text}"
-    plain = text.replace(f"*{record}*", record) if record else text
+    notification = (text.replace(f"*{record}*", record) if record else text).translate(_MARKS_BACK)
     blocks: list[dict[str, Any]] = [_section(text)]
     if ask is Ask.CHOOSE_STOCK:
         target = operation_for(view.movement.movement_type) in (Operation.ADD, Operation.COUNT)
@@ -448,7 +466,7 @@ def question_message(
                 ],
             }
         )
-    return {"text": plain, "blocks": blocks}
+    return {"text": notification, "blocks": blocks}
 
 
 def _stock_question(question: Question, view: MovementView, written: str) -> str:
@@ -868,7 +886,7 @@ def receipt(
     if len(views) > MAX_MOVEMENTS:
         blocks.append(_section(f"…and {len(views) - MAX_MOVEMENTS} more movements, not shown here."))
     if learned and all(state is RequestState.VERIFIED for state in states):
-        taught = "; ".join(f"“{escape(text)}” means {escape(name)}" for text, name in learned[:MAX_LEARNED])
+        taught = "; ".join(f"{quoted(text)} means {escape(name)}" for text, name in learned[:MAX_LEARNED])
         more = f"; and {len(learned) - MAX_LEARNED} more" if len(learned) > MAX_LEARNED else ""
         note = f"Learned from this Apply: {taught}{more}."
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": _cut(note)}]})

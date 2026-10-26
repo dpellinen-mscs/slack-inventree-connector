@@ -83,9 +83,14 @@ _TAKE_OUTS = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
 _FROM = r"(?<!\w)(from|off|out of)"
 _TO = r"((?<!\w)(to|into|onto|on|in|at|for|up)|→|->)"
 """Whole words only: "from main shop" must not read as "…in shop"."""
-_NAMES_A_SOURCE = re.compile(rf"(?<!\bdrop )(?<!\bdropped ){_FROM}\s+(?!\d)\w|→|->", re.IGNORECASE)
-"""Wording that names a source: "from shelf B", "off the van", "out of stock", "truck 1 → truck 2". "dropped off"
-names a destination. Any arrow counts, so "2 wall mounts → my truck" is asked for its source once."""
+_NAMES_A_SOURCE = re.compile(
+    rf"(?<!\bdrop )(?<!\bdropped ){_FROM}\s+(?!\d)\w|→|->"
+    r"|(?<!\w)at (the )?(shelf|shelves|bin|rack|warehouse|shop|stockroom|storeroom|storage|cage|receiving)\b",
+    re.IGNORECASE,
+)
+"""Wording that names a source: "from shelf B", "off the van", "out of stock", "truck 1 → truck 2", "grabbed 2 at
+shelf B". "dropped off" names a destination. Any arrow counts, so "2 wall mounts → my truck" is asked for its source
+once. "at" counts only before a storage word: "at the Smith job" is where stock goes."""
 
 
 def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:

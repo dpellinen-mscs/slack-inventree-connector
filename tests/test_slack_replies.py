@@ -143,6 +143,20 @@ def test_catalog_names_are_escaped_too() -> None:
     assert "&lt;!everyone&gt;" in shown
 
 
+@pytest.mark.parametrize("item", ["*Norvane Disc 60* (", "_x_ Disc 40", "~old~ Disc 40", "`Disc 40`"])
+def test_post_text_cannot_bold_italicise_strike_or_code_in_a_reply(item: str) -> None:
+    """#201 finding 5: quoted item text cannot fake the bold name of a matched record; marks are shown full width."""
+    shown = text_of(dry_run_reply([view(item)], PARTS, LOCATIONS))
+    quoted = shown[shown.index("“") + 1 : shown.index("”")]
+    assert not set("*_~`") & set(quoted)
+    assert quoted == item.translate(
+        str.maketrans(
+            "*_~`", "\N{FULLWIDTH ASTERISK}\N{FULLWIDTH LOW LINE}\N{FULLWIDTH TILDE}\N{FULLWIDTH GRAVE ACCENT}"
+        )
+    )
+    assert f"*{PARTS[1]}*" in shown  # the record's own name is still bold
+
+
 def test_a_long_reply_stays_inside_slack_limits() -> None:
     items = tuple(LineItem(f"item {n} " + "x" * 80, Decimal(1)) for n in range(60))
     movement = CandidateMovement(MovementType.RECEIVE, items, None, "receiving")

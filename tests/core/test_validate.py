@@ -744,6 +744,9 @@ def test_a_place_cannot_hide_a_multiplier(text: str, source: str) -> None:
         ("truck 1 → truck 2: 2 Disc 40", True),  # the corpus's arrow form (04-text-multi)
         ("truck 1 -> truck 2: 2 Disc 40", True),
         ("2 Disc 40 → my truck", True),  # any arrow: asked once
+        ("grabbed 2 Disc 40 at shelf B, to truck 1", True),  # #201 finding 6
+        ("2 Disc 40 at the warehouse onto truck 1", True),
+        ("2 Disc 40 to truck 1 at the Smith job", False),  # "at" a job is where stock goes
     ],
 )
 def test_an_implied_source_says_when_the_text_names_one_the_reading_left_out(text: str, left_out: bool) -> None:
