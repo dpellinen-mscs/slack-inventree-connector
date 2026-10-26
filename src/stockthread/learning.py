@@ -1,4 +1,4 @@
-"""What a plan an approver confirmed teaches (ADR 0012, narrowed while #174 is open): each item and place text of it
+"""What a plan an approver confirmed teaches (ADR 0012, narrowed by ADR 0021): each item and place text of it
 that the whole-word and fuzzy rules fit to that one record alone becomes an alias of it. A pick among several records
 the text fits teaches nothing. The worker stores them once every request of the plan is verified (`Worker.work_due`);
 a plan the policy approved, a dry run and anything a model suggested teach nothing. A name a person typed in the
@@ -13,7 +13,7 @@ A lesson needs all of these:
   item or place text the model wrote, or read from a photo, is never learned (only confirmed human corrections
   become aliases).
 - It has a word with a letter, and no word whose meaning depends on who posted it or when ("my van", "this cable",
-  "the usual ones"): everyone's posts use an alias, and per-user aliases are not built yet (M4).
+  "the usual ones"): everyone's posts use an alias, and there are no per-user aliases (ADR 0021).
 - Its record is the one record the whole-word and fuzzy rules fit it to now, with or without its articles. A text
   that fits other records too ("cable" picked among three cables) would make every later post that says it a write
   to the record picked once, and a text that fits no record ("hdmi cable" corrected to a DisplayPort cable, "the

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import timedelta
 from pathlib import Path
 
@@ -14,10 +14,11 @@ from stockthread import __main__ as cli
 from stockthread.alias_admin import EXPORT_FORMAT, alias_lines
 from stockthread.catalog import with_aliases
 from stockthread.core.marker import AttemptKind
-from stockthread.core.matching import Alias, Catalog, PartRecord, match_part
+from stockthread.core.matching import Alias, Catalog, LocationRecord, PartRecord, match_part
 from stockthread.core.model import MatchRule, Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.write_request import write_notes
+from stockthread.inventree import InvenTreeError
 from stockthread.store import AliasKind, LockLost, StateConflict, Store, StoredAlias
 
 S = RequestState
@@ -415,3 +416,226 @@ def test_no_alias_is_learned_from_a_reading_an_edit_came_after(store: Store) -> 
     assert store.stored_aliases() == ()
     store.learn_alias(OWNER, PART, "disc 40", 1, rivals=[1], learned_from=KEY, read_through=through)
     assert [alias.text for alias in store.stored_aliases()] == ["disc 40"]
+
+
+def test_an_admin_adds_an_alias_that_replaces_a_learned_one_and_is_audited(store: Store, tmp_path: Path) -> None:
+    """#174: an admin adds deliberate aliases by hand. One stands for everyone's posts, is never rechecked (no
+    rivals), and takes over a learned alias for the same text as the matcher reads it."""
+    verify(store)
+    store.learn_alias(OWNER, PART, "patch cable", 1, rivals=[1, 2], learned_from=KEY, read_through=0)
+    added = store.add_alias(PART, " patch cables ", 2)
+    assert (added.text, added.record, added.user, added.rivals, added.learned_from) == (
+        "patch cables",
+        2,
+        None,
+        None,
+        None,
+    )
+    assert store.aliases(PART) == (Alias("patch cables", 2),)
+    with sqlite3.connect(tmp_path / "stockthread.db") as raw:
+        events = raw.execute(
+            "SELECT actor, event, alias_id, request_id IS NOT NULL FROM audit_log"
+            " WHERE alias_id IS NOT NULL ORDER BY id"
+        ).fetchall()
+    assert events == [
+        ("applier", "alias_learned", 1, True),
+        ("admin", "alias_replaced", 1, True),
+        ("admin", "alias_added", added.id, False),
+    ]
+    store.learn_alias(OWNER, PART, "patch cable", 1, rivals=[1], learned_from=KEY, read_through=0)
+    assert store.aliases(PART) == (Alias("patch cables", 2),)  # no confirmation takes it over
+
+
+def test_an_admin_alias_never_replaces_another_admin_alias_or_a_per_user_one(store: Store) -> None:
+    verify(store)
+    store.learn_alias(OWNER, LOCATION, "the yard", 11, rivals=[11], learned_from=KEY, read_through=0, user="U0SAM")
+    store.add_alias(LOCATION, "the yard", 5)
+    with pytest.raises(ValueError, match="alias 2 already names this text; `stockthread aliases remove 2` first"):
+        store.add_alias(LOCATION, "The Yard", 6)
+    assert [(alias.text, alias.record, alias.user) for alias in store.stored_aliases()] == [
+        ("the yard", 11, "U0SAM"),
+        ("the yard", 5, None),
+    ]
+    with pytest.raises(ValueError, match="at least one word"):
+        store.add_alias(PART, " - ", 1)
+    with pytest.raises(ValueError, match="at least one word"):
+        store.add_alias(PART, "disc", 0)
+
+
+ADMIN_CATALOG = Catalog(
+    parts=(
+        PartRecord(1, "D40", "Norvane Disc 40 Access Point"),
+        PartRecord(2, "PSU-24", "Power Supply 24V"),
+        PartRecord(3, "OLD", "Old Bridge", active=False),
+        PartRecord(4, "TPL", "Bridge Template", template=True),
+        PartRecord(5, "PC-1", "Patch Cable 1 m"),
+        PartRecord(6, "PC-2", "Patch Cable 2 m"),
+    ),
+    locations=(
+        LocationRecord(10, "Warehouse"),
+        LocationRecord(11, "Warehouse/Main Stock"),
+        LocationRecord(12, "Yard/Shelf A"),
+        LocationRecord(13, "Shop/Shelf A"),
+    ),
+)
+
+
+@pytest.fixture
+def inventree(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """`aliases add` reads the catalog from InvenTree: here, ADMIN_CATALOG; the list counts the reads."""
+    reads: list[int] = []
+
+    def loader(settings: object) -> Callable[[], Catalog]:
+        def read() -> Catalog:
+            reads.append(1)
+            return ADMIN_CATALOG
+
+        return read
+
+    monkeypatch.setattr(cli, "inventree_catalog", loader)
+    return reads
+
+
+def test_the_command_shows_what_it_would_add_and_stores_nothing_without_yes(
+    store: Store, config: Path, inventree: list[int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    verify(store)
+    store.learn_alias(OWNER, PART, "ubiquity psus", 1, rivals=[1], learned_from=KEY, read_through=0)
+    before = store.stored_aliases()
+    assert aliases(config, "add", "part", "ubiquity psu", "2") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == 'would add "ubiquity psu" -> part 2, "Power Supply 24V" (IPN "PSU-24"), for everyone\'s posts'
+    assert out[1].startswith('would replace the learned 1  "ubiquity psus" -> part 1, everyone\'s posts; learned ')
+    assert out[2] == "nothing stored: run it again with --yes to store it"
+    assert store.stored_aliases() == before
+    assert aliases(config, "add", "part", "ubiquity psu", "2", "--yes") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].startswith('added 2  "ubiquity psu" -> part 2')
+    assert out[1].startswith('replaced the learned 1  "ubiquity psus" -> part 1')
+    assert [(alias.text, alias.record) for alias in store.stored_aliases()] == [("ubiquity psu", 2)]
+
+
+def test_the_command_says_which_other_records_the_text_fits_now(
+    store: Store, config: Path, inventree: list[int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#190 review: an admin alias is never rechecked, so the dry run and the add both say which posts stop asking."""
+    also = (
+        '"cable" also fits part 6 "Patch Cable 2 m" (IPN "PC-2"): a post that says it is no longer asked which one it'
+        " means"
+    )
+    assert aliases(config, "add", "part", "cable", "5") == 0
+    assert capsys.readouterr().out.splitlines()[1] == also
+    assert aliases(config, "add", "part", "cable", "5", "--yes") == 0
+    assert capsys.readouterr().out.splitlines()[1] == also
+    assert aliases(config, "add", "location", "yard shelf", "12") == 0
+    assert "also fits" not in capsys.readouterr().out
+
+
+def test_the_command_adds_an_alias_an_admin_typed(
+    store: Store, config: Path, inventree: list[int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert aliases(config, "add", "part", "ubiquity psu", "2", "--yes") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert (
+        out[0]
+        == 'added 1  "ubiquity psu" -> part 2, everyone\'s posts; typed by an admin: "Power Supply 24V" (IPN "PSU-24")'
+    )
+    assert "aliases remove <id>" in out[1]
+    assert aliases(config, "add", "location", "back room", "11", "--yes") == 0
+    assert 'location 11, everyone\'s posts; typed by an admin: "Warehouse/Main Stock"' in capsys.readouterr().out
+    assert [(a.kind, a.text, a.record) for a in store.stored_aliases()] == [
+        (PART, "ubiquity psu", 2),
+        (LOCATION, "back room", 11),
+    ]
+    with_store = with_aliases(lambda: ADMIN_CATALOG, store)()
+    assert match_part("ubiquity psus", with_store).record == 2
+    assert match_part("ubiquity psus", with_store).rule is MatchRule.ALIAS
+
+
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        (("part", "my psu", "2"), 'ERROR not an alias: "my" means another thing for another poster or on another day'),
+        (("part", "40", "1"), "ERROR not an alias: it has no word with a letter other than an article"),
+        (
+            ("part", "psu", "9"),
+            "ERROR not added: part 9 is not an active part in InvenTree (made inactive, or deleted)",
+        ),
+        (
+            ("part", "psu", "3"),
+            "ERROR not added: part 3 is not an active part in InvenTree (made inactive, or deleted)",
+        ),
+        (("part", "psu", "4"), "ERROR not added: part 4 is a template part (it holds no stock)"),
+        (("location", "shop", "1"), "ERROR not added: location 1 is not a stock location in InvenTree"),
+        (("part", "the", "1"), "ERROR not an alias: it has no word with a letter other than an article"),
+        (
+            ("location", "the vans", "11"),
+            "ERROR not an alias: a vehicle word alone names another vehicle once there are two;"
+            " give the vehicle's name or number",
+        ),
+        (
+            ("part", "power supply 24v", "1"),
+            "ERROR not added: it is the name of part 2, which the matcher tries before any alias",
+        ),
+        (
+            ("part", "Power Supply 24V", "1"),
+            "ERROR not added: it is the name of part 2, which the matcher tries before any alias",
+        ),
+        (
+            ("location", "Main Stock", "10"),
+            "ERROR not added: it is the name of location 11, which the matcher tries before any alias",
+        ),
+        (
+            ("location", "Shelf A", "10"),
+            "ERROR not added: it is the name of locations 12 and 13, which the matcher tries before any alias",
+        ),
+    ],
+)
+def test_the_command_refuses_an_alias_that_would_be_wrong_or_never_used(
+    store: Store,
+    config: Path,
+    inventree: list[int],
+    capsys: pytest.CaptureFixture[str],
+    args: tuple[str, ...],
+    error: str,
+) -> None:
+    assert aliases(config, "add", *args, "--yes") == 1
+    assert capsys.readouterr().err == error + "\n"
+    assert store.stored_aliases() == ()
+
+
+def test_the_command_refuses_a_second_admin_alias_and_never_creates_a_database(
+    config: Path, tmp_path: Path, inventree: list[int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert aliases(config, "add", "part", "my psu", "2", "--yes") == 1  # the text is refused before anything is read
+    assert aliases(config, "add", "part", "psu", "2", "--yes") == 2
+    assert not (tmp_path / "stockthread.db").exists()
+    assert inventree == []  # the database is looked for before InvenTree is read
+    Store.open(tmp_path / "stockthread.db").close()
+    assert aliases(config, "add", "part", "psu", "2", "--yes") == 0
+    assert aliases(config, "add", "part", "PSU", "1") == 1  # refused in the dry run too
+    assert capsys.readouterr().err.endswith(
+        "ERROR not added: alias 1 already names this text; `stockthread aliases remove 1` first\n"
+    )
+
+
+def test_the_command_fails_with_2_when_inventree_cannot_be_read(
+    store: Store, config: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def loader(settings: object) -> Callable[[], Catalog]:
+        def read() -> Catalog:
+            raise InvenTreeError("the server answered 503")
+
+        return read
+
+    monkeypatch.setattr(cli, "inventree_catalog", loader)
+    assert aliases(config, "add", "part", "psu", "2", "--yes") == 2
+    assert capsys.readouterr().err == "ERROR the server answered 503\n"
+    assert store.stored_aliases() == ()
+
+
+def test_an_edit_of_a_post_never_forgets_an_alias_an_admin_typed(store: Store) -> None:
+    verify(store)
+    store.add_alias(PART, "ubiquity psu", 2)
+    store.note_revision(OWNER, POST, slack_event_id=None)
+    assert store.aliases(PART) == (Alias("ubiquity psu", 2),)

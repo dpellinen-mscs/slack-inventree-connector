@@ -16,8 +16,9 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from stockthread.alias_admin import unmatchable
 from stockthread.core.matching import Catalog
-from stockthread.store import AliasKind, StoredAlias
+from stockthread.store import StoredAlias
 
 MINIMUM_ROLES: Mapping[str, frozenset[str]] = {
     "part": frozenset({"view"}),
@@ -165,27 +166,11 @@ def check_posters(posters: Sequence[str] | None, vehicles: Collection[str]) -> l
 def check_aliases(catalog: Catalog, aliases: Sequence[StoredAlias]) -> list[Finding]:
     """Each stored alias whose part or location cannot be matched now: the matcher ignores it
     (`matching.stale_aliases`), so its words are asked about again. A warning, with the id to remove it by."""
-    parts = {part.pk: part for part in catalog.parts}
-    locations = {location.pk: location for location in catalog.locations}
     found = []
     for alias in aliases:
-        if alias.kind is AliasKind.PART:
-            part = parts.get(alias.record)
-            if part is not None and part.active and not part.template and not part.virtual:
-                continue
-            if part is None or not part.active:
-                why = "is not an active part in InvenTree (made inactive, or deleted)"
-            else:
-                why = f"is a {'template' if part.template else 'virtual'} part (it holds no stock)"
-        else:
-            location = locations.get(alias.record)
-            if location is not None and not location.structural:
-                continue
-            why = (
-                "is a structural location (it cannot hold stock)"
-                if location
-                else "is not a stock location in InvenTree"
-            )
+        why = unmatchable(catalog, alias.kind, alias.record)
+        if why is None:
+            continue
         found.append(
             Finding(
                 Level.WARN,
