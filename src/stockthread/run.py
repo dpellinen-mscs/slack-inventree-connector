@@ -45,6 +45,7 @@ from stockthread.setup_check import (
     Level,
     check_aliases,
     check_default_sources,
+    check_policy,
     check_posters,
     check_roles,
     check_vehicles,
@@ -462,6 +463,9 @@ def check_setup(settings: Settings) -> list[Finding]:
             )
 
     return [
+        *check_policy(
+            writes=settings.writes.enabled, approvers=settings.slack.approvers, auto_apply=settings.policy.auto_apply
+        ),
         *asyncio.run(read()),
         *check_posters(posters_seen(settings.storage.database), settings.vehicles),
         *unread,
