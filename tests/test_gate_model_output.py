@@ -331,3 +331,92 @@ def test_an_answer_that_leaves_out_a_stated_source_is_never_approved_by_the_poli
     if output is None:
         pytest.skip("the recorded answer names no source")
     assert verdict(migrated, tmp_path / "stockthread.db", case, output) is not Verdict.ALLOWED
+
+
+def _line(quantity: int) -> dict[str, Any]:
+    return {"item_text": "Disc 40", "quantity": quantity, "unit": None, "pack_size": None, "serials": []}
+
+
+def _take(quantity: int, source: str, destination: str) -> dict[str, Any]:
+    return {
+        "movement_type": "take_to_vehicle" if destination == "truck 1" else "take_to_site",
+        "line_items": [_line(quantity)],
+        "source_text": source,
+        "destination_text": destination,
+        "flags": [],
+    }
+
+
+def _expected(quantity: int, source: str, from_path: str, destination: str, to_path: str) -> dict[str, Any]:
+    line = {**_line(quantity), "match": {"status": "matched", "part": "AP-NV-D40"}}
+    return {
+        **_take(quantity, source, destination),
+        "line_items": [line],
+        "source_match": {"status": "matched", "location": from_path},
+        "destination_match": {"status": "matched", "location": to_path},
+    }
+
+
+SAM = "U0SAM0001"
+"""Truck 1 is Sam's vehicle."""
+TWO_TAKES = {
+    "id": "synthetic-two-takes",
+    "post": {
+        "channel": CHANNELS[0],
+        "user": SAM,
+        "messages": [
+            {"ts": "1790009000.000100", "user": SAM, "text": "took 2 Disc 40 from main stock to truck 1"},
+            {"ts": "1790009001.000100", "user": SAM, "text": "took 4 Disc 40 from receiving to smith residence"},
+        ],
+    },
+    "expected": {
+        "movements": [
+            _expected(2, "main stock", "Warehouse/Main Stock", "truck 1", "Vehicles/Truck 1"),
+            _expected(4, "receiving", "Warehouse/Receiving", "smith residence", "Job Sites/Smith Residence"),
+        ]
+    },
+}
+"""Two sibling messages, each a whole take-out (#200)."""
+
+
+def test_the_two_takes_read_apart_are_approved_by_the_policy(migrated: Path, tmp_path: Path) -> None:
+    """The harness can approve this post: the mixed answers below are judged against a plan that could apply."""
+    movements = [_take(2, "main stock", "truck 1"), _take(4, "receiving", "smith residence")]
+    output = {"readable": True, "movements": movements, "post_flags": []}
+    assert verdict(migrated, tmp_path / "stockthread.db", TWO_TAKES, output) is Verdict.ALLOWED
+
+
+@pytest.mark.parametrize(
+    ("quantity", "source", "destination"),
+    [
+        (4, "main stock", "truck 1"),
+        (2, "main stock", "smith residence"),
+        (2, "receiving", "smith residence"),
+        (4, "main stock", "smith residence"),
+        (4, "receiving", "truck 1"),
+    ],
+)
+def test_one_take_mixed_from_two_is_never_approved_by_the_policy(
+    migrated: Path, tmp_path: Path, quantity: int, source: str, destination: str
+) -> None:
+    """Every field is in the post, but no message holds them together: a movement nobody typed (#200)."""
+    output = {"readable": True, "movements": [_take(quantity, source, destination)], "post_flags": []}
+    assert verdict(migrated, tmp_path / "stockthread.db", TWO_TAKES, output) is not Verdict.ALLOWED
+
+
+def test_a_take_mixed_with_a_rival_sentence_is_never_approved_by_the_policy(migrated: Path, tmp_path: Path) -> None:
+    """The rival sentence names no place with "from" or "to"; only its number shows it is another movement."""
+    text = "took 2 Disc 40 from main stock to truck 1. then 4 Disc 40 for the smith job"
+    case = {
+        **TWO_TAKES,
+        "id": "synthetic-rival-sentence",
+        "post": {
+            "channel": CHANNELS[0],
+            "user": SAM,
+            "messages": [{"ts": "1790009002.000100", "user": SAM, "text": text}],
+        },
+    }
+    read_apart = {"readable": True, "movements": [_take(2, "main stock", "truck 1")], "post_flags": []}
+    assert verdict(migrated, tmp_path / "apart.db", case, read_apart) is Verdict.ALLOWED
+    output = {"readable": True, "movements": [_take(4, "main stock", "truck 1")], "post_flags": []}
+    assert verdict(migrated, tmp_path / "stockthread.db", case, output) is not Verdict.ALLOWED
