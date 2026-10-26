@@ -152,6 +152,7 @@ turn them on again in *Event Subscriptions*; catch-up reads what was missed, wit
 
 ## Project documents
 
+- [Architecture](docs/architecture.md): how a post becomes a stock change, and where each step lives
 - [Design](docs/design.md): pipeline, architecture options, safety model
 - [Threat model](docs/threat-model.md): what can go wrong, and which control answers it
 - [Security policy](SECURITY.md): how to report a vulnerability privately
