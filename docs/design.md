@@ -2082,6 +2082,15 @@ the test suite.
 | `test_char_transfer_merge_setting_on` | The server-wide merge setting does not merge a line that omits `merge` or sends `false`; only `merge: true` merges (1.5.6) |
 | `test_char_stock_list_cascade_false` | A stock list with `cascade=false` leaves out sub-locations |
 | `test_char_error_body_format` | The shape of a 4xx answer from InvenTree, which recovery uses to tell it from a proxy |
+| `test_char_history_deltas` | Each request the connector builds writes the history entries the read-back expects, and the totals add up |
+| `test_char_a_write_that_empties_an_item` | A remove of all an item holds, or a count to 0: with delete on deplete, the entry has no item and below API 530 the marker search misses it; without, the item holds 0 with its entry |
+| `test_char_a_later_split_does_not_copy_the_marked_entry` | A split of a marked item after the write leaves the marker on the item it was written to only |
+| `test_char_depleted_items_are_read` | An item emptied and kept is left out by the `in_stock` filter and given by `depleted`, so a receive or a count can target it |
+| `test_char_a_depleted_item_not_in_stock_is_no_target` | An emptied item then marked lost or sent to a customer is given by `depleted` but is not in stock: it is no target |
+| `test_char_failure_before_forward_writes_nothing` | A request that never reached the server changed nothing and left no marker (the control case of the fault proxy) |
+| `test_char_roles_endpoint_shows_the_minimum_as_the_setup_check_reads_it` | `GET /api/user/roles/` names each role with its permissions, or null for none, as the setup check reads it |
+| `test_char_user_without_part_view_cannot_read_the_catalog` | Without view on Part, `GET /api/part/` answers 403 and the roles say so |
+| `test_char_the_quickstarts_read_only_token_passes_while_writes_are_off` | The quickstart's read-only token shows stock as view only: enough with writes off, not with writes on |
 
 Two Slack claims need a capture from a real workspace before the fixtures
 are frozen: a photo with a caption arrives as one message, and the app
