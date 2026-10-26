@@ -93,6 +93,8 @@ def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
 
 DETAIL_SOURCE_LEFT_OUT = 'the text has "from", "off", "out of" or an arrow, but no source was read'
 """The detail of the implied source a text that names one raises: a default source never settles it (ADR 0020)."""
+DETAIL_OTHER_AUTHOR = "a message in the post is by someone else"
+"""ACTOR_NOT_POSTER for a post whose messages are not all the poster's: its "my truck" is read as the poster's."""
 DETAIL_NOT_A_COUNT = "a unit other than a count"
 """The detail of the reason a line in feet, metres or any unit but a count raises."""
 DETAIL_UNIT_IN_ITEM = "the item starts with a unit word"
