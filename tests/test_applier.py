@@ -701,9 +701,11 @@ def test_only_the_lock_holder_records_a_receipt(store: Store) -> None:
 
 
 def drop_aliases(db: sqlite3.Connection) -> None:
-    """Undo migrations 0022 and 0021, the ones after the schema a test goes back to."""
+    """Undo migrations 0023, 0022 and 0021, the ones after the schema a test goes back to."""
     db.execute("DROP TABLE apply_buttons")
     db.execute("DROP TABLE aliases")
+    db.execute("ALTER TABLE audit_log DROP COLUMN alias_record")
+    db.execute("ALTER TABLE audit_log DROP COLUMN alias_kind")
     db.execute("ALTER TABLE audit_log DROP COLUMN alias_id")
 
 

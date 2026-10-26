@@ -354,20 +354,23 @@ def test_the_command_lists_exports_and_removes(store: Store, config: Path, capsy
 def test_the_command_reads_but_never_creates_or_migrates(
     config: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    for action in ("list",), ("export",), ("remove", "1"):
+    for action in ("list",), ("export",), ("history",), ("remove", "1"):
         assert aliases(config, *action) == 2
     assert not (tmp_path / "stockthread.db").exists()
     Store.open(tmp_path / "stockthread.db").close()
     raw = sqlite3.connect(tmp_path / "stockthread.db", isolation_level=None)
     raw.execute("DROP TABLE apply_buttons")  # back to schema 20, which `Store.open` would migrate
     raw.execute("DROP TABLE aliases")
+    raw.execute("ALTER TABLE audit_log DROP COLUMN alias_record")
+    raw.execute("ALTER TABLE audit_log DROP COLUMN alias_kind")
     raw.execute("ALTER TABLE audit_log DROP COLUMN alias_id")
     raw.execute("PRAGMA user_version = 20")
     assert aliases(config, "remove", "1") == 2
+    assert aliases(config, "history") == 2  # before 0023 there is no alias_kind to read
     assert raw.execute("PRAGMA user_version").fetchone() == (20,)  # still not migrated
     assert raw.execute("SELECT count(*) FROM sqlite_schema WHERE name = 'aliases'").fetchone() == (0,)
     raw.close()
-    assert capsys.readouterr().err.count("ERROR ") == 4
+    assert capsys.readouterr().err.count("ERROR ") == 6
     assert cli.main(["aliases"]) == 0
     assert "list" in capsys.readouterr().out
 
@@ -403,8 +406,10 @@ def test_an_edit_of_a_post_forgets_every_alias_it_taught_and_no_other(store: Sto
     store.note_revision(OWNER, POST, slack_event_id=None)
     assert [alias.text for alias in store.stored_aliases()] == ["disc 60"]
     with sqlite3.connect(tmp_path / "stockthread.db") as raw:
-        events = raw.execute("SELECT actor FROM audit_log WHERE event = 'alias_forgotten'").fetchall()
-    assert events == [("ingest",), ("ingest",)]
+        events = raw.execute(
+            "SELECT actor, alias_kind, alias_record FROM audit_log WHERE event = 'alias_forgotten'"
+        ).fetchall()
+    assert events == [("ingest", "part", 1), ("ingest", "location", 11)]
 
 
 def test_no_alias_is_learned_from_a_reading_an_edit_came_after(store: Store) -> None:
@@ -434,16 +439,46 @@ def test_an_admin_adds_an_alias_that_replaces_a_learned_one_and_is_audited(store
     assert store.aliases(PART) == (Alias("patch cables", 2),)
     with sqlite3.connect(tmp_path / "stockthread.db") as raw:
         events = raw.execute(
-            "SELECT actor, event, alias_id, request_id IS NOT NULL FROM audit_log"
+            "SELECT actor, event, alias_id, alias_kind, alias_record, request_id IS NOT NULL FROM audit_log"
             " WHERE alias_id IS NOT NULL ORDER BY id"
         ).fetchall()
     assert events == [
-        ("applier", "alias_learned", 1, True),
-        ("admin", "alias_replaced", 1, True),
-        ("admin", "alias_added", added.id, False),
+        ("applier", "alias_learned", 1, "part", 1, True),
+        ("admin", "alias_replaced", 1, "part", 1, True),
+        ("admin", "alias_added", added.id, "part", 2, False),
     ]
     store.learn_alias(OWNER, PART, "patch cable", 1, rivals=[1], learned_from=KEY, read_through=0)
     assert store.aliases(PART) == (Alias("patch cables", 2),)  # no confirmation takes it over
+
+
+def test_the_history_keeps_the_record_each_alias_stood_for_after_it_is_gone(
+    store: Store, config: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#192: an admin alias has no request to trace it by, and a removed alias's row is deleted, so the audit log
+    keeps the kind and record of every alias event, and never the text (migration 0001: ids and codes only)."""
+    verify(store)
+    store.learn_alias(OWNER, PART, "patch cable", 1, rivals=[1], learned_from=KEY, read_through=0)
+    store.learn_alias(OWNER, PART, "patch cable", 3, rivals=[3], learned_from=KEY, read_through=0)  # re-learned
+    typed = store.add_alias(LOCATION, "back room", 11)
+    store.remove_alias(typed.id)
+    with sqlite3.connect(tmp_path / "stockthread.db") as raw:  # a row from before migration 0023
+        raw.execute(
+            "INSERT INTO audit_log (at, actor, event, alias_id) VALUES ('2026-01-01', 'admin', 'alias_removed', 9)"
+        )
+    assert [(e.event, e.alias_id, e.kind, e.record, e.post) for e in store.alias_events()] == [
+        ("alias_learned", 1, PART, 1, POST),
+        ("alias_learned", 1, PART, 3, POST),
+        ("alias_added", typed.id, LOCATION, 11, None),
+        ("alias_removed", typed.id, LOCATION, 11, None),
+        ("alias_removed", 9, None, None, None),
+    ]
+    assert aliases(config, "history") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].endswith("  applier  alias_learned    alias 1: part 1, post C0STOCK 1727600000.000100")
+    assert out[1].endswith("alias 1: part 3, post C0STOCK 1727600000.000100")
+    assert out[3].endswith(f"  admin    alias_removed    alias {typed.id}: location 11")
+    assert out[4] == "2026-01-01  admin    alias_removed    alias 9: record not logged"
+    assert "back room" not in "\n".join(out)  # text lives only in the aliases table
 
 
 def test_an_admin_alias_never_replaces_another_admin_alias_or_a_per_user_one(store: Store) -> None:

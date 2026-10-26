@@ -114,7 +114,8 @@ What to expect in this version:
 - `.venv/bin/stockthread aliases list` prints the confirmed aliases ("disc 40" means part 12), each
   with its id and the post it was learned from; `aliases export` prints them as JSON, for a backup.
   `aliases remove <id>` forgets one, also while the connector runs: posts read after that are
-  matched as if it had never been learned. Removals are in the audit log.
+  matched as if it had never been learned. `aliases history` prints every time an alias was learned,
+  added, replaced, forgotten or removed, with the part or location it stood for, also after it is gone.
 - A pick among several parts teaches nothing, so a word your team always means one way ("ubiquity
   psu" for one power supply) asks every time until you add it by hand:
   `.venv/bin/stockthread aliases add part 'ubiquity psu' 57`, where 57 is the id in the part's

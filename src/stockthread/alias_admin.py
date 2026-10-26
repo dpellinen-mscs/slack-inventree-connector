@@ -15,7 +15,7 @@ from stockthread.core.matching import Catalog, location_rivals, match_location, 
 from stockthread.core.model import MatchRule, MatchStatus
 from stockthread.learning import ARTICLES, DEICTIC, VEHICLE_WORDS
 from stockthread.printable import printable
-from stockthread.store import AliasKind, StoredAlias
+from stockthread.store import AliasEvent, AliasKind, StoredAlias
 
 EXPORT_FORMAT = "stockthread-aliases"
 EXPORT_VERSION = 1
@@ -50,6 +50,20 @@ def alias_lines(aliases: Sequence[StoredAlias]) -> list[str]:
     lines.append(
         "`stockthread trail <channel> <ts>` shows a post's trail; `stockthread aliases remove <id>` forgets one"
     )
+    return lines
+
+
+def history_lines(events: Sequence[AliasEvent]) -> list[str]:
+    """The lines of `stockthread aliases history`: every audit row of an alias, oldest first, with the record it
+    stood for (#192), so the log says which record a text matched to also after the alias is gone."""
+    if not events:
+        return ["no alias was ever learned, added or removed"]
+    lines = []
+    for event in events:
+        stood = "record not logged" if event.kind is None else f"{event.kind.value} {event.record}"
+        post = "" if event.post is None else f", post {event.post.channel_id} {event.post.ts}"
+        lines.append(f"{event.at}  {event.actor:<7}  {event.event:<15}  alias {event.alias_id}: {stood}{post}")
+    lines.append("`stockthread aliases list` shows each alias's text while it stands")
     return lines
 
 

@@ -1818,7 +1818,10 @@ and keep rows that carry a key from being deleted. The first migration
 holds the tables of section 7; the others arrive with their features
 ([ADR 0009](decisions/0009-audit-store.md)). The log holds ids and never message text, so it can
 stay complete when retention removes text elsewhere. Retention of text is
-configurable, and expiry replaces the text while keeping the row.
+configurable, and expiry replaces the text while keeping the row. Each
+alias row of the log also holds the alias's kind and record id (migration
+0023), so `stockthread aliases history` can say which record a text
+matched to after the alias is removed; its text is only in `aliases`.
 
 An operator can answer three questions from the trail: what did the
 connector see, why did it decide what it decided, and what exactly did it

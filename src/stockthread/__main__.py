@@ -15,6 +15,7 @@ from stockthread.alias_admin import (
     alias_lines,
     describe,
     export,
+    history_lines,
     named,
     quoted,
     refused,
@@ -76,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("STOCKTHREAD_CONFIG", DEFAULT_CONFIG)),
         help=f"settings file (default: $STOCKTHREAD_CONFIG or {DEFAULT_CONFIG})",
     )
-    aliases = commands.add_parser("aliases", help="list, export, add or remove aliases (reads the database)")
+    aliases = commands.add_parser("aliases", help="list, export, add or remove aliases, or show their history")
     alias_actions = aliases.add_subparsers(dest="action")
     config = argparse.ArgumentParser(add_help=False)
     config.add_argument(
@@ -87,6 +88,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     alias_actions.add_parser("list", parents=[config], help="print every alias, and the post it was learned from")
     alias_actions.add_parser("export", parents=[config], help="print every alias as JSON")
+    alias_actions.add_parser(
+        "history", parents=[config], help="print when each alias was learned, added or removed, and its record"
+    )
     remove = alias_actions.add_parser(
         "remove", parents=[config], help="forget aliases: the next post is matched as if they were never learned"
     )
@@ -207,7 +211,8 @@ def trail_command(path: Path, reference: str, ts: str | None, *, text: bool) -> 
 
 
 def aliases_command(path: Path, action: str, ids: list[int]) -> int:
-    """List, export or remove aliases; 1 when an id names no alias, 2 when the database cannot be read."""
+    """List, export or remove aliases, or show their history; 1 when an id names no alias, 2 when the database
+    cannot be read."""
     try:
         settings = load_settings(path, os.environ)
     except ConfigError as exc:
@@ -228,6 +233,9 @@ def aliases_command(path: Path, action: str, ids: list[int]) -> int:
             return 0
         if action == "export":
             print(json.dumps(export(store.stored_aliases()), indent=2))  # ASCII: Slack text is escaped
+            return 0
+        if action == "history":
+            print("\n".join(history_lines(store.alias_events())))
             return 0
         missing = False
         for alias_id in ids:
