@@ -52,6 +52,8 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Added
 
+- `docs/architecture.md`: the process, the life of a post module by module, a map of every module and the
+  rules the layout keeps; a test checks the map against `src/` and the rules against the code.
 - `docs/configuration.md`: every setting with its default, the secrets and the rules across settings; a test
   keeps it in step with the code.
 - Eval corpus 0.3.0: learned aliases in `catalog/aliases.json` carry `rivals`, and the corpus covers them (one
