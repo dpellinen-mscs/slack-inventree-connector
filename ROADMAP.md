@@ -214,7 +214,7 @@ an inactive part or a deleted location is ignored and reported.
 
 - [ ] Full documentation: README, quickstart, configuration reference, architecture, operations, troubleshooting (all six written, architecture on 2026-10-26; the quickstart's live step 7 waits on #182)
 - [ ] Threat model, final version, and security review, including prompt injection through message text
-- [ ] A 24-hour run on small hardware with forced disconnects
+- [ ] A 24-hour run on small hardware with forced disconnects (Socket Mode link faults tested end to end, #212; the soak harness `tests/soak/soak.py`, #213; the 24-hour run itself is next)
 - [x] Upgrade and backup notes for the audit store ([operations](docs/operations.md))
 - [x] Supported version matrix for InvenTree and Slack transports ([versions](docs/versions.md), checked against CI)
 - [ ] Prepublication audit: full-history leak scan, license headers, docs check, private vulnerability reporting on
