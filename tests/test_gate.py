@@ -37,6 +37,8 @@ SAMS_TRUCK = 11
 MIKES_VAN = 12
 VEHICLES = frozenset({SAMS_TRUCK, MIKES_VAN})
 SITE = 14
+"""The destination `view` matches for a take to a site by default: a location under `locations.sites`."""
+SITES = frozenset({SITE, 15})
 TAKE_OUTS = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
 CONFIRMED = (MovementType.RETURN, MovementType.RECEIVE, MovementType.TRANSFER, MovementType.CONSUME, MovementType.COUNT)
 
@@ -48,17 +50,18 @@ def matched(pk: int, rule: MatchRule = MatchRule.EXACT) -> Match:
 def view(movement_type: MovementType = MovementType.TAKE_TO_VEHICLE, **fields: Any) -> MovementView:
     has_source = movement_type not in (MovementType.RECEIVE, MovementType.COUNT)
     has_destination = movement_type is not MovementType.CONSUME
+    to_site = movement_type is MovementType.TAKE_TO_SITE
     movement = CandidateMovement(
         movement_type,
         (LineItem("Disc 40", Decimal(2)),),
         "main stock" if has_source else None,
-        "my truck" if has_destination else None,
+        ("the Smith job" if to_site else "my truck") if has_destination else None,
     )
     values: dict[str, Any] = {
         "movement": movement,
         "items": (matched(1),),
         "source": matched(10) if has_source else None,
-        "destination": matched(11) if has_destination else None,
+        "destination": matched(SITE if to_site else 11) if has_destination else None,
         "reasons": (),
         "stock": (SourcePick((Take(57, Decimal(2)),)),),
     }
@@ -78,6 +81,7 @@ def run(views: list[MovementView], policy: Policy = ON, **given: Any) -> Any:
         "rejected": False,
         "poster_vehicle": SAMS_TRUCK,
         "vehicles": VEHICLES,
+        "sites": SITES,
         **given,
     }
     return judge(views, markers(len(views)), policy, **arguments)
@@ -277,7 +281,7 @@ def test_automatic_apply_is_stricter_than_apply(loose: MovementView, why: str, g
 @pytest.mark.parametrize("rule", [MatchRule.EXACT, MatchRule.NORMALIZED, MatchRule.ALIAS])
 def test_parts_and_sites_by_exact_normalized_or_alias_rules_apply_automatically(rule: MatchRule) -> None:
     clear = view(
-        MovementType.TAKE_TO_SITE, items=(matched(1, rule),), source=matched(10, rule), destination=matched(11, rule)
+        MovementType.TAKE_TO_SITE, items=(matched(1, rule),), source=matched(10, rule), destination=matched(SITE, rule)
     )
     assert run([clear]).allowed
 
@@ -307,7 +311,41 @@ def test_a_take_to_a_site_from_the_posters_vehicle_or_a_vehicle_by_its_exact_nam
 def test_a_place_that_is_no_mapped_vehicle_needs_no_vehicle_rule() -> None:
     """A site or shelf found by a learned alias, as the source or destination of a take to a site, needs no click."""
     assert run([view(MovementType.TAKE_TO_SITE, source=matched(13, MatchRule.ALIAS))]).allowed
-    assert run([view(MovementType.TAKE_TO_SITE, destination=matched(13, MatchRule.ALIAS))]).allowed
+    assert run([view(MovementType.TAKE_TO_SITE, destination=matched(SITE, MatchRule.ALIAS))]).allowed
+
+
+@pytest.mark.parametrize(
+    ("destination", "given"),
+    [
+        (matched(16), {}),  # a shelf: a return read as a take to a site (#199)
+        (matched(13), {}),  # a location under no site
+        (matched(SITE), {"sites": frozenset()}),  # `locations.sites` unset
+        (matched(SITE), {"sites": frozenset({15})}),  # moved out of its site folder since the dry run
+    ],
+    ids=["a shelf", "under no site", "no sites set", "no longer a site"],
+)
+def test_a_take_to_a_site_whose_destination_is_not_under_a_site_now_waits_for_apply(
+    destination: Match, given: dict[str, Any]
+) -> None:
+    """ADR 0022: the policy approves a take to a site only to a location under `locations.sites` now."""
+    take = view(MovementType.TAKE_TO_SITE, destination=destination)
+    judgement = run([take], **given)
+    assert judgement.verdict is Verdict.WAITS
+    assert judgement.why == "movement 1: its destination is not under a site in locations.sites"
+    assert run([take], clicked_by=LUIS, **given).allowed  # an approver may still apply it
+
+
+def test_sites_never_matter_for_a_take_to_a_vehicle() -> None:
+    assert run([view()], sites=frozenset()).allowed
+    assert run([view(destination=matched(SITE))], sites=frozenset()).allowed  # a vehicle found by its exact name
+
+
+def test_the_sites_default_to_none_so_a_take_to_a_site_waits() -> None:
+    take = view(MovementType.TAKE_TO_SITE)
+    judgement = judge(
+        [take], markers(), ON, poster=SAM, answered=False, rejected=False, poster_vehicle=SAMS_TRUCK, vehicles=VEHICLES
+    )
+    assert judgement.verdict is Verdict.WAITS
 
 
 MAIN = 10

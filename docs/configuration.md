@@ -53,6 +53,7 @@ Settings are checked once, at startup:
 | `policy.auto_apply` | `["take_to_vehicle", "take_to_site"]` | Movement types that apply with no click when nothing is in doubt ([ADR 0004](decisions/0004-default-write-policy.md)). Every other type waits for Apply. `[]` makes every movement review-first. A type beyond the two shipped take-outs makes `check-setup` warn. Allowed: `take_to_vehicle`, `take_to_site`, `return`, `transfer`, `receive`, `consume`, `count`. |
 | `policy.max_quantity` | `100` | A larger quantity on a line is a review reason. |
 | `policy.default_source` | `{}` | A default source location per movement type. Unset, an implied source ("2 Disc 40 on my truck") is a review reason. |
+| `locations.sites` | `[]` | The whole paths of the stock locations that are sites, such as `["Sites"]`; a structural folder counts, and so does every location under it. A `take_to_site` applies with no click only when its destination is one of them ([ADR 0022](decisions/0022-sites-for-take-to-site.md)). Empty means every take to a site waits for Apply (`check-setup` warns with writes on). |
 | `apply.settle_seconds` | `120` | How long a write whose outcome is unknown waits before recovery looks for it. It must be longer than `inventree.timeout_seconds`. |
 | `undo.max_age_hours` | `168` | An Undo is refused after this long from when the write was made (7 days). |
 | `storage.database` | `"stockthread.db"` | The SQLite database file, created readable by its owner only. A relative path is taken from the directory the connector is started in ([operations](operations.md)). |
@@ -70,7 +71,7 @@ Settings are checked once, at startup:
 - `storage.retention_days`, in hours, must be longer than
   `slack.plan_expiry_hours`, `slack.catch_up_hours` and
   `undo.max_age_hours`.
-- `policy.auto_apply` may not list a movement type twice.
+- `policy.auto_apply` may not list a movement type twice, and `locations.sites` may not list a path twice.
 - With an `[llm]` section, `llm.base_url` is the base URL, without
   `/chat/completions`, credentials or a query, and `LLM_API_KEY` is sent
   only over https or to a server on this machine.

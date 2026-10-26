@@ -130,6 +130,19 @@ class PolicySettings(_Section):
         return value
 
 
+class LocationSettings(_Section):
+    sites: tuple[LocationPath, ...] = Field(default=(), strict=False)
+    """Paths of the stock locations that are sites, such as "Sites": a take to a site applies with no click only when
+    its destination is one of them or under one (ADR 0022). Unset means every take to a site waits for Apply."""
+
+    @field_validator("sites")
+    @classmethod
+    def _no_duplicates(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("lists a path twice")
+        return value
+
+
 class ApplySettings(_Section):
     settle_seconds: int = Field(default=120, ge=1)
     """How long an unknown outcome is quarantined before recovery looks at it."""
@@ -172,6 +185,7 @@ class Settings(_Section):
     inventree: InvenTreeSettings
     writes: WriteSettings = WriteSettings()
     policy: PolicySettings = PolicySettings()
+    locations: LocationSettings = LocationSettings()
     apply: ApplySettings = ApplySettings()
     undo: UndoSettings = UndoSettings()
     storage: StorageSettings = StorageSettings()

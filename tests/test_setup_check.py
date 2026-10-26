@@ -31,6 +31,7 @@ from stockthread.setup_check import (
     check_policy,
     check_posters,
     check_roles,
+    check_sites,
     check_vehicles,
     exit_code,
 )
@@ -216,7 +217,7 @@ def anyio_backend() -> str:
 
 
 ROOT = {"server": "InvenTree", "version": "1.5.6", "apiVersion": 530}
-LOCATIONS = [{"pk": 10, "pathstring": "Vehicles/Sam", "description": "", "structural": False}]
+LOCATIONS = [{"pk": 10, "pathstring": "Vehicles/Sam", "description": "", "structural": False, "parent": None}]
 
 
 def inventree(roles: dict[str, Any], forbidden: frozenset[str] = frozenset()) -> tuple[InvenTreeReader, list[str]]:
@@ -251,7 +252,10 @@ async def test_a_missing_catalog_view_prints_the_roles_error_and_skips_the_catal
         findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
     assert [(f.level, f.text) for f in findings[1:]] == [
         (Level.ERROR, "roles: part lacks view, needed for dry runs (the catalog cannot be read)"),
-        (Level.WARN, "vehicles and aliases: not checked until part and stock_location have view"),
+        (
+            Level.WARN,
+            "location paths and aliases: not checked until part and stock_location have view",
+        ),
     ]
     assert "/api/part/" not in asked
     assert exit_code(findings) == 1
@@ -263,7 +267,7 @@ async def test_a_catalog_refused_despite_the_roles_is_an_error_and_the_roles_sti
     async with client:
         findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
     assert levels(findings) == [Level.OK, Level.OK, Level.ERROR]
-    assert findings[2].text.startswith("vehicles and aliases: not checked, the catalog could not be read: ")
+    assert findings[2].text.startswith("location paths and aliases: not checked, the catalog could not be read: ")
 
 
 @pytest.mark.anyio
@@ -416,7 +420,7 @@ def test_with_writes_off_the_policy_has_nothing_to_say() -> None:
 
 def test_writes_on_with_no_approvers_warns_that_the_policy_still_writes() -> None:
     """Threat model T17: nobody can click Apply and only the poster can Undo, yet clear take-outs still apply."""
-    assert check_policy(writes=True, approvers=(), auto_apply=TAKE_OUTS) == [
+    assert check_policy(writes=True, approvers=(), auto_apply=TAKE_OUTS, sites=("Sites",)) == [
         Finding(
             Level.WARN,
             "approvers: none in slack.approvers, so nobody can click Apply or answer for an approver, and only"
@@ -428,14 +432,68 @@ def test_writes_on_with_no_approvers_warns_that_the_policy_still_writes() -> Non
 
 
 def test_an_auto_apply_beyond_the_take_outs_warns() -> None:
-    assert check_policy(writes=True, approvers=("U0DAN0001", "U0DAN0001"), auto_apply=TAKE_OUTS) == [
+    assert check_policy(writes=True, approvers=("U0DAN0001", "U0DAN0001"), auto_apply=TAKE_OUTS, sites=("Sites",)) == [
         Finding(Level.OK, "approvers: 1 may click Apply, and Undo on any post")
     ]
     assert check_policy(
-        writes=True, approvers=("U0DAN0001",), auto_apply=(MovementType.TAKE_TO_SITE, MovementType.RETURN)
+        writes=True,
+        approvers=("U0DAN0001",),
+        auto_apply=(MovementType.TAKE_TO_SITE, MovementType.RETURN),
+        sites=("Sites",),
     )[1:] == [
         Finding(Level.WARN, "policy: auto_apply has return, beyond the shipped take-outs: those apply with no click")
     ]
+
+
+SITES_UNSET = Finding(
+    Level.WARN,
+    "policy: auto_apply has take_to_site, but locations.sites is unset, so every take to a site waits for Apply",
+)
+
+
+def test_a_take_to_a_site_in_auto_apply_with_no_sites_warns() -> None:
+    """ADR 0022: with no sites, the shipped policy never writes a take to a site with no click."""
+    assert check_policy(writes=True, approvers=("U0DAN0001",), auto_apply=TAKE_OUTS)[1:] == [SITES_UNSET]
+    assert check_policy(writes=True, approvers=("U0DAN0001",), auto_apply=TAKE_OUTS, sites=("Sites",))[1:] == []
+    without = (MovementType.TAKE_TO_VEHICLE,)
+    assert check_policy(writes=True, approvers=("U0DAN0001",), auto_apply=without)[1:] == []
+    assert check_policy(writes=False, approvers=(), auto_apply=TAKE_OUTS) == []
+
+
+SITE_CATALOG = Catalog(
+    parts=(),
+    locations=(
+        LocationRecord(1, "Sites", structural=True),
+        LocationRecord(2, "Sites/Smith job", parent=1),
+        LocationRecord(3, "Twice"),
+        LocationRecord(4, "Twice"),
+    ),
+)
+
+
+def test_each_site_path_must_name_one_location_and_a_folder_counts() -> None:
+    assert check_sites(SITE_CATALOG, ["Sites", "Sites/Smith job"]) == [
+        Finding(Level.OK, "locations.sites: every one of the 2 paths is a stock location")
+    ]
+    assert check_sites(SITE_CATALOG, ["Twice", "sites", "Sites"]) == [
+        Finding(Level.ERROR, 'locations.sites: "Twice" names more than one stock location'),
+        Finding(
+            Level.ERROR,
+            'locations.sites: "sites" is not the whole path of any stock location (paths match letter for letter)',
+        ),
+    ]
+    assert check_sites(SITE_CATALOG, []) == []
+
+
+@pytest.mark.anyio
+async def test_a_readable_catalog_checks_the_site_paths() -> None:
+    client, _ = inventree(MINIMUM)
+    async with client:
+        findings = await inventree_findings(client, {}, writes=True, sites=["Vehicles/Sam", "Sites"])
+    assert findings[-1] == Finding(
+        Level.ERROR,
+        'locations.sites: "Sites" is not the whole path of any stock location (paths match letter for letter)',
+    )
 
 
 def test_the_shipped_take_outs_are_the_config_default() -> None:

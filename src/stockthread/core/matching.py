@@ -57,6 +57,8 @@ class LocationRecord:
     """Names from the root, joined with "/"."""
     description: str = ""
     structural: bool = False
+    parent: int | None = None
+    """The pk of the location this one is in; None at the root."""
 
     @property
     def name(self) -> str:
@@ -85,6 +87,8 @@ class Catalog:
     """Slack user id -> the location of the vehicle assigned to that user."""
     default_sources: dict[MovementType, int] = field(default_factory=dict)
     """Movement type -> the location `policy.default_source` names for it, for a movement that states no source."""
+    sites: frozenset[int] = frozenset()
+    """The locations `locations.sites` names, and every location under them."""
 
 
 def words(text: str) -> list[str]:

@@ -1106,7 +1106,9 @@ rule or a learned alias waits. This holds for the destination of a take
 to a vehicle and for any source or destination that is someone's mapped
 vehicle ("2 Disc 40 from Mike's van to the Smith job"). A vehicle no one
 is mapped to cannot be told from any other location when it is the
-source of a take to a site; map every vehicle in `[vehicles]`.
+source of a take to a site; map every vehicle in `[vehicles]`. A take to
+a site applies without a click only when its destination is under one of
+the `locations.sites` paths when judged (ADR 0022); unset, it waits.
 
 `applier.approve_by_policy` judges a post's current plan on the views
 rebuilt from its dry-run record (ADR 0016) and, when the policy may

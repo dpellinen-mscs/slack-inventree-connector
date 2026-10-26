@@ -14,9 +14,10 @@ Validation is `plan_requests`: a plan it refuses is blocked whole. The policy th
   found by the exact, normalized or alias rule, and a vehicle is the poster's mapped vehicle or was found by its
   exact location name (ADR 0004; a learned alias for a vehicle still waits). A vehicle is the destination of a take
   to a vehicle, or any source or destination that is someone's mapped vehicle; an unmapped vehicle a take to a site
-  starts from cannot be told from a shelf. A source the post does not state counts when it is the movement
-  type's `policy.default_source` both in the dry run and now. A model flag is a review reason and blocks before
-  this.
+  starts from cannot be told from a shelf. A take to a site also needs its destination under a site now
+  (`locations.sites`, ADR 0022): a return mislabelled as one would otherwise put stock back on a shelf unasked. A
+  source the post does not state counts when it is the movement type's `policy.default_source` both in the dry run
+  and now. A model flag is a review reason and blocks before this.
 """
 
 from __future__ import annotations
@@ -88,6 +89,7 @@ def judge(
     poster_vehicle: int | None,
     vehicles: Collection[int],
     default_sources: Mapping[MovementType, int] | None = None,
+    sites: Collection[int] = frozenset(),
     clicked_by: str | None = None,
 ) -> Judgement:
     """Judge one plan of a post.
@@ -96,7 +98,8 @@ def judge(
     then never automatic). This flag is the only safeguard for typed and stock answers: a typed name keeps the
     matcher's own rule, and a stock choice changes no match. `poster_vehicle`: the location of the vehicle
     mapped to the poster, if any. `vehicles`: the locations of every mapped vehicle. `default_sources`: each
-    movement type's default source now (`policy.default_source`). `rejected`: a "no" ended
+    movement type's default source now (`policy.default_source`). `sites`: the locations under a site now
+    (`Catalog.sites`). `rejected`: a "no" ended
     the plan. `clicked_by`: who clicked Apply on it, if anyone. The requests' notes name the approver, or the poster
     when the policy approved it.
     """
@@ -116,7 +119,13 @@ def judge(
         return Judgement(Verdict.ALLOWED, "approved by an approver", approver, requests)
     defaults = default_sources or {}
     if why := _not_automatic(
-        views, policy, answered=answered, poster_vehicle=poster_vehicle, vehicles=vehicles, defaults=defaults
+        views,
+        policy,
+        answered=answered,
+        poster_vehicle=poster_vehicle,
+        vehicles=vehicles,
+        defaults=defaults,
+        sites=sites,
     ):
         return Judgement(Verdict.WAITS, why)
     return Judgement(Verdict.ALLOWED, "approved by the policy", None, requests)
@@ -130,6 +139,7 @@ def _not_automatic(
     poster_vehicle: int | None,
     vehicles: Collection[int],
     defaults: Mapping[MovementType, int],
+    sites: Collection[int],
 ) -> str | None:
     """Why the policy may not approve this decided plan without a click, or None."""
     if answered:
@@ -156,6 +166,10 @@ def _not_automatic(
         ]
         if not all(_vehicle(match, poster_vehicle) for match in vehicle_places):
             return f"movement {number}: a vehicle is not the poster's mapped vehicle or found by its exact name"
+        if movement.movement_type is MovementType.TAKE_TO_SITE and (
+            view.destination is None or view.destination.record not in sites
+        ):
+            return f"movement {number}: its destination is not under a site in locations.sites"
     return None
 
 

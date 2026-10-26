@@ -31,7 +31,7 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 from stockthread import run as run_module
 from stockthread.__main__ import install_stop_handlers
 from stockthread.apply import Applied
-from stockthread.catalog import assign_vehicles, load_catalog
+from stockthread.catalog import assign_sites, assign_vehicles, load_catalog
 from stockthread.config import InvenTreeSettings, Settings, parse_settings
 from stockthread.core.marker import AttemptKind
 from stockthread.core.matching import Catalog, LocationRecord, PartRecord
@@ -64,6 +64,7 @@ def settings(
     http_port: int = 3000,
     writes: bool = False,
     default_source: dict[str, str] | None = None,
+    sites: list[str] | None = None,
 ) -> Settings:
     data: dict[str, Any] = {
         "slack": {
@@ -84,6 +85,8 @@ def settings(
         data["vehicles"] = vehicles
     if default_source:
         data["policy"] = {"default_source": default_source}
+    if sites:
+        data["locations"] = {"sites": sites}
     return parse_settings(data, {**ENV, "SLACK_SIGNING_SECRET": "synthetic-secret", "LLM_API_KEY": llm_key})
 
 
@@ -382,7 +385,13 @@ PART = {
     "is_template": False,
     "virtual": False,
 }
-LOCATION: dict[str, Any] = {"pk": 10, "pathstring": "Warehouse/Main Stock", "description": "", "structural": False}
+LOCATION: dict[str, Any] = {
+    "pk": 10,
+    "pathstring": "Warehouse/Main Stock",
+    "description": "",
+    "structural": False,
+    "parent": None,
+}
 
 
 @pytest.mark.anyio
@@ -391,6 +400,14 @@ async def test_the_catalog_is_read_from_inventree() -> None:
         catalog = await load_catalog(client)
     assert catalog.parts == (PartRecord(1, "", "Disc 40"),)
     assert catalog.locations == (LocationRecord(10, "Warehouse/Main Stock"),)
+
+
+@pytest.mark.anyio
+async def test_a_location_s_parent_is_read() -> None:
+    rows = [{**LOCATION, "pk": 3, "pathstring": "Warehouse", "structural": True}, {**LOCATION, "parent": 3}]
+    async with reader({"/api/part/": [PART], "/api/stock/location/": rows}) as client:
+        catalog = await load_catalog(client)
+    assert [location.parent for location in catalog.locations] == [None, 3]
 
 
 @pytest.mark.anyio
@@ -411,6 +428,8 @@ async def test_a_part_s_stocking_unit_is_read_and_none_is_no_unit() -> None:
         ("/api/part/", {**PART, "units": 1}),
         ("/api/stock/location/", {**LOCATION, "pathstring": None}),
         ("/api/stock/location/", {**LOCATION, "structural": 0}),
+        ("/api/stock/location/", {key: value for key, value in LOCATION.items() if key != "parent"}),
+        ("/api/stock/location/", {**LOCATION, "parent": "3"}),
     ],
 )
 async def test_a_malformed_record_fails_the_whole_catalog(path: str, row: dict[str, Any]) -> None:
@@ -1054,6 +1073,61 @@ def test_each_snapshot_gets_the_default_sources_and_one_not_found_is_logged_once
     assert read().default_sources == {MovementType.TAKE_TO_VEHICLE: 10}
     assert [record.levelname for record in caplog.records] == ["WARNING"]
     assert "policy.default_source: no stock location at the path set for take_to_site" in caplog.text
+
+
+SITED = Catalog(
+    parts=(),
+    locations=(
+        LocationRecord(20, "Sites", structural=True),
+        LocationRecord(21, "Sites/Smith job", parent=20),
+        LocationRecord(22, "Sites/Smith job/Garage", parent=21),
+        LocationRecord(23, "Sites/Oak tower", parent=20),
+        LocationRecord(24, "Sites/Oak tower/Roof"),  # a name with a "/" in it, at the root: no parent
+        LocationRecord(25, "Warehouse/Main Stock"),
+        LocationRecord(26, "Yard/Spare"),
+        LocationRecord(27, "Yard/Spare"),
+        LocationRecord(28, "Twice/Below", parent=26),
+    ),
+)
+
+
+def test_a_site_is_its_location_and_every_location_under_it_by_parent() -> None:
+    catalog, missing = assign_sites(SITED, ["Sites"])
+    assert catalog.sites == {20, 21, 22, 23}  # 24 only looks as if it were under Sites
+    assert missing == ()
+    assert assign_sites(SITED, ["Sites/Smith job", "Warehouse/Main Stock"])[0].sites == {21, 22, 25}
+
+
+@pytest.mark.parametrize("path", ["sites", "Sites/", "Site", "Yard/Spare", "Nowhere"])
+def test_a_site_path_that_is_not_one_location_gives_no_site(path: str) -> None:
+    catalog, missing = assign_sites(SITED, [path, "Sites/Oak tower"])
+    assert catalog.sites == {23}
+    assert missing == (path,)
+
+
+def test_no_site_paths_give_no_sites() -> None:
+    assert assign_sites(SITED, []) == (SITED, ())
+
+
+def test_each_snapshot_gets_the_sites_and_a_path_not_found_is_logged_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    snapshots = [SITED, SITED, CATALOG, SITED]
+    read = with_vehicles(lambda: snapshots.pop(0), settings(tmp_path / "stockthread.db", sites=["Sites", "Gone"]))
+    assert read().sites == {20, 21, 22, 23}
+    assert read().sites == {20, 21, 22, 23}
+    assert [record.getMessage() for record in caplog.records] == [
+        'locations.sites: "Gone" not the whole path of exactly one stock location; a take to a site there waits'
+        " for Apply"
+    ]
+    assert read().sites == frozenset()
+    assert caplog.records[-1].getMessage().startswith('locations.sites: "Sites", "Gone" not the whole path')
+    assert read().sites == {20, 21, 22, 23}
+    assert len(caplog.records) == 3
+    every = with_vehicles(lambda: SITED, settings(tmp_path / "stockthread.db", sites=["Sites"]))
+    assert every().sites == {20, 21, 22, 23}
+    assert caplog.records[-1].getMessage() == "locations.sites: every one of the 1 paths is a stock location"
 
 
 def test_a_catalog_outage_passes_through_the_vehicles(tmp_path: Path) -> None:

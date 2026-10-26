@@ -27,6 +27,7 @@ editing history.
 | [0019](0019-policy-judges-the-first-plan-once.md) | The policy judges a post's first plan once, right after its reply | Accepted |
 | [0020](0020-default-source.md) | A configured default source settles an implied source | Accepted |
 | [0021](0021-a-pick-teaches-nothing.md) | A pick among candidates teaches nothing; an admin adds an alias by hand | Accepted |
+| [0022](0022-sites-for-take-to-site.md) | A take to a site applies with no click only when its destination is under a configured site | Accepted |
 
 ## Template
 

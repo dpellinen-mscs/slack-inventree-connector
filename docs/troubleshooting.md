@@ -65,18 +65,23 @@ The text fits more than one record, or none closely enough. The dry run lists th
 
 With writes on, a movement is written with no click only when the policy approves it: its type is in
 `policy.auto_apply` (by default a take to a vehicle or to a site), and the dry run has no reason that needs a person.
+A take to a site also needs its destination under one of the `locations.sites` paths; with none set, it waits.
 An implied source ("2 Disc 40 on my truck") is such a reason unless `policy.default_source` sets one for that type.
 Everything else waits for an approver to click Apply. The log line `post ...: plan ... (...)` says what the policy
 decided and why.
 
 If the token lacks *add* on *Stock Item*, `check-setup` says so, and InvenTree refuses every write.
 
-`check-setup` warns about two policies that write with nobody able to step in:
+`check-setup` warns about two policies that write with nobody able to step in, and one that writes less than it says:
 
 - `approvers: none in slack.approvers, so nobody can click Apply or answer for an approver, and only the poster can Undo; the policy still applies with no click: ...`:
   add the user ids of the people who may approve to `slack.approvers`, or set `policy.auto_apply = []`.
 - `policy: auto_apply has ..., beyond the shipped take-outs: those apply with no click`: a return, receive, count or
   other type in `policy.auto_apply` is written with no click. Remove it unless that is what you want.
+- `policy: auto_apply has take_to_site, but locations.sites is unset, so every take to a site waits for Apply`: set
+  `locations.sites` to your sites folder, such as `["Sites"]` ([locations](locations.md)).
+- The log says `locations.sites: ... not the whole path of exactly one stock location; a take to a site there waits for Apply`
+  when the catalog is read. `check-setup` says why for each path.
 
 ## Clicking Apply or Undo does nothing, or says no
 

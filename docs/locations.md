@@ -87,17 +87,37 @@ in the thread asks which stock location "my truck" is.
 ## Where stock comes from
 
 Many posts name only where stock went: "2 Disc 40 on my truck". The connector does not assume a
-source. The dry run shows "No source location was stated", and the question asks for it. A default
-source is a policy setting that may come later. Until then, a post that names both places ("from
-main stock to my truck") is the one that needs no question.
+source. The dry run shows "No source location was stated", and the question asks for it, unless
+`policy.default_source` names a source for that movement type
+([ADR 0020](decisions/0020-default-source.md)). A post that names both places ("from main stock to
+my truck") needs no question either way.
+
+## Sites
+
+The connector cannot tell a site from a shelf by its name. Tell it which locations are sites:
+
+```toml
+[locations]
+sites = ["Sites"]
+```
+
+- Each value is a whole path, letter for letter. A structural folder is fine: every location under
+  it is a site, however deep, including sites you add later.
+- With writes on, a take to a site is written with no click only when its destination is one of
+  these. Anything else waits for an approver to click Apply. So a post that is really a return, read
+  as a take to a site, never puts stock back on a shelf unasked
+  ([ADR 0022](decisions/0022-sites-for-take-to-site.md)).
+- Unset, every take to a site waits for Apply, and `check-setup` says so.
 
 ## Checklist
 
 1. Create the structural folders, then a location for each stock room, vehicle and site.
 2. Add the nicknames people use to each location's description.
-3. Map each person who says "my truck" in `[vehicles]`, and run `.venv/bin/stockthread check-config`.
+3. Map each person who says "my truck" in `[vehicles]`, set `locations.sites`, and run
+   `.venv/bin/stockthread check-config`.
 4. Run `.venv/bin/stockthread check-setup`. It names each `[vehicles]` path that is not exactly one
-   stock location that can hold stock, and why. Once people have posted, it also names those who
+   stock location that can hold stock, and each `locations.sites` path that is not exactly one
+   location, and why. Once people have posted, it also names those who
    have no vehicle set. The connector's log names unresolved vehicle paths again at every start.
 5. Post a test movement in the channel, and read the dry run: it names the location it matched next
    to the words as written.

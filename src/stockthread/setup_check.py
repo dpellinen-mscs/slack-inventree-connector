@@ -139,10 +139,13 @@ DEFAULT_AUTO_APPLY = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
 """`policy.auto_apply` as shipped (ADR 0004): the movement types the policy may apply with no click."""
 
 
-def check_policy(*, writes: bool, approvers: Collection[str], auto_apply: Sequence[str]) -> list[Finding]:
+def check_policy(
+    *, writes: bool, approvers: Collection[str], auto_apply: Sequence[str], sites: Sequence[str] = ()
+) -> list[Finding]:
     """Who can write stock with writes on (threat model T17): with no approvers nobody can click Apply, and only the
-    poster can Undo (`applier.undo_refusal`), yet the policy still applies its movement types; and a movement type
-    beyond the shipped `auto_apply` applies with no click too. Nothing to say with writes off: nothing is written."""
+    poster can Undo (`applier.undo_refusal`), yet the policy still applies its movement types; a movement type
+    beyond the shipped `auto_apply` applies with no click too; and with no `locations.sites` a take to a site never
+    does (ADR 0022). Nothing to say with writes off: nothing is written."""
     if not writes:
         return []
     found = []
@@ -166,6 +169,28 @@ def check_policy(*, writes: bool, approvers: Collection[str], auto_apply: Sequen
                 f"policy: auto_apply has {', '.join(beyond)}, beyond the shipped take-outs: those apply with no click",
             )
         )
+    if MovementType.TAKE_TO_SITE in kinds and not sites:
+        found.append(
+            Finding(
+                Level.WARN,
+                "policy: auto_apply has take_to_site, but locations.sites is unset, so every take to a site waits"
+                " for Apply",
+            )
+        )
+    return found
+
+
+def check_sites(catalog: Catalog, sites: Sequence[str]) -> list[Finding]:
+    """Each `locations.sites` path: the whole path of exactly one stock location, or why not (as `assign_sites`
+    decides). A structural folder is fine: the sites are what is under it."""
+    found = []
+    for path in sites:
+        count = sum(location.path == path for location in catalog.locations)
+        if count != 1:
+            why = "names more than one stock location" if count else _not_holding(catalog, path)
+            found.append(Finding(Level.ERROR, f'locations.sites: "{path}" {why}'))
+    if sites and not found:
+        found.append(Finding(Level.OK, f"locations.sites: every one of the {len(sites)} paths is a stock location"))
     return found
 
 

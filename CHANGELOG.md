@@ -14,6 +14,10 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Changed
 
+- A take to a site is written with no click only when its destination is under one of the new `locations.sites`
+  paths (such as `["Sites"]`). Unset, the default, every take to a site waits for Apply, and `check-setup` warns with
+  writes on. A return read as a take to a site no longer puts stock back on a shelf unasked (#199, #210, ADR 0022).
+  The catalog now reads each location's parent.
 - A movement put together from the fields of two stated movements needs a person: "took 2 Disc 40 from main stock
   to truck 1" and "took 4 Disc 40 from receiving to van 3" read as 4 from main stock to truck 1 is no longer written
   with no click. A movement told over several clauses with no other place or number among them (a heading over a
