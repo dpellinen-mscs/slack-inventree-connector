@@ -123,6 +123,20 @@ class StoredAlias:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class AliasEvent:
+    """An audit row of an alias (`stockthread aliases history`): when, by whom, what, and what it stood for. `kind`
+    and `record` are None in rows written before migration 0023; `post` is None for an alias an admin typed."""
+
+    at: str
+    actor: str
+    event: str
+    alias_id: int
+    kind: AliasKind | None
+    record: int | None
+    post: PostKey | None
+
+
 class StateConflict(Exception):
     """The request is not in the expected state: someone else moved it first. Nothing changed."""
 
@@ -563,6 +577,10 @@ class Store:
             f"INSERT INTO audit_log ({', '.join(columns)}) VALUES ({placeholders})",  # noqa: S608
             [self._now(), actor, event, *ids.values()],
         )
+
+    def _audit_alias(self, actor: str, event: str, alias_id: int | None, kind: str, record: int, **ids: Any) -> None:
+        """An audit row of alias `alias_id`, with the kind and record it stood for (migration 0023), never its text."""
+        self._audit(actor, event, alias_id=alias_id, alias_kind=kind, alias_record=record, **ids)
 
     # Posts and plans
 
@@ -1909,13 +1927,13 @@ class Store:
         have been wrong, so what it taught goes with it, whether or not the undo succeeds. Call inside a
         transaction."""
         taught = self._db.execute(
-            "SELECT a.id, a.request_id FROM aliases a JOIN requests r ON r.id = a.request_id"
+            "SELECT a.id, a.request_id, a.kind, a.record FROM aliases a JOIN requests r ON r.id = a.request_id"
             " WHERE r.plan_id = (SELECT plan_id FROM requests WHERE id = ?) ORDER BY a.id",
             (request_id,),
         ).fetchall()
-        for alias_id, taught_by in taught:
+        for alias_id, taught_by, kind, record in taught:
             self._db.execute("DELETE FROM aliases WHERE id = ?", (alias_id,))
-            self._audit(actor, "alias_forgotten", post_id=post_id, request_id=taught_by, alias_id=alias_id)
+            self._audit_alias(actor, "alias_forgotten", alias_id, kind, record, post_id=post_id, request_id=taught_by)
 
     def _forget_post_taught(self, post_id: int) -> None:
         """Delete every alias a request of any plan revision of the post taught (ADR 0012). Call inside a
@@ -1927,13 +1945,15 @@ class Store:
         ).fetchone():
             return
         taught = self._db.execute(
-            "SELECT a.id, a.request_id FROM aliases a JOIN requests r ON r.id = a.request_id"
+            "SELECT a.id, a.request_id, a.kind, a.record FROM aliases a JOIN requests r ON r.id = a.request_id"
             " JOIN plans l ON l.id = r.plan_id WHERE l.post_id = ? ORDER BY a.id",
             (post_id,),
         ).fetchall()
-        for alias_id, taught_by in taught:
+        for alias_id, taught_by, kind, record in taught:
             self._db.execute("DELETE FROM aliases WHERE id = ?", (alias_id,))
-            self._audit("ingest", "alias_forgotten", post_id=post_id, request_id=taught_by, alias_id=alias_id)
+            self._audit_alias(
+                "ingest", "alias_forgotten", alias_id, kind, record, post_id=post_id, request_id=taught_by
+            )
 
     def next_marker(self, key: RequestKey, kind: AttemptKind) -> Marker:
         """The marker the next attempt of `kind` will carry, to build its request body with. `begin_attempt` checks
@@ -2438,17 +2458,20 @@ class Store:
             now = self._now()
             # One alias per text as the matcher reads it: "patch cables" replaces "patch cable" (plurals folded).
             rows = self._db.execute(
-                "SELECT id, text, rivals IS NULL FROM aliases WHERE kind = ? AND ifnull(user_id, '') = ? ORDER BY id",
+                "SELECT id, text, rivals IS NULL, record FROM aliases WHERE kind = ? AND ifnull(user_id, '') = ?"
+                " ORDER BY id",
                 (kind.value, user or ""),
             ).fetchall()
-            same = [alias_id for alias_id, known, _ in rows if same_words(known, text)]
-            typed = any(admin for _, known, admin in rows if same_words(known, text))
+            same = [(alias_id, was) for alias_id, known, _, was in rows if same_words(known, text)]
+            typed = any(admin for _, known, admin, _ in rows if same_words(known, text))
             if typed:  # an admin's alias for this text stands: a confirmation never takes it over
                 return
-            found = same[0] if same else None
-            for other in same[1:]:
+            found = same[0][0] if same else None
+            for other, was in same[1:]:
                 self._db.execute("DELETE FROM aliases WHERE id = ?", (other,))
-                self._audit(Actor.APPLIER, "alias_replaced", post_id=post_id, request_id=request.id, alias_id=other)
+                self._audit_alias(
+                    Actor.APPLIER, "alias_replaced", other, kind.value, was, post_id=post_id, request_id=request.id
+                )
             if found is None:
                 alias_id = self._db.execute(
                     "INSERT INTO aliases (kind, text, words, record, user_id, rivals, request_id, created_at,"
@@ -2462,7 +2485,9 @@ class Store:
                     " WHERE id = ?",
                     (text.strip(), key, record, stored, request.id, now, alias_id),
                 )
-            self._audit(Actor.APPLIER, "alias_learned", post_id=post_id, request_id=request.id, alias_id=alias_id)
+            self._audit_alias(
+                Actor.APPLIER, "alias_learned", alias_id, kind.value, record, post_id=post_id, request_id=request.id
+            )
 
     def aliases(self, kind: AliasKind) -> tuple[Alias, ...]:
         """Every stored alias of `kind`, as the matcher takes them, oldest first."""
@@ -2516,6 +2541,26 @@ class Store:
         rows = self._db.execute(f"{self._STORED_ALIAS_SELECT} ORDER BY a.kind = 'location', a.id").fetchall()
         return tuple(self._stored_alias(row) for row in rows)
 
+    def alias_events(self) -> tuple[AliasEvent, ...]:
+        """Every audit row of an alias, oldest first: what each text stood for while it stood, also after it was
+        removed (#192)."""
+        rows = self._db.execute(
+            "SELECT l.at, l.actor, l.event, l.alias_id, l.alias_kind, l.alias_record, p.workspace_id, p.channel_id,"
+            " p.ts FROM audit_log l LEFT JOIN posts p ON p.id = l.post_id WHERE l.alias_id IS NOT NULL ORDER BY l.id"
+        ).fetchall()
+        return tuple(
+            AliasEvent(
+                at,
+                actor,
+                event,
+                alias_id,
+                None if kind is None else AliasKind(kind),
+                record,
+                None if workspace is None else PostKey(workspace, channel, ts),
+            )
+            for at, actor, event, alias_id, kind, record, workspace, channel, ts in rows
+        )
+
     def aliases_taught_by(self, post: PostKey, revision: int) -> tuple[StoredAlias, ...]:
         """The stored aliases a request of plan revision `revision` of `post` taught last: parts first, then
         locations, oldest first. One a later confirmation replaced, or an admin removed, is not among them."""
@@ -2541,7 +2586,10 @@ class Store:
                 raise KeyError(f"no alias {alias_id}")
             removed, (request_id, post_id) = self._stored_alias(row), row[13:]
             self._db.execute("DELETE FROM aliases WHERE id = ?", (alias_id,))
-            self._audit(Actor.ADMIN, "alias_removed", post_id=post_id, request_id=request_id, alias_id=alias_id)
+            self._audit_alias(
+                Actor.ADMIN, "alias_removed", alias_id, removed.kind.value, removed.record, post_id=post_id,
+                request_id=request_id,
+            )  # fmt: skip
             return removed
 
     def add_alias(self, kind: AliasKind, text: str, record: int) -> StoredAlias:
@@ -2568,15 +2616,18 @@ class Store:
                 )
             for other, _ in same:
                 row = self._db.execute(f"{self._STORED_ALIAS_SELECT} WHERE a.id = ?", (other,)).fetchone()
-                request_id, post_id = row[13:]
+                replaced, (request_id, post_id) = self._stored_alias(row), row[13:]
                 self._db.execute("DELETE FROM aliases WHERE id = ?", (other,))
-                self._audit(Actor.ADMIN, "alias_replaced", post_id=post_id, request_id=request_id, alias_id=other)
+                self._audit_alias(
+                    Actor.ADMIN, "alias_replaced", other, kind.value, replaced.record, post_id=post_id,
+                    request_id=request_id,
+                )  # fmt: skip
             now = self._now()
             alias_id = self._db.execute(
                 "INSERT INTO aliases (kind, text, words, record, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (kind.value, text.strip(), " ".join(words(text)), record, now, now),
             ).lastrowid
-            self._audit(Actor.ADMIN, "alias_added", alias_id=alias_id)
+            self._audit_alias(Actor.ADMIN, "alias_added", alias_id, kind.value, record)
             return self._stored_alias(
                 self._db.execute(f"{self._STORED_ALIAS_SELECT} WHERE a.id = ?", (alias_id,)).fetchone()
             )

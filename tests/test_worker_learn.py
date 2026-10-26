@@ -230,8 +230,10 @@ def test_an_undo_forgets_what_its_plan_taught_and_its_receipt_names_nothing_lear
     assert running.undo(KEY, TAKE, LUIS).state is S.UNDONE
     assert store.stored_aliases() == ()
     with sqlite3.connect(tmp_path / "stockthread.db") as raw:
-        forgotten = raw.execute("SELECT actor, alias_id FROM audit_log WHERE event = 'alias_forgotten'").fetchall()
-    assert forgotten == [("human", alias.id)]
+        forgotten = raw.execute(
+            "SELECT actor, alias_id, alias_kind, alias_record FROM audit_log WHERE event = 'alias_forgotten'"
+        ).fetchall()
+    assert forgotten == [("human", alias.id, alias.kind.value, alias.record)]
     assert running.post_receipts() == 1
     undone = json.dumps(running.slack.posted[-1]["blocks"], ensure_ascii=False)  # type: ignore[attr-defined]
     assert "Undone" in undone
