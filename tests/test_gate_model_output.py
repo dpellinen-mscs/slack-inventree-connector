@@ -245,7 +245,18 @@ def place(side: str, name: str) -> Callable[[Mapping[str, Any], dict[str, Any]],
     return vary
 
 
+def taken_out(case: Mapping[str, Any], output: dict[str, Any]) -> dict[str, Any] | None:
+    """Every return read as a take to a site: the same InvenTree transfer, but a take-out may apply with no click
+    (#199)."""
+    varied = stripped(output, movement=False, post=False)
+    returns = [movement for movement in varied["movements"] if movement["movement_type"] == "return"]
+    for movement in returns:
+        movement["movement_type"] = "take_to_site"
+    return varied if returns else None
+
+
 MADE_UP = {
+    "a return read as a take to a site": taken_out,
     "a quantity one more": more,
     "another part by its exact name": other_part,
     "a vehicle by its exact name": place("destination", "Vehicles/Truck 1"),
