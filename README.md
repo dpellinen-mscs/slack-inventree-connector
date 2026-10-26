@@ -155,6 +155,7 @@ turn them on again in *Event Subscriptions*; catch-up reads what was missed, wit
 - [Security policy](SECURITY.md): how to report a vulnerability privately
 - [Modeling vehicles and sites](docs/locations.md): stock locations for vehicles, sites and stock rooms
 - [Operations](docs/operations.md): the database, backups, restores and upgrades
+- [Troubleshooting](docs/troubleshooting.md): no reply, no match, no write, and what the log says
 - [Roadmap](ROADMAP.md): milestones and their definitions of done
 - [Decisions](docs/decisions/): the decision log
 - [Research notes](docs/research/): InvenTree, Slack, prior art
