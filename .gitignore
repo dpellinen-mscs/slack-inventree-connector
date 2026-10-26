@@ -11,6 +11,8 @@ build/
 coverage/
 .coverage
 .it.env
+.soak.env
+soak-report.json
 # Local settings and the database of Slack posts: never committed (CONTRIBUTING.md).
 stockthread.toml
 *.db
