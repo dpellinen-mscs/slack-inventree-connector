@@ -64,7 +64,7 @@ _DETAILS = (
     f"a return word in the text, read as ({_KINDS})",
     "question or request|plan or condition|a time ahead|negation|hedge|source|destination",
     "the text does not put the (source|destination) on that side",
-    "the fields come from different clauses, and another clause names a place on the same side",
+    "the fields come from different clauses, and one of them names another place or number",
     f"a ({_KINDS}) whose destination is a vehicle|take_to_vehicle whose destination names no vehicle",
     "a receive has no source location|zero quantity outside a count|source and destination are the same",
     f"(part|location) found by the ({_RULES}) rule",

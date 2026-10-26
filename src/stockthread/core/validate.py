@@ -96,7 +96,7 @@ DETAIL_SOURCE_LEFT_OUT = 'the text has "from", "off", "out of" or an arrow, but 
 """The detail of the implied source a text that names one raises: a default source never settles it (ADR 0020)."""
 DETAIL_OTHER_AUTHOR = "a message in the post is by someone else"
 """ACTOR_NOT_POSTER for a post whose messages are not all the poster's: its "my truck" is read as the poster's."""
-DETAIL_MIXED = "the fields come from different clauses, and another clause names a place on the same side"
+DETAIL_MIXED = "the fields come from different clauses, and one of them names another place or number"
 """The detail of the reason a movement drawn from several clauses raises when the text names a rival place (#200)."""
 DETAIL_NOT_A_COUNT = "a unit other than a count"
 """The detail of the reason a line in feet, metres or any unit but a count raises."""
@@ -618,47 +618,62 @@ def _places(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     return reasons
 
 
-_CLAUSE_END = re.compile(r"\n|[.!?;](?=\s|$)|(?<!\d),|,(?!\d)|\b(and|then)\b")
-"""Where a clause ends: a message or line, a sentence, a comma that is not in a number, "and", "then"."""
-_NAMES_A_PLACE = {"source": re.compile(rf"{_FROM}\s+\w"), "destination": re.compile(rf"{_TO}\s+\w")}
+_CLAUSE_END = re.compile(r"\n|[.!?;](?=\s|$|[^\W\d])|(?<!\d),|,(?!\d)|[&+]|\b(and|then|plus|also)\b")
+"""Where a clause ends: a message or line, a sentence, a comma that is not in a number, "and", "&", "plus"."""
+_NAMES_A_PLACE = {
+    "source": re.compile(rf"{_FROM}\s+\w"),
+    "destination": re.compile(r"(?<!\w)(to|into|onto)\s+\w|(→|->)\s*\w"),
+}
+"""Words that open a place. Not "on", "in", "at", "for" or "up": "picked up 2", "in the back", "for the Smith job"."""
+_A_NUMBER = re.compile(rf"(?<!\w)(\d+|{'|'.join(NUMBER_WORDS)})(?![^\W\d])", re.IGNORECASE)
 
 
 def _one_clause(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     """A movement whose fields no single clause holds all of may mix two movements: "took 2 ONTs from shelf A to
-    van 3" and "took 4 ONTs from shelf B to van 4" read as 4 ONTs from shelf A to van 3 (#200). It is doubted when
-    another clause among those it draws on names a place on a side whose place the movement takes from elsewhere.
-    An item counts where its quantity is stated. A list under a heading ("Van 3 from shelf A:" then a line per item)
-    names no rival and passes, as does a clause of another movement after the last one drawn on."""
+    van 3" and "took 4 ONTs from shelf B to van 4" read as 4 ONTs from shelf A to van 3 (#200). It is doubted when a
+    clause among those it draws on, from the first to the last, has a rival: a place on a side whose place the
+    movement takes from another clause, or a number that is neither a line's quantity nor in a field's words
+    ("van 3 took 4 ONTs too"). An item counts where its quantity is stated. A list under a heading ("Van 3 from
+    shelf A:" then a line per item) has no rival and passes, as does another movement after the last clause."""
     starts = [0] + [m.end() for m in _CLAUSE_END.finditer(text)]
 
     def clauses(found: list[re.Match[str]]) -> set[int]:
         return {sum(start <= m.start() for start in starts) - 1 for m in found}
 
-    fields = [
-        clauses(
-            [
-                m
-                for m in _occurrences(item.item_text, text)
-                if item.quantity is None or item.quantity in _stated(text[: m.start()])
-            ]
-        )
+    lines = [
+        [
+            m
+            for m in _occurrences(item.item_text, text)
+            if item.quantity is None or item.quantity in _stated(text[: m.start()])
+        ]
         for item in movement.line_items
         if item.item_text
     ]
-    sides = {
-        side: clauses(_occurrences(place, text))
+    places = {
+        side: _occurrences(place, text)
         for side, place in (("source", movement.source_text), ("destination", movement.destination_text))
         if place
     }
-    fields = [found for found in (*fields, *sides.values()) if found]  # a field not in the text is doubted already
+    sides = {side: clauses(found) for side, found in places.items()}
+    fields = [found for found in (*map(clauses, lines), *sides.values()) if found]  # one not in the text is doubted
     if not fields or set.intersection(*fields):
         return set()
     first, last = min(set.union(*fields)), max(set.union(*fields))
+    # A line's own words run from where its quantity may start to the end of its item.
+    own = [(m.start() - len(_SEPARATOR.split(text[: m.start()])[-1]), m.end()) for found in lines for m in found]
+    own += [
+        (m.start(), m.end())
+        for item in movement.line_items
+        if item.item_text
+        for m in _occurrences(item.item_text, text)
+    ]
+    own += [(m.start(), m.end()) for found in places.values() for m in found]
+    numbers = [m for m in _A_NUMBER.finditer(text) if not any(start <= m.start() < end for start, end in own)]
     rival = any(
-        first <= n <= last and n not in own
-        for side, own in sides.items()
+        first <= n <= last and n not in mine
+        for side, mine in sides.items()
         for n in clauses(list(_NAMES_A_PLACE[side].finditer(text)))
-    )
+    ) or any(first <= n <= last for n in clauses(numbers))
     return {_rule(ReasonCode.MOVEMENT_UNCLEAR, DETAIL_MIXED)} if rival else set()
 
 

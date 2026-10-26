@@ -767,6 +767,9 @@ TWO_MOVEMENTS = (
     "took 2 Disc 40 from main stock to truck 1. Took 4 Disc 40 from receiving to van 3",
     "took 2 Disc 40 from main stock to truck 1 and 4 Disc 40 from receiving to van 3",
     "took 2 Disc 40 from main stock to truck 1, 4 Disc 40 from receiving to van 3",
+    "took 2 Disc 40 from main stock to truck 1 plus 4 Disc 40 from receiving to van 3",
+    "took 2 Disc 40 from main stock to truck 1 & 4 Disc 40 from receiving to van 3",
+    "took 2 Disc 40 from main stock to truck 1.took 4 Disc 40 from receiving to van 3",
 )
 """Two movements stated in two messages, sentences or clauses (#200)."""
 
@@ -804,6 +807,10 @@ def test_each_of_two_stated_movements_read_apart_is_not_doubted(text: str) -> No
         "took 2 Disc 40 and 3 Disc 60 from main stock to truck 1",
         "took 2 Disc 40 and 3 Disc 60 from main stock to truck 1, and returned 1 S8 switch to receiving",
         "heading to truck 1\ntook 2 Disc 40 and 3 Disc 60 from main stock",
+        "picked up 2 Disc 40 and 3 Disc 60 from main stock to truck 1",
+        "grabbed 2 Disc 40 in the back and 3 Disc 60 from main stock to truck 1",
+        "Truck 1:\n2 Disc 40 from main stock for the Smith job\n3 Disc 60",
+        "Took 2 Disc 40 and 3 Disc 60 to truck 1 from the main stock",
     ],
 )
 def test_one_movement_told_over_several_clauses_with_no_rival_place_is_not_doubted(text: str) -> None:
@@ -820,3 +827,18 @@ def test_the_item_counts_in_the_clause_that_states_its_quantity() -> None:
     """ "Disc 40" is in both clauses; only the second says 4."""
     text = "took 2 Disc 40 from main stock to truck 1\ntook 4 Disc 40 from receiving to van 3"
     assert mixed(take(quantity="4"), text)
+
+
+@pytest.mark.parametrize(
+    ("text", "source"),
+    [
+        ("took 2 Disc 40 from main stock to truck 1\nvan 3 took 4 Disc 40 too", "main stock"),
+        ("took 2 Disc 40 to truck 1\nvan 3 got 4 Disc 40", None),
+        ("Truck 1:\n2 Disc 40\nVan 3:\n4 Disc 40", None),
+        ("van 3 took four Disc 40. truck 1 took 2 Disc 40", None),
+        ("took 2 Disc 40 to truck 1, also 4 Disc 40 to van 3", None),
+    ],
+)
+def test_a_rival_movement_with_no_place_word_is_seen_by_its_number(text: str, source: str | None) -> None:
+    """The other clause names its place with no "from" or "to", but states a number this movement does not use."""
+    assert mixed(take(quantity="4", source_text=source), text)
