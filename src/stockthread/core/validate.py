@@ -268,7 +268,8 @@ def _from_text(
     returned = MovementType.RETURN in kinds
     if movement.movement_type in _TAKE_OUTS and not returned and _TYPE_VERBS[MovementType.RETURN].search(text):
         # A take-out and a return are both one transfer, but only take-outs may apply with no click (#199). With a
-        # return in the reading the plan is not all take-outs, so the policy waits for Apply anyway (gate.py).
+        # return in the reading the plan is not all take-outs, so the policy waits for Apply (gate.py), unless
+        # `policy.auto_apply` has return too, and then the label does not matter.
         reasons.add(
             _rule(ReasonCode.MOVEMENT_UNCLEAR, f"a return word in the text, read as {movement.movement_type.value}")
         )
