@@ -80,6 +80,7 @@ def corpus_views(case: dict[str, Any]) -> list[MovementView]:
     text = "\n".join(message.get("text") or "" for message in case["post"]["messages"])
     poster = case["post"]["user"]
     views = []
+    kinds = {candidate(expected).movement_type for expected in case["expected"]["movements"]}
     for expected in case["expected"]["movements"]:
         movement = candidate(expected)
         views.append(
@@ -91,7 +92,7 @@ def corpus_views(case: dict[str, Any]) -> list[MovementView]:
                 ),
                 match_location(movement.source_text, CATALOG, poster) if movement.source_text else None,
                 match_location(movement.destination_text, CATALOG, poster) if movement.destination_text else None,
-                validate(movement, text, max_quantity=100),
+                validate(movement, text, max_quantity=100, kinds=kinds),
             )
         )
     return views

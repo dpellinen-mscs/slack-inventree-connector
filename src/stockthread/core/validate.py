@@ -14,7 +14,7 @@ import contextlib
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from decimal import Decimal, InvalidOperation
 
 from stockthread.core.model import (
@@ -79,6 +79,7 @@ _TYPE_VERBS = {
     MovementType.TRANSFER: re.compile(r"\b(moved?|transferr?\w*)\b"),
 }
 """A movement type that changes stock in a way a take cannot needs one of its words in the text."""
+_TAKE_OUTS = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
 _FROM = r"(?<!\w)(from|off|out of)"
 _TO = r"((?<!\w)(to|into|onto|on|in|at|for|up)|→|->)"
 """Whole words only: "from main shop" must not read as "…in shop"."""
@@ -133,13 +134,15 @@ def validate(
     max_quantity: int,
     post_flags: frozenset[PostFlag] = frozenset(),
     stocking: Sequence[str | None] = (),
+    kinds: Collection[MovementType] = (),
 ) -> tuple[ReviewReason, ...]:
     """Every review reason for one candidate. `text` is the post's text by people, all messages joined.
 
     `stocking` holds, per line, the units of the line's part (InvenTree's `Part.units`), given only for a part
     matched so that it can authorize a write, else None. A line whose length is in its part's own unit
     (`in_stocking_unit`: "50 m" of a part stocked in m), stated by a number in the text (`_lone_number`), is
-    a count of that unit and raises no pack-unit reason for its unit. The caller judges the part; nothing here
+    a count of that unit and raises no pack-unit reason for its unit. `kinds` holds the type of every movement of
+    the reading: a return among them accounts for a return word in the text. The caller judges the part; nothing here
     reads the catalog."""
     reasons = {reason_for_flag(flag) for flag in movement.flags}
     reasons |= {reason_for_flag(flag) for flag in post_flags if flag is not PostFlag.CONTAINS_SENSITIVE}
@@ -158,7 +161,7 @@ def validate(
         for n in _own_measure(movement, found, stocked)
     )
     reasons |= _from_fields(movement, text, own)
-    reasons |= _from_text(movement, text, own)
+    reasons |= _from_text(movement, text, own, kinds)
     reasons |= _grounding(movement, text)
     reasons |= _places(movement, text)
     reasons |= _contradictions(movement)
@@ -239,7 +242,9 @@ def _unit(unit: str | None) -> str | None:
     return unit[:-2] if unit.endswith("xes") else unit[:-1] if unit.endswith("s") else unit
 
 
-def _from_text(movement: CandidateMovement, text: str, own: frozenset[int]) -> set[ReviewReason]:
+def _from_text(
+    movement: CandidateMovement, text: str, own: frozenset[int], kinds: Collection[MovementType] = ()
+) -> set[ReviewReason]:
     """Reasons the text gives, whatever the extractor made of it. The lines in `own` are in their part's own unit."""
     reasons = set()
     if SUSPICIOUS.search(text):
@@ -260,6 +265,14 @@ def _from_text(movement: CandidateMovement, text: str, own: frozenset[int]) -> s
     verbs = _TYPE_VERBS.get(movement.movement_type)
     if verbs is not None and not verbs.search(text):
         reasons.add(_rule(ReasonCode.MOVEMENT_UNCLEAR, f"no word in the text supports {movement.movement_type.value}"))
+    returned = MovementType.RETURN in kinds
+    if movement.movement_type in _TAKE_OUTS and not returned and _TYPE_VERBS[MovementType.RETURN].search(text):
+        # A take-out and a return are both one transfer, but only take-outs may apply with no click (#199). With a
+        # return in the reading the plan is not all take-outs, so the policy waits for Apply (gate.py), unless
+        # `policy.auto_apply` has return too, and then the label does not matter.
+        reasons.add(
+            _rule(ReasonCode.MOVEMENT_UNCLEAR, f"a return word in the text, read as {movement.movement_type.value}")
+        )
     for pattern, detail in (
         (QUESTION_OR_REQUEST, "question or request"),
         (PLAN_OR_CONDITION, "plan or condition"),

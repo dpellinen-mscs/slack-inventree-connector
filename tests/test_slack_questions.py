@@ -61,6 +61,7 @@ _DETAILS = (
     "correction word in the text|someone else is named as the actor|a person is mentioned",
     "a message in the post is by someone else",
     f"no word in the text supports ({_KINDS})",
+    f"a return word in the text, read as ({_KINDS})",
     "question or request|plan or condition|a time ahead|negation|hedge|source|destination",
     "the text does not put the (source|destination) on that side",
     f"a ({_KINDS}) whose destination is a vehicle|take_to_vehicle whose destination names no vehicle",

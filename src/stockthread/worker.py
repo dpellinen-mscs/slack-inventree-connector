@@ -2016,6 +2016,7 @@ class Worker:
                 max_quantity=self.settings.policy.max_quantity,
                 post_flags=extraction.post_flags,
                 stocking=stocking,
+                kinds={read.movement_type for read in extraction.movements},
             )
         )
 

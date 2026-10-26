@@ -16,6 +16,8 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 - A post that holds another person's message (a reply in someone else's thread, read with the post) waits for an
   approver: its "my truck" would be read as the poster's truck, so the policy no longer writes it with no click.
+- A take-out whose text has a return word ("returned", "brought back", "back to") needs a person: a model that
+  reads a return as a take-out no longer gets it written with no click (#199).
 - A receipt of a plan whose writes went through only in part says "Partly applied" (it said "Check this"), names
   the movements that changed inventory, and says to post the rest again. A movement the plan never sent says so,
   and no longer claims it waits for review: a plan is approved whole, so no click can approve the rest of it.
