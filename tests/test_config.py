@@ -405,6 +405,14 @@ def test_the_llm_section_of_the_example_file_is_valid_once_uncommented(tmp_path:
     assert "at localhost" in settings.llm_line()
 
 
+def test_sites_are_location_paths_none_by_default_and_none_twice() -> None:
+    assert parse_settings(base(), ENV).locations.sites == ()
+    sites = parse_settings({**base(), "locations": {"sites": ["Sites", "Job Sites/Elm"]}}, ENV).locations.sites
+    assert sites == ("Sites", "Job Sites/Elm")
+    for bad in (["Sites", "Sites"], [""], [" Sites"], "Sites"):
+        assert "locations.sites" in rejected({**base(), "locations": {"sites": bad}}, ENV)
+
+
 def test_vehicles_map_a_slack_user_to_a_location_path(tmp_path: Path) -> None:
     assert parse_settings(base(), ENV).vehicles == {}
     text = MINIMAL + '\n[vehicles]\nU0SAM0001 = "Vehicles/Truck 1"\nW0LUIS005 = "Vehicles/Van 3"\n'

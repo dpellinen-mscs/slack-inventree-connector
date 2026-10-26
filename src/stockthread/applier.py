@@ -52,6 +52,8 @@ class GateNow:
     default_sources: Mapping[MovementType, int] = field(default_factory=dict)
     """Movement type -> its default source now (`Catalog.default_sources` of the current catalog). A plan's source
     taken from a default counts for the policy only while it is still that type's default."""
+    sites: frozenset[int] = frozenset()
+    """The locations under a site now (`Catalog.sites` of the current catalog)."""
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,7 @@ def judge_plan(
         poster_vehicle=now.vehicles.get(rebuilt.poster),
         vehicles=frozenset(now.vehicles.values()),
         default_sources=now.default_sources,
+        sites=now.sites,
         clicked_by=clicked_by,
     )
 

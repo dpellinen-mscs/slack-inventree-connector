@@ -2,15 +2,15 @@
 
 The snapshot is all or nothing: a record with a missing or mistyped field fails the whole load, because a
 partial catalog would make a part or a location look unknown. Aliases are not read from InvenTree: the store
-keeps them (`with_aliases`, ADR 0012). Vehicle assignments come from the `[vehicles]` settings, and default sources
-from `policy.default_source`; both are resolved against every snapshot (`assign_vehicles`,
-`assign_default_sources`).
+keeps them (`with_aliases`, ADR 0012). Vehicle assignments come from the `[vehicles]` settings, default sources
+from `policy.default_source`, and sites from `locations.sites`; each is resolved against every snapshot
+(`assign_vehicles`, `assign_default_sources`, `assign_sites`).
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -77,6 +77,30 @@ def assign_default_sources(catalog: Catalog, defaults: Mapping[str, str]) -> tup
     return replace(catalog, default_sources=found), tuple(kind for kind in defaults if kind not in found)
 
 
+def assign_sites(catalog: Catalog, sites: Sequence[str]) -> tuple[Catalog, tuple[str, ...]]:
+    """The catalog with its sites (`locations.sites`: location paths), and the paths not found. A path names a
+    location when it is the whole path of exactly one location, letter for letter; a structural folder counts. The
+    sites are those locations and every location under them, by the parent each location has in InvenTree, not by
+    its path: a name may hold a "/"."""
+    found: dict[str, int] = {}
+    for path in sites:
+        at = [location.pk for location in catalog.locations if location.path == path]
+        if len(at) == 1:
+            found[path] = at[0]
+    children: dict[int, list[int]] = {}
+    for location in catalog.locations:
+        if location.parent is not None:
+            children.setdefault(location.parent, []).append(location.pk)
+    under: set[int] = set()
+    todo = list(found.values())
+    while todo:
+        pk = todo.pop()
+        if pk not in under:
+            under.add(pk)
+            todo.extend(children.get(pk, ()))
+    return replace(catalog, sites=frozenset(under)), tuple(path for path in sites if path not in found)
+
+
 def _holding(catalog: Catalog, path: str) -> int | None:
     """The one location whose whole path is `path`, letter for letter, and that can hold stock; else None."""
     found = [location.pk for location in catalog.locations if location.path == path and not location.structural]
@@ -102,7 +126,17 @@ def _location(row: Mapping[str, Any]) -> LocationRecord:
         path=_text(row, "pathstring", "location"),
         description=_text(row, "description", "location", optional=True),
         structural=_bool(row, "structural", "location"),
+        parent=_parent(row),
     )
+
+
+def _parent(row: Mapping[str, Any]) -> int | None:
+    value = row.get("parent", ...)
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise InvenTreeError("a location has no valid parent")
+    return value
 
 
 def _int(row: Mapping[str, Any], field: str, what: str) -> int:

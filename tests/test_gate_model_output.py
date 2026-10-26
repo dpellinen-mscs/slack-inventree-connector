@@ -27,7 +27,7 @@ import pytest
 from corpus import EVAL, cases, eval_catalog
 
 from stockthread.applier import GateNow, approve_by_policy
-from stockthread.catalog import assign_default_sources
+from stockthread.catalog import assign_default_sources, assign_sites
 from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules
 from stockthread.core.matching import Alias, Catalog
@@ -52,6 +52,7 @@ CATALOG, _IPNS, _PATHS = eval_catalog()
 PART = {ipn: pk for pk, ipn in _IPNS.items()}
 LOCATION = {path: pk for pk, path in _PATHS.items()}
 DEFAULT_SOURCE = {"take_to_vehicle": "Warehouse/Main Stock", "take_to_site": "Warehouse/Main Stock"}
+SITES = ["Job Sites"]
 
 
 def knowing(case: Mapping[str, Any]) -> Catalog:
@@ -73,16 +74,17 @@ def knowing(case: Mapping[str, Any]) -> Catalog:
         part_aliases=CATALOG.part_aliases + tuple(parts),
         location_aliases=CATALOG.location_aliases + tuple(locations),
     )
-    return assign_default_sources(known, DEFAULT_SOURCE)[0]
+    return assign_sites(assign_default_sources(known, DEFAULT_SOURCE)[0], SITES)[0]
 
 
 def settings() -> Settings:
-    """Writes on, with the default policy and a default source for take-outs."""
+    """Writes on, with the default policy, a default source for take-outs and the job sites as sites."""
     data = {
         "slack": {"workspace_id": WORKSPACE, "app_id": APP, "channels": CHANNELS, "approvers": [LUIS]},
         "inventree": {"url": "http://inventree.local:8000"},
         "writes": {"enabled": True},
         "policy": {"default_source": DEFAULT_SOURCE},
+        "locations": {"sites": SITES},
     }
     return parse_settings(data, ENV)
 
@@ -169,7 +171,7 @@ def _verdict(store: Store, clock: Clock, case: Mapping[str, Any], output: str) -
     current = settings()
     catalog = knowing(case)
     judged: list[Judgement | None] = []
-    now = GateNow(Policy.of(current, TESTED), dict(catalog.vehicles), dict(catalog.default_sources))
+    now = GateNow(Policy.of(current, TESTED), dict(catalog.vehicles), dict(catalog.default_sources), catalog.sites)
 
     def approve(post: PostKey) -> Judgement | None:
         judged.append(approve_by_policy(store, OWNER, post, now))

@@ -30,7 +30,7 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 from stockthread.applier import GateNow, approve_by_click, approve_by_policy, plan_expired, work_request
 from stockthread.apply import Applied, ApplyReader, Sender, undo_apply
-from stockthread.catalog import assign_default_sources, assign_vehicles, load_catalog, with_aliases
+from stockthread.catalog import assign_default_sources, assign_sites, assign_vehicles, load_catalog, with_aliases
 from stockthread.config import Settings
 from stockthread.core.matching import Catalog
 from stockthread.core.model import MovementType, PostKey, RequestKey
@@ -48,6 +48,7 @@ from stockthread.setup_check import (
     check_policy,
     check_posters,
     check_roles,
+    check_sites,
     check_vehicles,
     lacks_catalog_view,
 )
@@ -299,15 +300,16 @@ def inventree_steps(
     def step(key: RequestKey) -> Applied:
         vehicles: dict[str, int] = {}
         defaults: dict[MovementType, int] = {}
+        sites: frozenset[int] = frozenset()
         if store.request(key).state is RequestState.APPROVED:
             current = catalog()  # outside the step's loop: a refresh of the cache runs one of its own
-            vehicles, defaults = dict(current.vehicles), dict(current.default_sources)
+            vehicles, defaults, sites = dict(current.vehicles), dict(current.default_sources), current.sites
             beat()
 
         async def run() -> Applied:
             send_by = anyio.current_time() + limit - margin
             async with opened() as (reader, writer):
-                now = GateNow(Policy.of(settings, check_version(await reader.server_info())), vehicles, defaults)
+                now = GateNow(Policy.of(settings, check_version(await reader.server_info())), vehicles, defaults, sites)
                 return await work_request(
                     key, store=store, reader=reader, writer=writer, lock=anyio.Lock(), lock_owner=owner,
                     gate_now=lambda: now, expired=expired, settle=settle, send_by=send_by,
@@ -335,17 +337,27 @@ def inventree_steps(
 
 
 def with_vehicles(load: Callable[[], Catalog], settings: Settings) -> Callable[[], Catalog]:
-    """Every snapshot gets the vehicles from the `[vehicles]` settings, and the default sources from
-    `policy.default_source`. A person whose vehicle, or a movement type whose default source, is not a stock location
-    in the snapshot is named in the log, once until the list changes."""
+    """Every snapshot gets the vehicles from the `[vehicles]` settings, the default sources from
+    `policy.default_source`, and the sites from `locations.sites`. A person whose vehicle, a movement type whose
+    default source, or a site path that is not a stock location in the snapshot is named in the log, once until the
+    list changes."""
     reported: list[tuple[str, ...] | None] = [None]
     unsourced: list[tuple[str, ...] | None] = [None]
+    unsited: list[tuple[str, ...] | None] = [None]
 
     def read() -> Catalog:
         catalog, missing = assign_vehicles(load(), settings.vehicles)
         catalog, no_default = assign_default_sources(
             catalog, {str(kind): path for kind, path in settings.policy.default_source.items()}
         )
+        catalog, no_site = assign_sites(catalog, settings.locations.sites)
+        if no_site != unsited[0]:
+            unsited[0] = no_site
+            if no_site:
+                log.warning(
+                    "locations.sites: no stock location at %s; a take to a site there waits for Apply",
+                    ", ".join(f'"{path}"' for path in no_site),
+                )
         if no_default != unsourced[0]:
             unsourced[0] = no_default
             if no_default:
@@ -413,7 +425,9 @@ def policy_approver(
         beat()
         version = check(settings)
         beat()
-        now = GateNow(Policy.of(settings, version), dict(current.vehicles), dict(current.default_sources))
+        now = GateNow(
+            Policy.of(settings, version), dict(current.vehicles), dict(current.default_sources), current.sites
+        )
         return approve_by_policy(store, owner, post, now)
 
     return approve
@@ -439,7 +453,9 @@ def click_approver(
         beat()
         version = check(settings)
         beat()
-        now = GateNow(Policy.of(settings, version), dict(current.vehicles), dict(current.default_sources))
+        now = GateNow(
+            Policy.of(settings, version), dict(current.vehicles), dict(current.default_sources), current.sites
+        )
         return approve_by_click(
             store, owner, post, revision, user, now, at=at, expiry_hours=settings.slack.plan_expiry_hours
         )
@@ -460,11 +476,15 @@ def check_setup(settings: Settings) -> list[Finding]:
                 writes=settings.writes.enabled,
                 aliases=aliases,
                 default_sources={str(kind): path for kind, path in settings.policy.default_source.items()},
+                sites=settings.locations.sites,
             )
 
     return [
         *check_policy(
-            writes=settings.writes.enabled, approvers=settings.slack.approvers, auto_apply=settings.policy.auto_apply
+            writes=settings.writes.enabled,
+            approvers=settings.slack.approvers,
+            auto_apply=settings.policy.auto_apply,
+            sites=settings.locations.sites,
         ),
         *asyncio.run(read()),
         *check_posters(posters_seen(settings.storage.database), settings.vehicles),
@@ -494,8 +514,10 @@ async def inventree_findings(
     writes: bool,
     aliases: Sequence[StoredAlias] = (),
     default_sources: Mapping[str, str] | None = None,
+    sites: Sequence[str] = (),
 ) -> list[Finding]:
-    """Version, roles, `[vehicles]` and `policy.default_source` paths, and the records `aliases` name. A catalog that
+    """Version, roles, `[vehicles]`, `policy.default_source` and `locations.sites` paths, and the records `aliases`
+    name. A catalog that
     cannot be read is a finding, so the roles still print."""
     version = check_version(await reader.server_info())
     roles = await reader.user_roles()
@@ -517,6 +539,7 @@ async def inventree_findings(
         *found,
         *check_vehicles(catalog, vehicles),
         *check_default_sources(catalog, default_sources or {}),
+        *check_sites(catalog, sites),
         *check_aliases(catalog, aliases),
     ]
 

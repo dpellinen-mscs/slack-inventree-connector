@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pydantic import SecretStr
 
-from stockthread.catalog import load_catalog
+from stockthread.catalog import assign_sites, load_catalog
 from stockthread.config import InvenTreeSettings
 from stockthread.core.model import ReasonCode
 from stockthread.core.resolve import DETAIL_BATCH, Take, pick_source, stock_items
@@ -64,7 +64,11 @@ async def test_the_matcher_catalog_holds_the_seeded_parts_and_locations(catalog:
         assert (parts[pk].active, parts[pk].template, parts[pk].virtual) == (True, False, False)
     for path, pk in catalog.locations.items():
         assert locations[pk].path == path  # pathstring is the full path, joined with "/"
+        parent = catalog.locations.get(path.rpartition("/")[0])
+        assert locations[pk].parent == parent  # the parent's pk, None at the root
     assert locations[catalog.locations["Warehouse"]].structural
+    sites = assign_sites(loaded, ["Job Sites"])[0].sites
+    assert sites == {pk for path, pk in catalog.locations.items() if path.split("/")[0] == "Job Sites"}
 
 
 async def test_a_part_s_stocking_unit_is_read(api: RawApi) -> None:

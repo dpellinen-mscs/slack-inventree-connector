@@ -49,12 +49,20 @@ def eval_catalog() -> tuple[Catalog, dict[int, str], dict[int, str]]:
     parts = tuple(
         PartRecord(pk, p["ipn"], p["name"], p["keywords"]) for pk, p in enumerate(_load("parts")["parts"], start=1)
     )
+    rows = _load("locations")["locations"]
+    location_pk = {loc["path"]: pk for pk, loc in enumerate(rows, start=101)}
+    # A location's parent is the one whose path is its path less the last name, as InvenTree's tree would have it.
     locations = tuple(
-        LocationRecord(pk, loc["path"], loc["description"], loc["structural"])
-        for pk, loc in enumerate(_load("locations")["locations"], start=101)
+        LocationRecord(
+            pk,
+            loc["path"],
+            loc["description"],
+            loc["structural"],
+            location_pk.get(loc["path"][: max(loc["path"].rfind("/"), 0)]),
+        )
+        for pk, loc in enumerate(rows, start=101)
     )
     part_pk = {p.ipn: p.pk for p in parts}
-    location_pk = {loc.path: loc.pk for loc in locations}
     aliases = _load("aliases")
 
     def alias(entry: dict[str, Any], record: str, pks: dict[str, int]) -> Alias:

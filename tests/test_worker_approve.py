@@ -23,7 +23,7 @@ from stockthread.core.requests import RequestState
 from stockthread.core.resolve import STATUS_OK, StockItem
 from stockthread.gate import Judgement, Policy, Verdict
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, ServerInfo, VersionCheck, check_version
-from stockthread.run import policy_approver
+from stockthread.run import policy_approver, with_vehicles
 from stockthread.store import LockLost, Store
 from stockthread.worker import APPROVE_FOR_SECONDS, WORK_RETRY_SECONDS, Worker
 
@@ -400,6 +400,57 @@ def test_the_run_loops_approver_reads_the_version_and_vehicles_for_each_judgemen
     assert judgement is not None
     assert judgement.allowed
     assert store.request(KEY).state is S.APPROVED
+
+
+SITED = Catalog(
+    parts=CATALOG.parts,
+    locations=(
+        *CATALOG.locations,
+        LocationRecord(30, "Sites", structural=True),
+        LocationRecord(31, "Sites/Smith job", parent=30),
+        LocationRecord(32, "Shelf A"),
+    ),
+)
+
+
+def sited_stock(pairs: Sequence[tuple[int, int]]) -> dict[tuple[int, int], list[StockItem]]:
+    """Five pieces of Disc 40 in stock item 58 on the truck."""
+    return {pair: [StockItem(58, Decimal(5), STATUS_OK, Decimal(0))] if pair == (1, TRUCK) else [] for pair in pairs}
+
+
+@pytest.mark.parametrize(
+    ("text", "sites", "verdict"),
+    [
+        ("took 2 Disc 40 from truck 1 to smith job", ["Sites"], Verdict.ALLOWED),
+        ("took 2 Disc 40 from truck 1 to smith job", [], Verdict.WAITS),
+        ("took 2 Disc 40 from truck 1 to shelf a", ["Sites"], Verdict.WAITS),  # a return in a take's words (#199)
+    ],
+    ids=["under a site", "no sites set", "a shelf"],
+)
+def test_the_run_loops_approver_writes_a_take_to_a_site_only_under_a_configured_site(
+    store: Store, clock: Clock, text: str, sites: list[str], verdict: Verdict
+) -> None:
+    """ADR 0022, from the settings through the catalog snapshot to the policy."""
+    data = {**settings(writes=True).model_dump(mode="json", exclude={"secrets"}), "locations": {"sites": sites}}
+    on = parse_settings(data, ENV)
+    catalog = with_vehicles(lambda: SITED, on)
+    judged: list[Judgement | None] = []
+    policy = policy_approver(on, catalog, store, OWNER, beat=lambda: None, check=lambda _: TESTED)
+
+    def approve(post: PostKey) -> Judgement | None:
+        judged.append(policy(post))
+        return judged[-1]
+
+    worker = Worker(settings(), store, OWNER, FakeSlack(), catalog, clock, stock=sited_stock, approve=approve)  # type: ignore[arg-type]
+    enqueue(store, message(ROOT, text))
+    worker.step()
+    clock.at("1790000030.000000")
+    worker.step()
+    [judgement] = judged
+    assert judgement is not None
+    assert judgement.verdict is verdict
+    unsited = "movement 1: its destination is not under a site in locations.sites"
+    assert judgement.why == ("approved by the policy" if verdict is Verdict.ALLOWED else unsited)
 
 
 UNSOURCED = "2 Disc 40 on truck 1"
