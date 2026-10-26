@@ -108,25 +108,42 @@ def check_roles(body: Mapping[str, Any], *, writes: bool) -> list[Finding]:
 
 def check_vehicles(catalog: Catalog, vehicles: Mapping[str, str]) -> list[Finding]:
     """Each `[vehicles]` path: a stock location that can hold stock, or why not (as `assign_vehicles` decides)."""
-    by_path: dict[str, list[bool]] = {}
-    for location in catalog.locations:
-        by_path.setdefault(location.path, []).append(location.structural)
-    found = []
-    for user, path in sorted(vehicles.items()):
-        at = by_path.get(path, [])
-        holding = at.count(False)
-        if holding == 1:
-            continue
-        if holding > 1:
-            why = "names more than one stock location"
-        elif at:
-            why = "is a structural location, which cannot hold stock"
-        else:
-            why = "is not the whole path of any stock location (paths match letter for letter)"
-        found.append(Finding(Level.ERROR, f'vehicles: {user}: "{path}" {why}'))
+    found = [
+        Finding(Level.ERROR, f'vehicles: {user}: "{path}" {why}')
+        for user, path in sorted(vehicles.items())
+        if (why := _not_holding(catalog, path))
+    ]
     if vehicles and not found:
         found.append(Finding(Level.OK, f"vehicles: every one of the {len(vehicles)} paths is a stock location"))
     return found
+
+
+def check_default_sources(catalog: Catalog, defaults: Mapping[str, str]) -> list[Finding]:
+    """Each `policy.default_source` path: a stock location that can hold stock, or why not (as
+    `assign_default_sources` decides)."""
+    found = [
+        Finding(Level.ERROR, f'policy.default_source: {kind}: "{path}" {why}')
+        for kind, path in sorted(defaults.items())
+        if (why := _not_holding(catalog, path))
+    ]
+    if defaults and not found:
+        found.append(
+            Finding(Level.OK, f"policy.default_source: every one of the {len(defaults)} paths is a stock location")
+        )
+    return found
+
+
+def _not_holding(catalog: Catalog, path: str) -> str | None:
+    """Why `path` does not name one stock location that can hold stock, or None when it does."""
+    at = [location.structural for location in catalog.locations if location.path == path]
+    holding = at.count(False)
+    if holding == 1:
+        return None
+    if holding > 1:
+        return "names more than one stock location"
+    if at:
+        return "is a structural location, which cannot hold stock"
+    return "is not the whole path of any stock location (paths match letter for letter)"
 
 
 def check_posters(posters: Sequence[str] | None, vehicles: Collection[str]) -> list[Finding]:

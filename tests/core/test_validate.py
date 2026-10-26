@@ -20,7 +20,7 @@ from stockthread.core.model import (
     ReasonSource,
     ReviewReason,
 )
-from stockthread.core.validate import in_stocking_unit, photo_not_read, stocking_unit, validate
+from stockthread.core.validate import DETAIL_SOURCE_LEFT_OUT, in_stocking_unit, photo_not_read, stocking_unit, validate
 
 
 def take(item: str = "Disc 40", quantity: str | None = "2", **fields: Any) -> CandidateMovement:
@@ -699,3 +699,27 @@ def test_a_length_beside_a_count_is_spared_when_each_number_is_a_lines_quantity(
 def test_a_place_cannot_hide_a_multiplier(text: str, source: str) -> None:
     """Review: a place's text is taken out once, and only after the multiplier words are looked for."""
     assert "line 1: a unit other than a count" in stocked_details(replace(cable(), source_text=source), text, ("m",))
+
+
+@pytest.mark.parametrize(
+    ("text", "left_out"),
+    [
+        ("grabbed 2 Disc 40 from shelf B to truck 1", True),
+        ("2 Disc 40 off the shelf onto truck 1", True),
+        ("2 Disc 40 OUT OF main stock to truck 1", True),
+        ("grabbed 2 Disc 40 to truck 1", False),
+        ("dropped off the 2 Disc 40 at truck 1", False),  # "dropped off" names a destination
+        ("2 Disc 40 from 3 boxes to truck 1", False),  # a number is not a place
+        ("2 Disc 40 to truck 1 for Fromm job", False),  # whole words only
+        ("truck 1 → truck 2: 2 Disc 40", True),  # the corpus's arrow form (04-text-multi)
+        ("truck 1 -> truck 2: 2 Disc 40", True),
+        ("2 Disc 40 → my truck", True),  # any arrow: asked once
+    ],
+)
+def test_an_implied_source_says_when_the_text_names_one_the_reading_left_out(text: str, left_out: bool) -> None:
+    """ADR 0020: a default source settles an unstated source only, never one the model left out."""
+    reasons = validate(take(source_text=None), text, max_quantity=100)
+    [implied] = [reason for reason in reasons if reason.code is ReasonCode.IMPLIED_SOURCE]
+    assert implied == ReviewReason(
+        ReasonCode.IMPLIED_SOURCE, ReasonSource.RULE, DETAIL_SOURCE_LEFT_OUT if left_out else ""
+    )
