@@ -41,6 +41,8 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Added
 
+- `docs/configuration.md`: every setting with its default, the secrets and the rules across settings; a test
+  keeps it in step with the code.
 - Eval corpus 0.3.0: learned aliases in `catalog/aliases.json` carry `rivals`, and the corpus covers them (one
   matched with no question, one asked again because the catalog grew a rival).
 

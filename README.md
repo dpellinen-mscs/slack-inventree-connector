@@ -153,6 +153,7 @@ turn them on again in *Event Subscriptions*; catch-up reads what was missed, wit
 - [Design](docs/design.md): pipeline, architecture options, safety model
 - [Threat model](docs/threat-model.md): what can go wrong, and which control answers it
 - [Security policy](SECURITY.md): how to report a vulnerability privately
+- [Configuration reference](docs/configuration.md): every setting, its default, and the secrets
 - [Modeling vehicles and sites](docs/locations.md): stock locations for vehicles, sites and stock rooms
 - [Operations](docs/operations.md): the database, backups, restores and upgrades
 - [Roadmap](ROADMAP.md): milestones and their definitions of done
