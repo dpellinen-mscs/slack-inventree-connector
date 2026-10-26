@@ -50,6 +50,18 @@ the server started as above:
 .venv/bin/python tests/soak/soak.py --minutes 1440 --report soak-report.json
 ```
 
+To keep the tests' server free during a long run, give the soak a server of
+its own with `STOCKTHREAD_IT_NAME` (it names the containers, volumes and
+token file) and another port, and pass the same name to `--stop`:
+
+```sh
+export STOCKTHREAD_IT_NAME=stockthread-soak STOCKTHREAD_IT_PORT=8010
+tests/integration/start-inventree.sh inventree/inventree:1.5.6 > .soak.env
+set -a; . ./.soak.env; set +a
+.venv/bin/python tests/soak/soak.py --minutes 1440 --report soak-report.json
+tests/integration/start-inventree.sh --stop
+```
+
 `--minutes 10` is a quick check. The script's docstring lists every check
 and option.
 

@@ -4,7 +4,10 @@
 #   tests/integration/start-inventree.sh inventree/inventree:1.5.6
 #   STOCKTHREAD_IT_DB=postgres tests/integration/start-inventree.sh inventree/inventree:1.5.6
 #   tests/integration/start-inventree.sh --stop
+#   STOCKTHREAD_IT_NAME=stockthread-soak STOCKTHREAD_IT_PORT=8010 tests/integration/start-inventree.sh ...
 #
+# STOCKTHREAD_IT_NAME names the containers, volumes, network and token file, so a second server (a long soak
+# run) can live next to the one the tests use. Pass the same name with --stop.
 # SQLite by default, or PostgreSQL in a second container. No worker, no proxy: the smallest setup that
 # serves the REST API. Only named volumes and a private network: no host folder is mounted.
 # The admin account exists only inside this container. The API token is written
@@ -12,9 +15,13 @@
 # tests need.
 set -euo pipefail
 
-NAME=stockthread-it
+NAME=${STOCKTHREAD_IT_NAME:-stockthread-it}
+if [[ ! "$NAME" =~ ^[a-z0-9][a-z0-9_.-]*$ ]]; then
+  echo "STOCKTHREAD_IT_NAME must be lower case letters, digits, '.', '_' or '-'" >&2
+  exit 2
+fi
 PORT=${STOCKTHREAD_IT_PORT:-8000}
-TOKEN_FILE=${STOCKTHREAD_IT_TOKEN_FILE:-${TMPDIR:-/tmp}/stockthread-it-token}
+TOKEN_FILE=${STOCKTHREAD_IT_TOKEN_FILE:-${TMPDIR:-/tmp}/$NAME-token}
 ADMIN_USER=stockthread-ci
 ADMIN_PASSWORD=ci-only-password
 DB=${STOCKTHREAD_IT_DB:-sqlite}
@@ -101,7 +108,7 @@ echo "API up after $((SECONDS - started)) s" >&2
 # The admin account can appear a little after the API. Retry the token request.
 umask 077
 for _ in $(seq 30); do
-  if curl -fsS -u "$ADMIN_USER:$ADMIN_PASSWORD" "http://localhost:$PORT/api/user/me/token/?name=stockthread-it" \
+  if curl -fsS -u "$ADMIN_USER:$ADMIN_PASSWORD" "http://localhost:$PORT/api/user/me/token/?name=$NAME" \
     | python3 -c "import json, sys; print(json.load(sys.stdin)['token'])" >"$TOKEN_FILE" 2>/dev/null; then
     break
   fi
