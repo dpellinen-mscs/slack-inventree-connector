@@ -37,6 +37,22 @@ PostgreSQL instead of SQLite; the `.it.env` file passes the setting on to
 the tests. The tests
 create and move stock, so never point them at a real server.
 
+### Soak run
+
+`tests/soak/soak.py` runs the connector for as long as you ask, with writes
+on, against the same disposable server and a local fake of Slack whose
+connection it keeps breaking. It also breaks InvenTree reads. At the end it
+checks that every post was answered, no post wrote twice, and the stock adds
+up. It also checks that threads, open files and memory stopped growing. With
+the server started as above:
+
+```sh
+.venv/bin/python tests/soak/soak.py --minutes 1440 --report soak-report.json
+```
+
+`--minutes 10` is a quick check. The script's docstring lists every check
+and option.
+
 ## Ground rules
 
 - A wrong stock write is worse than no write. Code that can write to
