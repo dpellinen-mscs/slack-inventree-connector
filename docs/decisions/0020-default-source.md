@@ -20,10 +20,11 @@ the default policy, almost no take-out could apply without a click, so ADR 0004'
 2. In the dry run, a movement that states no source, and whose type has a resolved default, gets that location as
    its source. The match has a rule of its own, `default`. The implied-source reason is dropped, whether the rules or
    the model raised it. The reply shows the source as "not stated: the default source". A text that names a source
-   the reading left out ("from", "off" or "out of" before a word, but not "dropped off") gets no default: its
+   the reading left out ("from", "off" or "out of" before a word, but not "dropped off", or any arrow: "truck 1 → my truck") gets no default: its
    implied-source reason says so (`validate.DETAIL_SOURCE_LEFT_OUT`) and the thread asks for the source. Otherwise a
    model that leaves out "from shelf B" would move stock from the default with no click. A post that says "from" for
-   another reason ("a call from Sam") costs one question.
+   another reason ("a call from Sam"), or an arrow with no source before it ("2 wall mounts → my truck"), costs one
+   question.
 3. A `default` match can authorize a write, as an exact match can. For the policy it counts as an automatic place
    only for a source the post does not state, and only while it is still that type's default when judged
    (`GateNow.default_sources`). A changed default leaves the plan waiting for Apply. A default never makes a part or a

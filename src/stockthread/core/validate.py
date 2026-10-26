@@ -82,15 +82,16 @@ _TYPE_VERBS = {
 _FROM = r"(?<!\w)(from|off|out of)"
 _TO = r"((?<!\w)(to|into|onto|on|in|at|for|up)|→|->)"
 """Whole words only: "from main shop" must not read as "…in shop"."""
-_NAMES_A_SOURCE = re.compile(rf"(?<!\bdrop )(?<!\bdropped ){_FROM}\s+(?!\d)\w", re.IGNORECASE)
-"""Wording that names a source: "from shelf B", "off the van", "out of stock". "dropped off" names a destination."""
+_NAMES_A_SOURCE = re.compile(rf"(?<!\bdrop )(?<!\bdropped ){_FROM}\s+(?!\d)\w|→|->", re.IGNORECASE)
+"""Wording that names a source: "from shelf B", "off the van", "out of stock", "truck 1 → truck 2". "dropped off"
+names a destination. Any arrow counts, so "2 wall mounts → my truck" is asked for its source once."""
 
 
 def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
     return ReviewReason(code, ReasonSource.RULE, detail)
 
 
-DETAIL_SOURCE_LEFT_OUT = 'the text has "from", "off" or "out of", but no source was read'
+DETAIL_SOURCE_LEFT_OUT = 'the text has "from", "off", "out of" or an arrow, but no source was read'
 """The detail of the implied source a text that names one raises: a default source never settles it (ADR 0020)."""
 DETAIL_NOT_A_COUNT = "a unit other than a count"
 """The detail of the reason a line in feet, metres or any unit but a count raises."""

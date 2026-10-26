@@ -3557,15 +3557,16 @@ def test_a_type_picked_for_a_post_that_states_no_source_takes_that_type_s_defaul
     assert ("implied_source" in codes) is (source is None)
 
 
-def test_a_source_the_model_leaves_out_is_not_filled_by_the_default(store: Store, clock: Clock) -> None:
-    """ADR 0020: the post says "from shelf B" and the model's reading has no source, so the default source (main
-    stock) must not stand in for it: the source is asked for, as with no default."""
+@pytest.mark.parametrize("text", ["shuffled 2 Disc 40 from shelf B to truck 1", "shelf B → truck 1: 2 Disc 40"])
+def test_a_source_the_model_leaves_out_is_not_filled_by_the_default(store: Store, clock: Clock, text: str) -> None:
+    """ADR 0020: the post says "from shelf B" (or "shelf B →") and the model's reading has no source, so the default
+    source (main stock) must not stand in for it: the source is asked for, as with no default."""
     unsourced = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "truck 1")
     llm = FakeLLM(Extraction(MODEL, (unsourced,)))
     slack = FakeSlack()
     defaulted = replace(CATALOG, default_sources={MovementType.TAKE_TO_VEHICLE: 10})
     worker = Worker(approving(), store, OWNER, slack, lambda: defaulted, clock, llm=llm)
-    enqueue(store, message(ROOT, "shuffled 2 Disc 40 from shelf B to truck 1"))
+    enqueue(store, message(ROOT, text))
     read_and_answered(worker, clock)
     record = store.dry_run(KEY)
     assert record is not None

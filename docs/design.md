@@ -1200,7 +1200,7 @@ can also steer the gate by what it omits. These rules close that path:
   takes it as its source, shown as the default in the reply, and the
   policy counts it only while it is still the default
   ([ADR 0020](decisions/0020-default-source.md)). A text that names a
-  source ("from", "off" or "out of" before a word) while the reading has
+  source ("from", "off" or "out of" before a word, or an arrow) while the reading has
   none never takes the default: the source is asked for, so a model
   cannot move stock from the default by leaving the stated source out.
 

@@ -711,6 +711,9 @@ def test_a_place_cannot_hide_a_multiplier(text: str, source: str) -> None:
         ("dropped off the 2 Disc 40 at truck 1", False),  # "dropped off" names a destination
         ("2 Disc 40 from 3 boxes to truck 1", False),  # a number is not a place
         ("2 Disc 40 to truck 1 for Fromm job", False),  # whole words only
+        ("truck 1 → truck 2: 2 Disc 40", True),  # the corpus's arrow form (04-text-multi)
+        ("truck 1 -> truck 2: 2 Disc 40", True),
+        ("2 Disc 40 → my truck", True),  # any arrow: asked once
     ],
 )
 def test_an_implied_source_says_when_the_text_names_one_the_reading_left_out(text: str, left_out: bool) -> None:
