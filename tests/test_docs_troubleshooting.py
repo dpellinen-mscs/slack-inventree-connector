@@ -10,7 +10,17 @@ from stockthread.slack.ingest import DropReason
 
 ROOT = Path(__file__).resolve().parent.parent
 DOC = (ROOT / "docs" / "troubleshooting.md").read_text()
-LOG_PREFIXES = ("slack ", "post ", "stock writes are ", "cannot start", "another instance", "catch-up:", "vehicles:")
+LOG_PREFIXES = (
+    "slack ",
+    "post ",
+    "stock writes are ",
+    "cannot start",
+    "another instance",
+    "catch-up:",
+    "vehicles:",
+    "approvers:",
+    "policy:",
+)
 ELIDED = "\x00"
 """What the page writes as "...": any text the log line holds there."""
 

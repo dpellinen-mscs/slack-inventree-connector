@@ -71,6 +71,13 @@ decided and why.
 
 If the token lacks *add* on *Stock Item*, `check-setup` says so, and InvenTree refuses every write.
 
+`check-setup` warns about two policies that write with nobody able to step in:
+
+- `approvers: none in slack.approvers, so nobody can click Apply or answer for an approver, and only the poster can Undo; the policy still applies with no click: ...`:
+  add the user ids of the people who may approve to `slack.approvers`, or set `policy.auto_apply = []`.
+- `policy: auto_apply has ..., beyond the shipped take-outs: those apply with no click`: a return, receive, count or
+  other type in `policy.auto_apply` is written with no click. Remove it unless that is what you want.
+
 ## Clicking Apply or Undo does nothing, or says no
 
 - A click from someone who is not in `slack.approvers` is dropped: the log says

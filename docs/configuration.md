@@ -40,7 +40,7 @@ Settings are checked once, at startup:
 | `slack.workspace_id` | required | The workspace id (`T...`). Events from any other workspace are dropped. Enterprise Grid org installs are not supported yet. |
 | `slack.app_id` | required | The app id (`A...`). Events for any other app are dropped. |
 | `slack.channels` | `[]` | Channel ids (`C...` or `G...`) the connector acts in. Empty means it acts nowhere. |
-| `slack.approvers` | `[]` | Slack user ids (`U...` or `W...`) that may click Apply, click Undo on any post, and answer questions only an approver may answer. The poster of a post may always Undo it. Empty means nobody can click Apply, while `policy.auto_apply` still applies clear movements with writes on. |
+| `slack.approvers` | `[]` | Slack user ids (`U...` or `W...`) that may click Apply, click Undo on any post, and answer questions only an approver may answer. The poster of a post may always Undo it. Empty means nobody can click Apply, while `policy.auto_apply` still applies clear movements with writes on (`check-setup` warns). |
 | `slack.catch_up_hours` | `72` | After downtime, read posts missed this far back (at most 720). `0` turns catch-up off. A caught-up post is marked late and needs an approver. |
 | `slack.group_window_seconds` | `5` | Messages from one person this close together (at most 300) are read as one post, such as a photo and its caption. `0` reads each message alone. |
 | `slack.plan_expiry_hours` | `24` | A plan, its questions and its Apply button expire after this long (1 to 720). A post older than this, found by catch-up, is stored and gets no reply. |
@@ -50,7 +50,7 @@ Settings are checked once, at startup:
 | `inventree.url` | required | The InvenTree server's base URL, `http://` or `https://`. A user name, password or query in it is refused, because it would be logged. Use https unless InvenTree is on this host or a trusted network: the token goes with every request. |
 | `inventree.timeout_seconds` | `10` | Timeout of one request to InvenTree (1 to 300). |
 | `writes.enabled` | `false` | The switch of the write gate. Off: every movement is a dry run, and the connector never opens its writing client. Writes also stay off on an InvenTree version outside the tested range. |
-| `policy.auto_apply` | `["take_to_vehicle", "take_to_site"]` | Movement types that apply with no click when nothing is in doubt ([ADR 0004](decisions/0004-default-write-policy.md)). Every other type waits for Apply. `[]` makes every movement review-first. Allowed: `take_to_vehicle`, `take_to_site`, `return`, `transfer`, `receive`, `consume`, `count`. |
+| `policy.auto_apply` | `["take_to_vehicle", "take_to_site"]` | Movement types that apply with no click when nothing is in doubt ([ADR 0004](decisions/0004-default-write-policy.md)). Every other type waits for Apply. `[]` makes every movement review-first. A type beyond the two shipped take-outs makes `check-setup` warn. Allowed: `take_to_vehicle`, `take_to_site`, `return`, `transfer`, `receive`, `consume`, `count`. |
 | `policy.max_quantity` | `100` | A larger quantity on a line is a review reason. |
 | `policy.default_source` | `{}` | A default source location per movement type. Unset, an implied source ("2 Disc 40 on my truck") is a review reason. |
 | `apply.settle_seconds` | `120` | How long a write whose outcome is unknown waits before recovery looks for it. It must be longer than `inventree.timeout_seconds`. |
