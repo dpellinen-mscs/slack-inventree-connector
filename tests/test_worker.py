@@ -532,6 +532,24 @@ def test_a_deleted_thread_reply_leaves_the_rest_of_the_post_to_read(
     assert record.result["messages"] == [ROOT, reply]  # read through the reply, which reads as deleted
 
 
+def test_someone_else_s_deleted_thread_reply_raises_no_other_author_reason(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
+) -> None:
+    """Only messages read count: once Luis's reply is deleted, Sam's post is Sam's alone again."""
+    enqueue(store, message(ROOT, TAKE))
+    due(worker, clock)
+    reply = "1790000040.000100"
+    enqueue(store, message(reply, "on my way", user=LUIS, thread_ts=ROOT))
+    due(worker, clock, 1790000070)
+    enqueue(store, deletion_of(reply, "1790000080.000100"))
+    worker.step()
+    assert revisions(path) == [(2, "retracted", True), (3, "replied", True)]
+    record = store.dry_run(PostKey(WORKSPACE, CHANNEL, ROOT))
+    assert record is not None
+    assert record.result is not None
+    assert DETAIL_OTHER_AUTHOR not in [r["detail"] for m in record.result["movements"] for r in m["reasons"]]
+
+
 def test_an_edit_of_a_post_without_a_standing_reply_reads_the_edited_text(
     worker: Worker, store: Store, slack: FakeSlack, clock: Clock, path: Path
 ) -> None:
