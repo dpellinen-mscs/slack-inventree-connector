@@ -216,7 +216,7 @@ an inactive part or a deleted location is ignored and reported.
 - [ ] Threat model, final version, and security review, including prompt injection through message text
 - [ ] A 24-hour run on small hardware with forced disconnects
 - [x] Upgrade and backup notes for the audit store ([operations](docs/operations.md))
-- [ ] Supported version matrix for InvenTree and Slack transports
+- [x] Supported version matrix for InvenTree and Slack transports ([versions](docs/versions.md), checked against CI)
 - [ ] Prepublication audit: full-history leak scan, license headers, docs check, private vulnerability reporting on
 - [ ] Release process, without publishing until Dan says so
 - [x] Any unit but a count (feet, metres, a box) asks for the quantity in the part's stocking unit, and no request
