@@ -8,6 +8,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -120,15 +121,15 @@ def store(tmp_path: Path) -> Iterator[Store]:
     opened.close()
 
 
-def approved(store: Store, post: PostKey = POST) -> None:
+def approved(store: Store, post: PostKey = POST, take: MovementView = TAKE, now: GateNow = ON) -> None:
     """The take-out's dry run posted in `post`'s thread, and its plan approved by the policy."""
     store.place_message(OWNER, post, user_id=SAM, thread_ts=None, window_seconds=5)
-    extraction = Extraction("rules", (TAKE.movement,))
-    result = json.loads(json.dumps(_record(extraction, [TAKE], late=False, poster=SAM, messages=(), max_quantity=500)))
+    extraction = Extraction("rules", (take.movement,))
+    result = json.loads(json.dumps(_record(extraction, [take], late=False, poster=SAM, messages=(), max_quantity=500)))
     made = plan_of(result)
     assert made is not None
     store.finish_dry_run(OWNER, post, DryRunOutcome.REPLIED, "1700000100.000100", result=result, plan=NewPlan(*made))
-    judged = approve_by_policy(store, OWNER, post, ON)
+    judged = approve_by_policy(store, OWNER, post, now)
     assert judged is not None
     assert judged.allowed
 
@@ -860,6 +861,32 @@ def test_a_server_no_longer_tested_blocks_the_run_loops_apply_and_undo(store: St
     assert refused.state is S.VERIFIED
     assert refused.why.startswith("no undo: ")
     assert len(fake.sent) == 1
+
+
+TO_SITE = replace(
+    TAKE, movement=replace(TAKE.movement, movement_type=MovementType.TAKE_TO_SITE, destination_text="smith job")
+)
+"""As `TAKE`, but to a site: location 11 is the Smith job here."""
+
+
+@pytest.mark.parametrize("still_a_site", [True, False])
+def test_the_run_loops_step_judges_a_take_to_a_site_with_the_sites_of_its_catalog_read(
+    store: Store, still_a_site: bool
+) -> None:
+    """ADR 0022: the check before the write reads the sites again; a site no longer one holds the write."""
+    sites = frozenset({DESTINATION})
+    approved(store, take=TO_SITE, now=replace(ON, sites=sites))
+    fake = Connected()
+    current = Catalog(parts=(), locations=(), vehicles={}, sites=sites if still_a_site else frozenset())
+    step, _ = steps(store, fake, catalog=lambda: current)
+    applied = step(KEY)
+    if still_a_site:
+        assert applied.state is S.VERIFIED
+        assert len(fake.sent) == 1
+    else:
+        assert applied.state is S.APPROVED
+        assert "not under a site in locations.sites" in applied.why
+        assert fake.sent == []
 
 
 def test_a_catalog_outage_stops_only_the_write_and_never_the_recovery(store: Store) -> None:

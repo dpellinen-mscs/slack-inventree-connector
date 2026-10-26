@@ -21,9 +21,9 @@ Apply. #204 catches the return words ("returned", "back to"), but not every word
    Each path names one location, letter for letter; a structural folder counts. The sites are those locations and
    every location under them, by each location's parent in InvenTree (`catalog.assign_sites`), never by a path
    prefix, since a name may hold a "/".
-2. The policy approves a `take_to_site` only when its destination is one of those locations now (`GateNow.sites`,
-   read again for each judgement, as vehicles are). Anything else waits for an approver's Apply. Nothing changes for
-   a click: an approver may apply a take to any place.
+2. The policy approves a `take_to_site` only when its destination is one of those locations in the current catalog
+   snapshot (`GateNow.sites`, as for vehicles), both when the plan is approved and before the write. Anything else
+   waits for an approver's Apply. Nothing changes for a click: an approver may apply a take to any place.
 3. Unset, the default, means every take to a site waits for Apply. With writes on and `take_to_site` in
    `policy.auto_apply`, `check-setup` warns. A path that names no location is an error in `check-setup` and a warning
    in the log when the catalog is read; its sites then count as none.

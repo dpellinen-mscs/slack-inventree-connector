@@ -1118,12 +1118,16 @@ def test_each_snapshot_gets_the_sites_and_a_path_not_found_is_logged_once(
     assert read().sites == {20, 21, 22, 23}
     assert read().sites == {20, 21, 22, 23}
     assert [record.getMessage() for record in caplog.records] == [
-        'locations.sites: no stock location at "Gone"; a take to a site there waits for Apply'
+        'locations.sites: "Gone" not the whole path of exactly one stock location; a take to a site there waits'
+        " for Apply"
     ]
     assert read().sites == frozenset()
-    assert caplog.records[-1].getMessage().startswith('locations.sites: no stock location at "Sites", "Gone"')
+    assert caplog.records[-1].getMessage().startswith('locations.sites: "Sites", "Gone" not the whole path')
     assert read().sites == {20, 21, 22, 23}
     assert len(caplog.records) == 3
+    every = with_vehicles(lambda: SITED, settings(tmp_path / "stockthread.db", sites=["Sites"]))
+    assert every().sites == {20, 21, 22, 23}
+    assert caplog.records[-1].getMessage() == "locations.sites: every one of the 1 paths is a stock location"
 
 
 def test_a_catalog_outage_passes_through_the_vehicles(tmp_path: Path) -> None:

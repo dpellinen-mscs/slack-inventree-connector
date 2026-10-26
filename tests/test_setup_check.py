@@ -252,7 +252,10 @@ async def test_a_missing_catalog_view_prints_the_roles_error_and_skips_the_catal
         findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
     assert [(f.level, f.text) for f in findings[1:]] == [
         (Level.ERROR, "roles: part lacks view, needed for dry runs (the catalog cannot be read)"),
-        (Level.WARN, "vehicles and aliases: not checked until part and stock_location have view"),
+        (
+            Level.WARN,
+            "location paths and aliases: not checked until part and stock_location have view",
+        ),
     ]
     assert "/api/part/" not in asked
     assert exit_code(findings) == 1
@@ -264,7 +267,7 @@ async def test_a_catalog_refused_despite_the_roles_is_an_error_and_the_roles_sti
     async with client:
         findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
     assert levels(findings) == [Level.OK, Level.OK, Level.ERROR]
-    assert findings[2].text.startswith("vehicles and aliases: not checked, the catalog could not be read: ")
+    assert findings[2].text.startswith("location paths and aliases: not checked, the catalog could not be read: ")
 
 
 @pytest.mark.anyio

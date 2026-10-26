@@ -80,8 +80,8 @@ If the token lacks *add* on *Stock Item*, `check-setup` says so, and InvenTree r
   other type in `policy.auto_apply` is written with no click. Remove it unless that is what you want.
 - `policy: auto_apply has take_to_site, but locations.sites is unset, so every take to a site waits for Apply`: set
   `locations.sites` to your sites folder, such as `["Sites"]` ([locations](locations.md)).
-- The log says `locations.sites: no stock location at ...; a take to a site there waits for Apply` when a path is not
-  the whole path of exactly one location. `check-setup` says why.
+- The log says `locations.sites: ... not the whole path of exactly one stock location; a take to a site there waits for Apply`
+  when the catalog is read. `check-setup` says why for each path.
 
 ## Clicking Apply or Undo does nothing, or says no
 

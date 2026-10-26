@@ -355,8 +355,13 @@ def with_vehicles(load: Callable[[], Catalog], settings: Settings) -> Callable[[
             unsited[0] = no_site
             if no_site:
                 log.warning(
-                    "locations.sites: no stock location at %s; a take to a site there waits for Apply",
+                    "locations.sites: %s not the whole path of exactly one stock location; a take to a site there"
+                    " waits for Apply",
                     ", ".join(f'"{path}"' for path in no_site),
+                )
+            elif settings.locations.sites:
+                log.info(
+                    "locations.sites: every one of the %d paths is a stock location", len(settings.locations.sites)
                 )
         if no_default != unsourced[0]:
             unsourced[0] = no_default
@@ -528,12 +533,15 @@ async def inventree_findings(
     if lacks_catalog_view(roles):
         return [
             *found,
-            Finding(Level.WARN, "vehicles and aliases: not checked until part and stock_location have view"),
+            Finding(
+                Level.WARN,
+                "location paths and aliases: not checked until part and stock_location have view",
+            ),
         ]
     try:
         catalog = await load_catalog(reader)
     except InvenTreeError as exc:
-        unread = f"vehicles and aliases: not checked, the catalog could not be read: {exc}"
+        unread = f"location paths and aliases: not checked, the catalog could not be read: {exc}"
         return [*found, Finding(Level.ERROR, unread)]
     return [
         *found,
