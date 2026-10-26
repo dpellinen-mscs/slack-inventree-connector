@@ -172,6 +172,7 @@ def test_two_undo_clicks_at_once_move_stock_once(api: RawApi, scratch: Scratch, 
     read = inventree_stock(settings())
     before = {pair: sum(stock.quantity for stock in items) for pair, items in read(pairs(movement)).items()}
     outcomes: list[RequestState | str] = []
+    errors: list[str] = []  # the messages, so a failure here says which read or refusal it was
 
     async def apply_then_undo_twice() -> None:
         async with InvenTreeReader(server(), token()) as reader, InvenTreeWriter(server(), token()) as writer:
@@ -190,14 +191,16 @@ def test_two_undo_clicks_at_once_move_stock_once(api: RawApi, scratch: Scratch, 
                     outcomes.append(undone.state)
                 except Exception as error:
                     outcomes.append(type(error).__name__)
+                    errors.append(f"{type(error).__name__}: {error}")
 
             async with anyio.create_task_group() as group:
                 group.start_soon(click, "U0DAN0001")
                 group.start_soon(click, "U0SAM0001")
 
     anyio.run(apply_then_undo_twice)
-    assert outcomes.count(S.UNDONE) == 1, outcomes
-    assert set(outcomes) - {S.UNDONE} <= {S.VERIFIED, "StateConflict", "ValueError"}, outcomes  # refused, nothing sent
+    assert outcomes.count(S.UNDONE) == 1, (outcomes, errors)
+    # the other click is refused, and nothing is sent
+    assert set(outcomes) - {S.UNDONE} <= {S.VERIFIED, "StateConflict", "ValueError"}, (outcomes, errors)
     assert len([m for m in store.markers(KEY) if m.kind is AttemptKind.UNDO]) == 1
     after = {pair: sum(stock.quantity for stock in items) for pair, items in read(pairs(movement)).items()}
     assert after == before
