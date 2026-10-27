@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A fault proxy for tests: it sits between a client and InvenTree and breaks chosen requests.
 
 The apply protocol treats timeouts, dropped connections, 5xx answers and bodies that do not

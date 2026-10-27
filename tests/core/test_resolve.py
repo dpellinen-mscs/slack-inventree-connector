@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Source selection (core/resolve.py): which stock items a line takes, by the documented rule."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The domain model of the pure core: posts, candidates, match results and review reasons.
 
 Values are frozen dataclasses that check their own invariants, so an

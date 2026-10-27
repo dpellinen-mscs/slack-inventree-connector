@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The Slack listener: check, store, then acknowledge (design section 4, "Acknowledge first", "Durable queue").
 
 Bolt for Python receives payloads over Socket Mode or HTTP. Over HTTP, Bolt checks the request signature before

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The version agrees in `pyproject.toml`, the package and the changelog (docs/releasing.md)."""
 
 from __future__ import annotations

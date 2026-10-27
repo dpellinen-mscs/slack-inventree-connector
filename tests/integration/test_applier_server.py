@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The worker's apply step (`applier`) against a real server: a reply's plan, approved by the policy with the server's
 own version check, written once and read back with the connector's own reader and writer."""
 

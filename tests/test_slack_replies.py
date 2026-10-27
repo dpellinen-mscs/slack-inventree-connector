@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The dry-run reply: what it shows, and that post text can never become Slack markup."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The Apply button on a dry-run reply that made a plan (ADR 0019: a plan the policy does not approve waits for Apply):
 the button, the worker's checks against the stored reply (`Worker._handle_apply`), `applier.approve_by_click` as
 `run.click_approver` calls it, and what the clicker alone is told."""

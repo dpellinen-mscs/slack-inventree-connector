@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The Slack fixtures are coherent, and the signature vectors agree with a reference implementation."""
 
 import hashlib

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A question in the thread: its words and buttons, and that post text can never become Slack markup."""
 
 from __future__ import annotations

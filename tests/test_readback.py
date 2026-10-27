@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Step 5: the read-back, checks 1 (the marker's entries have the plan's deltas) and 2 (totals are snapshot + plan)."""
 
 from __future__ import annotations

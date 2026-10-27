@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Answers by thread reply: whether a message reads cleanly as the answer to a question (design section 4,
 "Answers by thread reply").
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The apply protocol end to end for one request (`apply.apply_request`), against a fake InvenTree that moves a
 whole stock item the way InvenTree does (`test_char_history_deltas`). The real server: test_apply_server.py."""
 

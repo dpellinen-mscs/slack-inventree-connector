@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Catch-up: what Slack did not deliver is read from the channel history, stored as events, and answered late."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The request state machine against design section 7."""
 
 import itertools

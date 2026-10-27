@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The LLM extractor: a post goes to a model, and only output that fits the schema comes back as candidates.
 
 The model proposes text, never a decision. It sees the message texts and how many files each has: no user ids

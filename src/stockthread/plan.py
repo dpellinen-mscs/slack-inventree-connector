@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A decided plan becomes its InvenTree requests: one per movement, in the post's order (design section 7, "Units
 of work").
 

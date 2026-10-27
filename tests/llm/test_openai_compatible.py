@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The OpenAI-compatible adapter against a fake server: the request it sends, and every answer it refuses."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The state machine of a request: one InvenTree write and its undo (design section 7).
 
 This module only decides which transitions are allowed and who may make

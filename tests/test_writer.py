@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import json
 from collections.abc import Callable
 from decimal import Decimal

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Text from Slack made safe for a terminal: every character that is not printable (control characters, DEL, C1
 codes, bidi overrides) is escaped as `\\uXXXX`, or as the UTF-16 surrogate pair JSON writes above U+FFFF, so none
 reaches the terminal as itself and no escape is ever read as fewer digits. `stockthread trail` and `stockthread

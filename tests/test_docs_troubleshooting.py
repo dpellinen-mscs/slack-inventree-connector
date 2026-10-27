@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """docs/troubleshooting.md quotes log lines; each must still be one the connector can write."""
 
 from __future__ import annotations

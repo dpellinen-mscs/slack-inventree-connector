@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check the eval corpus for structural and referential errors.
 
 Standard library only, so it runs anywhere Python 3.9+ is installed:

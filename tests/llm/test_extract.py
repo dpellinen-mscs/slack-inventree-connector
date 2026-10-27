@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The LLM extractor: what is sent, and that only output fitting the schema becomes candidates."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The Undo button on a receipt, clicked: the worker's checks against the stored request (the button's value, the
 newest receipt of the plan, the poster or an approver, `applier.undo_refusal`), then `apply.undo_apply` against the
 fake InvenTree of test_apply_request.py, and what the clicker alone is told."""

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Questions: the one focused question a post with review reasons gets in its thread (design section 4).
 
 A post can hold many reasons, but the thread asks one question at a time, and the answer re-runs

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Read-back against a real server: plan, precondition, write, then `readback.verify` with what the reader finds. The
 history deltas `readback` expects are InvenTree's, on each pinned version (`test_char_history_deltas`)."""
 

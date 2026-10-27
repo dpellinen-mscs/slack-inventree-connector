@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The audit store: keys, append-only rows, compare-and-set transitions and write guards (design sections 7, 8)."""
 
 from __future__ import annotations

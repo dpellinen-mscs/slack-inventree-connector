@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Grouping: which post a message joins, whatever order Slack delivers them in (design section 4)."""
 
 from __future__ import annotations

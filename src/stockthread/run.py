@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """`stockthread run`: serve Slack, and run the worker until stopped (design section 4).
 
 Startup order: open the store and take the instance lock; put back events an earlier instance left

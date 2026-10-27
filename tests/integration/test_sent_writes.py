@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The writer against a real server (design section 7, step 4): each built request is accepted and its answer kept,
 a request InvenTree refuses is a known refusal that changed nothing, and every failure the client cannot read is
 unknown, even when the server committed the write."""

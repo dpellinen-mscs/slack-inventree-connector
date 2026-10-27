@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """docs/architecture.md maps every module, and the layout rules it states hold."""
 
 from __future__ import annotations

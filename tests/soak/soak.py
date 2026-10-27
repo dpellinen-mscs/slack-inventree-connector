@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A soak run: `stockthread run` for hours against a disposable InvenTree and a fake Slack whose link breaks.
 
     tests/integration/start-inventree.sh inventree/inventree:1.5.6 > .it.env

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The output schema against the eval corpus: every expected extraction can be said in it, and read back whole.
 
 This is not a score of any model. It feeds the parser the answers a perfect model would give, so a schema or

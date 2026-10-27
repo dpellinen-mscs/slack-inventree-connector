@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The InvenTree request a decided plan becomes: every body is built and checked before the network sees it."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The eval corpus for tests: its cases, its expected movements as candidates, and its synthetic catalog."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The views a write acts on, rebuilt from the dry-run record the thread was shown (ADR 0016).
 
 `plan_hash` is a plan revision's `input_hash`: the SHA-256 of the canonical JSON of the record's movements.

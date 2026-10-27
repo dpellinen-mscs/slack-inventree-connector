@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The validator: review reasons by rule (design section 7, "The model cannot authorize a write")."""
 
 from __future__ import annotations

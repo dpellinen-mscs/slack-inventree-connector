@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Every body `core/write_request.py` builds is accepted by each pinned InvenTree version and does exactly what it
 says: decimal-string quantities, `merge: false` on transfer lines, and notes whose marker can be found."""
 

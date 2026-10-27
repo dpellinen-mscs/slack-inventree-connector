@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A fake Slack Socket Mode endpoint for tests: a local WebSocket server that slack_sdk's own client connects to.
 
 It speaks just enough of RFC 6455 and Slack's envelope protocol for the connector's real `SocketModeHandler`: the

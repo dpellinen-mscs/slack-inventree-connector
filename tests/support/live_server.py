@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Helpers of the integration tests that talk to the disposable InvenTree (`tests/integration/start-inventree.sh`):
 the settings for it, and the reads and movements several test modules share."""
 

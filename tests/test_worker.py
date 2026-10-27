@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The worker: stored events become posts, and a post whose window has passed gets one dry-run reply."""
 
 from __future__ import annotations

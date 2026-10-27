@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The stock reader the worker uses for source selection (`run.inventree_stock`), against a real server."""
 
 from __future__ import annotations

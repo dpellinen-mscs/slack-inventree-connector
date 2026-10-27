@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Step 3: the plan still holds against the stock read right before the write, and the snapshot stored with it."""
 
 from __future__ import annotations

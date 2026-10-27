@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Answers by thread reply (core/typed_answers.py): a message answers a question only when it reads cleanly."""
 
 from __future__ import annotations

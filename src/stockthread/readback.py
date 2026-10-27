@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Step 5 of the apply protocol, the read-back (design section 7, "Apply protocol").
 
 Pure: after a write InvenTree accepted, the caller searches the history entries of the request's marker id

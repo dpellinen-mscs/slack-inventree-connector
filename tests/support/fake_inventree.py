@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A fake InvenTree for the apply protocol: it moves a whole stock item the way InvenTree does
 (`test_char_history_deltas`), and can fail, time out or land a write late on request."""
 

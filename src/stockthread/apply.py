@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The apply protocol (design section 7, "Apply protocol"): `apply_request` runs steps 1 to 6 for one request,
 `check_post_markers` is step 2, the marker check of a whole post against InvenTree, `recover_request` concludes an
 apply whose outcome is unknown ("Unknown outcomes and recovery"), `undo_apply` runs one undo ("Undo"), and

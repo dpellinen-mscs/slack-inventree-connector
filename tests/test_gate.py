@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The write gate: the switch, the policy and validation each block alone; automatic apply is stricter than Apply."""
 
 from __future__ import annotations

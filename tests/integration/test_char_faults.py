@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Characterization through the fault proxy: what the server did when the client saw a failure (design section 7).
 
 The connector treats every one of these client-side results as an unknown outcome. These tests show why:

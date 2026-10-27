@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Read-only InvenTree REST client.
 
 The connector reads parts, locations and stock through this client. It can

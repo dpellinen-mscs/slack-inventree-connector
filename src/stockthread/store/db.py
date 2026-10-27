@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The store of posts, plan revisions, requests and their attempts, with an append-only audit log.
 
 Every change runs in one `BEGIN IMMEDIATE` transaction, so a writer holds the

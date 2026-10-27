@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The InvenTree request a decided line set becomes (design sections 5 and 7): pure, so every body the connector
 could ever send is built and checked here, before any network code sees it.
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Catch-up: find the messages Slack never delivered (design section 4, "Catch-up after downtime").
 
 Slack does not replay the events of a time the connector was down or disconnected. A sweep reads the history

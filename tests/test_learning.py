@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """What a confirmed plan teaches (`learning.lessons`, ADR 0012): the poster's own words that a person confirmed,
 picked or corrected, each once, when the record is the only one they fit; never an exact, normalized or alias
 match, words the model wrote, a text whose meaning depends on the poster, a text that fits other records, or a text

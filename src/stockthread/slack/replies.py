@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The replies in a post's thread: the dry run (what would change, and every reason it needs a human), its
 questions, and the receipt of what was written.
 

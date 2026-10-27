@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The setup check: roles of the token's user, `[vehicles]` paths, and posters without a vehicle (design section 5)."""
 
 from __future__ import annotations

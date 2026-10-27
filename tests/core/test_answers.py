@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """What answers change about a reading (design section 4, "Acting on an answer")."""
 
 from __future__ import annotations

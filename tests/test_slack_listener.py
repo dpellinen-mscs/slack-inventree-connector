@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The Slack listener: every recorded payload through the real Bolt app, over both transports (design section 4)."""
 
 from __future__ import annotations

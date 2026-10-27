@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """`apply.undo_apply` against a real server: apply a movement with the whole protocol, then undo it the same way, with
 the connector's own reader and writer, and find every total the movement touched back where it was."""
 

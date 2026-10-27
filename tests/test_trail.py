@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """`stockthread trail`: one post's dry runs, every review reason, its questions and the audit log, read only."""
 
 from __future__ import annotations

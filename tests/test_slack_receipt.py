@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The receipt in a post's thread once its plan's writes concluded: what it says for each outcome, its links into
 InvenTree, and that neither post text nor configuration can become Slack markup in it."""
 

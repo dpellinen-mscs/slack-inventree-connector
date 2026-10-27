@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Alias learning end to end against a real server (ROADMAP M3 DoD): the worker as `stockthread run` builds it with
 writes on, the catalog, stock, policy, Apply click, write and read-back all from InvenTree, and Slack faked.
 

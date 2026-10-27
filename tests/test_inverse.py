@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The undo of a write, built from what the apply's history entries show (design section 7, "Undo")."""
 
 from __future__ import annotations

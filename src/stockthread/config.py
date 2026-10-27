@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Settings: one TOML file for behavior, environment variables for secrets.
 
 Settings are validated once, at startup. An unknown key, a wrong type or a

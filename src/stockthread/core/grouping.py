@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Grouping: which post a Slack message belongs to (design section 4, "Grouping").
 
 A photo with its caption is already one message. Sibling messages from the same user within a short

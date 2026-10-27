@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Socket Mode end to end: the real `SocketModeHandler` from `serve`, against a local fake of Slack's endpoint
 (`tests/support/fake_socket_mode.py`). The connection breaks the ways it does in the field, and every post is still
 answered exactly once."""

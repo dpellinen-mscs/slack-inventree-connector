@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Alias learning in the worker (ADR 0012): once every request of a plan an approver's click approved is verified,
 `Worker.work_due` stores what the plan teaches (`learning.lessons`), and the receipt names it. Nothing else teaches."""
 

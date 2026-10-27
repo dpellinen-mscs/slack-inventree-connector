@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Source selection: which concrete stock items a line moves (design section 5, "Stock items, not parts").
 
 A transfer or a remove acts on stock items, not on a part. Given the stock items of the matched part in the

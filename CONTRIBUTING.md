@@ -78,3 +78,6 @@ and option.
   [`docs/decisions/`](docs/decisions/).
 - By contributing, you agree that your contribution is licensed under the
   project's [MIT license](LICENSE).
+- Every Python and shell file starts with `# SPDX-License-Identifier: MIT`
+  (after the shebang, if there is one). `tests/test_license_headers.py`
+  checks it.

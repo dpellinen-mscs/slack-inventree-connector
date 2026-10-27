@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The domain model: invariants, keys, hashes, and agreement with the eval corpus and the settings."""
 
 import json

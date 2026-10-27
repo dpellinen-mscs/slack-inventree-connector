@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Start a disposable InvenTree server in Docker for the integration tests.
 #
 #   tests/integration/start-inventree.sh inventree/inventree:1.5.6
