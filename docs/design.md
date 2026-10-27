@@ -1067,10 +1067,12 @@ needs.
   on has a named test that runs against each pinned InvenTree version, on
   PostgreSQL as well as SQLite. If one fails on a version, the connector
   refuses writes on that version. Section 11 lists the tests.
-- **Rate limits.** According to the research, the server throttles API
-  calls by default in recent versions. The client honors 429 responses
-  with backoff for reads. A write is never retried automatically
-  (section 7).
+- **Rate limits.** Not measured: whether a server throttles depends on
+  its settings and on any proxy in front of it, and the pinned servers
+  never answered 429 to the integration suites. The client honors a 429
+  on a read with backoff (`Retry-After`, at most 30 s, 3 attempts; mocked
+  in `tests/test_inventree.py`). A write is never retried automatically,
+  and a 429 on a write is an unknown outcome (section 7).
 
 ## 6. Safety model
 
@@ -1369,13 +1371,18 @@ request shares it.
   `varchar(512)`, which PostgreSQL enforces (`test_char_notes_length`).
 - The search for a marker reads every page of results and compares the
   whole token, because the server search matches substrings (built:
-  `InvenTreeReader.marker_entries`, nothing calls it yet). An entry is
+  `InvenTreeReader.marker_entries`). An entry is
   the request's only when its notes start with a whole marker of the id;
   an entry that quotes the marker later in its notes is not. A later
   split of the marked item does not copy the entry onto the new item
-  (`test_char_a_later_split_does_not_copy_the_marked_entry`), and the
-  search refuses a result in which an entry comes back twice, because
-  offset paging then skipped another.
+  (`test_char_a_later_split_does_not_copy_the_marked_entry`). The search
+  refuses a result whose count changed between pages or in which an
+  entry comes back twice, because offset paging then skipped another.
+  Measured: the list comes newest first, so an entry written between two
+  pages repeats the last row of the first and grows the count
+  (`test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_refused`).
+  A repeat with an unchanged count (rows that tie on the ordering) is
+  not reproducible from outside; that guard is tested with a mock only.
 - **A marker that is found proves the write happened. A marker that is not
   found proves nothing.** On 1.4.3 the marker of a removal that deleted
   its stock item cannot be found (section 5, Depletion), an admin can
@@ -1415,7 +1422,11 @@ connector never has two InvenTree writes in flight and cannot race itself.
    Built (the caller): `apply.check_post_markers` searches every
    request's marker id (`InvenTreeReader.marker_entries`) and, for a
    `missing` marker on a server below API 530
-   (`DEPLETING_MARKER_FOUND_FROM`; 1.5.6 finds that marker) of a write
+   (`DEPLETING_MARKER_FOUND_FROM`; 1.5.6 finds that marker, 1.4.3 at
+   API 511 does not, and no API version between is measured: the
+   boundary is an assumption that puts every unmeasured version on the
+   side that asks for the 404s, which excuses a marker only when every
+   item it named is gone) of a write
    that left every item it named at 0 (a removal, the apply of a remove
    or the undo of an add, whose stored snapshot shows every line taking
    its item's whole quantity, `apply.depletes`; or a count of every item
@@ -1676,7 +1687,14 @@ A request that timed out on the client may still be running on the
 server, so recovery waits before it concludes anything:
 
 1. The request is quarantined for `apply.settle_seconds` (default 120,
-   and it must exceed the request timeout of the server).
+   and it must exceed the request timeout of the server). The API does
+   not expose that timeout, so the connector cannot check it. The pinned
+   Docker images run gunicorn with its default worker timeout of 30 s
+   (neither `gunicorn.conf.py` nor the image's command sets one; read
+   from both images). The setting is enforced only to be longer than
+   `inventree.timeout_seconds`. An admin who gives the server or a proxy
+   in front of it a longer timeout must raise `apply.settle_seconds`
+   above it.
 2. After that, recovery searches for the marker and reads the quantities.
 
 | Marker | Quantities compared with the snapshot | Result |
@@ -2094,6 +2112,7 @@ the test suite.
 | `test_char_marker_on_every_entry_type` | The notes reach every history entry a request writes |
 | `test_char_marker_visible_after_response` | Whether history is readable as soon as the server has answered |
 | `test_char_marker_search_is_substring` | The history search matches substrings, and `limit` with `offset` pages through it without overlap |
+| `test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_refused` | An entry written between two pages of a search repeats a row and grows the count, and the reader refuses that list |
 | `test_char_notes_length` | Notes up to 512 characters are stored whole. Longer ones: SQLite stores them, PostgreSQL answers 500 |
 | `test_char_overlong_notes_write_without_history` | PostgreSQL: on 1.5.6 that 500 still commits the stock change, with no history entry. On 1.4.3 it changes nothing |
 | `test_char_multi_item_request_is_atomic` | One bad line fails the whole request |
