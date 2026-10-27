@@ -290,6 +290,26 @@ def test_a_removal_is_added_back_to_an_item_at_zero() -> None:
     assert applied.check(found, {(1, SOURCE): [item(57, "0")]}, entries) is None
 
 
+@pytest.mark.parametrize(
+    ("holds", "why"),
+    [
+        ("9999999998", "stock item 57 would hold 10000000000 after the undo, more than InvenTree stores"),
+        ("9999999999.5", "stock item 57 would hold 10000000001.5 after the undo, more than InvenTree stores"),
+        ("9999999998.5", "stock item 57 would hold 10000000000.5 after the undo, more than InvenTree stores"),
+        ("9999999997", None),
+        ("9999999997.5", None),
+    ],
+)
+def test_the_undo_of_a_removal_never_adds_past_what_inventree_stores(holds: str, why: str | None) -> None:
+    """An add past 15 digits is a 500 that writes nothing, or a 201 that leaves the item unreadable (#222)."""
+    applied = Applied(view(MovementType.CONSUME), {(1, SOURCE): [item(57, "5")]})
+    entries = [entry(700, 57, 12, removed=2.0, quantity=3.0)]
+    found = applied.reversals(entries)
+    assert found == [Reversal(57, Decimal(2), None)]
+    refused = applied.check(found, {(1, SOURCE): [item(57, holds)]}, entries)
+    assert (refused and refused.why) == why
+
+
 def test_inputs_that_do_not_belong_together_are_a_caller_error() -> None:
     applied = transfer("2")
     with pytest.raises(ValueError, match="movement and marker"):

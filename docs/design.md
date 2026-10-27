@@ -1791,9 +1791,11 @@ transfer, the added, removed or counted entry otherwise; anything else, or
 an item a removal or count deleted, is no undo). `inverse.check_undo`
 checks the conditions in the table on the stock read now, with exact
 quantities (what the apply left), an available item (status OK, nothing
-allocated) wherever the undo takes stock from, no entry of the request's id
-from another attempt, and no history entry since the snapshot on an item
-it touches but the apply's. An add onto an item that held 0, or a count of
+allocated) wherever the undo takes stock from, an item the undo of a
+removal adds to staying under `QUANTITY_LIMIT` (as the precondition of an
+apply; only a change with no history entry could get it there), no entry
+of the request's id from another attempt, and no history entry since the
+snapshot on an item it touches but the apply's. An add onto an item that held 0, or a count of
 one, has no undo: back at 0 the item may be deleted. `inverse.undo_request` builds the
 request with an undo marker: a transfer back moves the item the apply
 moved, or the new item its split made, with `merge: false`. Tested on
