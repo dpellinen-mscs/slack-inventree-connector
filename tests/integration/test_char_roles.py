@@ -123,6 +123,34 @@ def test_char_user_without_stock_add_cannot_adjust(api: RawApi, scratch: Scratch
     assert len(api.get("/api/stock/track/", item=item["pk"])) == history
 
 
+def test_char_refusals_carry_a_detail_alone(api: RawApi, scratch: Scratch, restricted: Any) -> None:
+    """A 401, 403 or 405 from InvenTree is JSON with a `detail` string and nothing else.
+
+    The writer reads only that shape as "refused, nothing written" (`writer._refusal`); any other body is unknown.
+    """
+    item = scratch.stock(3)
+    body = {"items": [{"pk": item["pk"], "quantity": 1}], "location": scratch.other, "notes": "refused"}
+    group, _ = _group(api, {**MINIMUM_ROLES, "stock": {"can_view": True}})
+    with httpx.Client(base_url=api.http.base_url, timeout=30) as anonymous:
+        answers = {
+            "no token": anonymous.post("/api/stock/transfer/", json=body),
+            "bad token": anonymous.post(
+                "/api/stock/transfer/", json=body, headers={"Authorization": f"Token {uuid.uuid4().hex}"}
+            ),
+            "no add role": restricted(group).post("/api/stock/transfer/", json=body),
+            "wrong method": api.http.get("/api/stock/transfer/"),
+        }
+    statuses = {name: response.status_code for name, response in answers.items()}
+    assert statuses == {"no token": 401, "bad token": 401, "no add role": 403, "wrong method": 405}
+    for name, response in answers.items():
+        assert response.headers["content-type"].startswith("application/json"), name
+        detail = response.json()
+        assert list(detail) == ["detail"], name
+        assert isinstance(detail["detail"], str), name
+    after = scratch.item(item["pk"])
+    assert (float(after["quantity"]), after["location"]) == (3, scratch.parent)
+
+
 def test_char_roles_endpoint_shows_the_minimum_as_the_setup_check_reads_it(api: RawApi, restricted: Any) -> None:
     """`GET /api/user/roles/` names each role with its permissions, or null for none (measured on 1.4.3 and 1.5.6).
     The setup check reads the documented minimum from it as enough, and the admin token as more than needed."""
