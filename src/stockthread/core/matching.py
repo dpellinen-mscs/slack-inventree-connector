@@ -29,12 +29,15 @@ from stockthread.core.model import Match, MatchRule, MatchStatus, MovementType
 
 TYPO_RATIO = 0.8
 """Two words of 4 letters or more count as the same word at this `difflib` similarity (for example "ondrl")."""
-MY_VEHICLE = re.compile(r"^my (truck|van|vehicle|car|trailer)$")
+_MY_VEHICLE = r"my (truck|van|vehicle|car|trailer)"
+MY_VEHICLE = re.compile(rf"^{_MY_VEHICLE}$")
 """Phrases that mean the poster's own vehicle, when the word names the kind of vehicle assigned."""
 _WORD = re.compile(r"[^\W_]+\+*")
 """Letters and digits of any script, so "10\N{MICRO SIGN}F" never loses its unit, and a trailing "+" ("PoE+")."""
 _HISSING = ("ss", "x", "z", "ch", "sh")
 """Endings after which "-es" is a plural ending: "boxes", "switches", "glasses", but not "tapes"."""
+_PUNCTUATION = re.compile(r"[,;:!?()\[\]{}\n]|\.(?!\w)")
+"""Where a name in a post ends: a comma, colon, bracket, line break or full stop ("Shelf B.2" keeps its dot)."""
 _LETTERS_DIGITS = re.compile(r"[^\W\d_]+|\d+")
 
 
@@ -266,7 +269,10 @@ def _location_rules(
 ) -> tuple[dict[int, LocationRecord], dict[int, tuple[str, ...]], list[Alias], Callable[[int], set[str]]]:
     locations = {loc.pk: loc for loc in catalog.locations if not loc.structural}
     aliases = [a for a in catalog.location_aliases if a.user is None or a.user == poster]
-    alias_texts = {pk: [a.text for a in aliases if a.record == pk] for pk in locations}
+    alias_texts: dict[int, list[str]] = {pk: [] for pk in locations}
+    for alias in aliases:
+        if alias.record in alias_texts:
+            alias_texts[alias.record].append(alias.text)
 
     def vocabulary(pk: int) -> set[str]:
         location = locations[pk]
@@ -293,6 +299,57 @@ def match_location(text: str, catalog: Catalog, poster: str) -> Match:
             return Match(MatchStatus.MATCHED, rule=MatchRule.ALIAS, record=vehicle)
 
     return _match(text, names, aliases, vocabulary)
+
+
+def _spellings(name: str) -> list[str]:
+    """The ways a post may write a location's name: as it is, with letters and digits apart ("Van3": "van 3") when
+    the letters are a word of three, and run together ("Van 3": "van3"). None for a name with neither a word of three
+    letters nor a word of letters and digits ("B", "B 4"), as it may be any letter or number in a post."""
+    said = words(name)
+    pieces = [_LETTERS_DIGITS.findall(word) for word in said]
+    if not any((len(word) >= 3 and word.isalpha()) or len(found) > 1 for word, found in zip(said, pieces, strict=True)):
+        return []
+    spellings = {" ".join(said), "".join(said)}
+    if any(len(piece) >= 3 and piece.isalpha() for found in pieces if len(found) > 1 for piece in found):
+        spellings.add(" ".join(piece for found in pieces for piece in found))
+    return sorted(spellings)
+
+
+def locations_named(text: str, catalog: Catalog, poster: str) -> frozenset[int]:
+    """The stock locations a text names anywhere in it: a location's name or one of its aliases word for word (as
+    rule 2, in any of its `_spellings`), or "my truck" for the poster's vehicle. No typos and no single words of a
+    longer name: "the truck" names no one truck. A name does not run across punctuation: "Sam's truck: 2 d40s" does
+    not name truck 2, and a name that holds such punctuation ("Cage (north)") is never found."""
+    locations, _, aliases, vocabulary = _location_rules(catalog, poster)
+    names: dict[int, list[str]] = {pk: [location.name] for pk, location in locations.items()}
+    for alias in aliases:
+        if alias.record in names:
+            names[alias.record].append(alias.text)
+    # Indexed by length and a form of the first and the last word, so a post is read once, not once per name.
+    index: dict[tuple[int, str, str], list[tuple[int, list[set[str]]]]] = {}
+    for pk, texts in names.items():
+        for spelling in {spelling for name in texts for spelling in _spellings(name)}:
+            wanted = _text_words(spelling)
+            for first in wanted[0]:
+                for last in wanted[-1]:
+                    index.setdefault((len(wanted), first, last), []).append((pk, wanted))
+    lengths = sorted({length for length, _, _ in index})
+    found = set()
+    for piece in _PUNCTUATION.split(text):
+        said = _text_words(piece)
+        for at in range(len(said)):
+            for length in (length for length in lengths if at + length <= len(said)):
+                window = said[at : at + length]
+                keys = {(length, first, last) for first in window[0] for last in window[-1]}
+                for pk, wanted in (entry for key in keys for entry in index.get(key, ())):
+                    if pk not in found and _same(window, wanted):
+                        found.add(pk)
+    vehicle = catalog.vehicles.get(poster)
+    if vehicle in locations:
+        for mine in re.finditer(rf"\b{_MY_VEHICLE}\b", " ".join(words(text))):
+            if _forms(mine.group(1)) & vocabulary(vehicle):
+                found.add(vehicle)
+    return frozenset(found)
 
 
 def location_rivals(text: str, catalog: Catalog, poster: str) -> frozenset[int]:

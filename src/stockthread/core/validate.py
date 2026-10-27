@@ -108,6 +108,9 @@ def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
 
 DETAIL_SOURCE_LEFT_OUT = 'the text has "from", "off", "out of" or an arrow, but no source was read'
 """The detail of the implied source a text that names one raises: a default source never settles it (ADR 0020)."""
+DETAIL_PLACE_NAMED = "the text names a stock location that is neither the destination nor the default source"
+"""The detail of the implied source a text that names another stock location with no "from" word raises ("pulled
+2 ONTs shelf B to van 3"): a default source never settles it either (the worker adds it, as it needs the catalog)."""
 DETAIL_OTHER_AUTHOR = "a message in the post is by someone else"
 """ACTOR_NOT_POSTER for a post whose messages are not all the poster's: its "my truck" is read as the poster's."""
 DETAIL_MIXED = "the fields come from different clauses, and one of them names another place or number"

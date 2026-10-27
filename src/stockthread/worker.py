@@ -70,7 +70,7 @@ from stockthread.core import extract_rules
 from stockthread.core.answers import Effects, Given, Typed, replay
 from stockthread.core.grouping import seconds
 from stockthread.core.marker import is_marker_id
-from stockthread.core.matching import Catalog, match_location, match_part
+from stockthread.core.matching import Catalog, locations_named, match_location, match_part
 from stockthread.core.model import (
     CandidateMovement,
     Extraction,
@@ -104,6 +104,7 @@ from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_l
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
 from stockthread.core.validate import (
     DETAIL_OTHER_AUTHOR,
+    DETAIL_PLACE_NAMED,
     DETAIL_SOURCE_LEFT_OUT,
     in_stocking_unit,
     photo_not_read,
@@ -1459,7 +1460,7 @@ class Worker:
                         continue  # not an answer, or not from someone who may answer: read with the post
                     answers = self.store.post_answers_through(key)
                     effects = self._replay(key, history, reading, answers, views, answering, catalog, poster)
-                views = self._answered(views, effects, extraction, all_messages, late, catalog, others)
+                views = self._answered(views, effects, extraction, all_messages, late, catalog, poster, others)
             except LockLost:
                 raise
             except Exception as error:
@@ -1692,7 +1693,7 @@ class Worker:
         """Whether the candidate message reads cleanly as the answer to its question, judged on the reading that
         stands with the answers given so far, and was recorded as that answer."""
         item, message, question, allowed = candidate
-        answered = self._answered(views, effects, extraction, messages, late, catalog, others)
+        answered = self._answered(views, effects, extraction, messages, late, catalog, poster, others)
         if not 0 <= question.movement < len(answered):
             return False
         movement = answered[question.movement].movement
@@ -1735,6 +1736,7 @@ class Worker:
         messages: Sequence[MessageInput],
         late: bool,
         catalog: Catalog,
+        poster: str,
         others: bool,
     ) -> list[MovementView]:
         """The views with the answers' effects: a picked type is validated again, a picked or confirmed record
@@ -1757,6 +1759,9 @@ class Worker:
                 )
             if n in effects.types or n in effects.retyped or stocking != _stocking(view.items, catalog):
                 reasons = self._reasons(movement, extraction, messages, late, others, stocking)
+                reasons = _place_left_out(
+                    movement, extraction.movements, _post_text(messages), catalog, poster, reasons
+                )
             source = effects.places.get((n, "source"))
             if source is None:
                 # A picked type takes its own default source, or none.
@@ -1967,6 +1972,7 @@ class Worker:
             items = [_part(item.item_text, catalog, poster) for item in movement.line_items]
             stocking = _stocking(items, catalog)
             reasons = self._reasons(movement, extraction, messages, late, others, stocking)
+            reasons = _place_left_out(movement, extraction.movements, _post_text(messages), catalog, poster, reasons)
             source = _location(movement.source_text, catalog, poster) or _default_source(movement, catalog, reasons)
             reasons = _by_default(reasons, source)
             views.append(
@@ -2001,7 +2007,7 @@ class Worker:
     ) -> tuple[ReviewReason, ...]:
         """The movement's reasons. `others`: a message read is not the poster's. `stocking`: the units of each
         line's part, for a part that can authorize a write (`_stocking`)."""
-        text = "\n".join(message.text for message in messages if not message.deleted)
+        text = _post_text(messages)
         lateness = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if late else ()
         # No extractor sees a photo's pixels (design section 13): the photo may show other items, another
         # quantity or serials, so a person checks the reading against it.
@@ -2266,13 +2272,53 @@ def _by_default(reasons: Sequence[ReviewReason], source: Match | None) -> tuple[
     return tuple(reason for reason in reasons if reason.code is not ReasonCode.IMPLIED_SOURCE)
 
 
+_NAMED = (DETAIL_SOURCE_LEFT_OUT, DETAIL_PLACE_NAMED)
+"""The implied-source details of a text that names a source: no default settles them."""
+
+
+_SURE = (MatchRule.EXACT, MatchRule.NORMALIZED, MatchRule.ALIAS)
+"""The rules whose single match accounts for a named place (`_place_left_out`); the whole-word and fuzzy rules guess."""
+
+
+def _post_text(messages: Sequence[MessageInput]) -> str:
+    return "\n".join(message.text for message in messages if not message.deleted)
+
+
+def _place_left_out(
+    movement: CandidateMovement,
+    readings: Sequence[CandidateMovement],
+    text: str,
+    catalog: Catalog,
+    poster: str,
+    reasons: Sequence[ReviewReason],
+) -> tuple[ReviewReason, ...]:
+    """The reasons, with the rule's implied source for a text with no "from" word marked `DETAIL_PLACE_NAMED` when
+    the text names a stock location that is neither a destination of the post's movements (`readings`; matched by
+    name or alias: "the shelf" may be any shelf) nor the movement type's default source: "pulled 2 ONTs shelf B to
+    van 3" states shelf B as the source (T19), so the default must not settle it."""
+    unstated = ReviewReason(ReasonCode.IMPLIED_SOURCE, ReasonSource.RULE)
+    default = catalog.default_sources.get(movement.movement_type)
+    if movement.source_text is not None or default is None or unstated not in reasons:
+        return tuple(reasons)  # with no default the source is asked for anyway
+    sides = {default}
+    for read in readings:  # a destination of the post's movements, found for sure, is accounted for
+        destination = _location(read.destination_text, catalog, poster)
+        if destination is not None and destination.rule in _SURE and destination.record is not None:
+            sides.add(destination.record)
+    if not locations_named(text, catalog, poster) - sides:
+        return tuple(reasons)
+    named = replace(unstated, detail=DETAIL_PLACE_NAMED)
+    return tuple(named if reason == unstated else reason for reason in reasons)
+
+
 def _default_source(movement: CandidateMovement, catalog: Catalog, reasons: Sequence[ReviewReason]) -> Match | None:
     """The movement type's `policy.default_source`, for a movement that states no source; else None. A text that
     names a source the reading left out ("from shelf B") gets none: the default is for an unstated source, and a
-    model must not move stock from it by leaving the stated one out (`validate.DETAIL_SOURCE_LEFT_OUT`)."""
+    model must not move stock from it by leaving the stated one out (`validate.DETAIL_SOURCE_LEFT_OUT`), nor from it
+    when the text names another stock location (`_place_left_out`)."""
     if movement.source_text is not None or movement.movement_type not in catalog.default_sources:
         return None
-    if any(reason.code is ReasonCode.IMPLIED_SOURCE and reason.detail == DETAIL_SOURCE_LEFT_OUT for reason in reasons):
+    if any(reason.code is ReasonCode.IMPLIED_SOURCE and reason.detail in _NAMED for reason in reasons):
         return None
     return Match(MatchStatus.MATCHED, MatchRule.DEFAULT, catalog.default_sources[movement.movement_type])
 
