@@ -958,8 +958,10 @@ needs.
   both InvenTree's `in_stock` rows and those of its `depleted` rows that
   would be in stock but for their quantity (an available status; no
   customer, parent item, sales order or consuming build; not being built).
-  An emptied item that is lost or sent out is no target. A pick for a
-  transfer or a remove never takes from an empty item.
+  An emptied item that is lost, sent to a customer, installed in another
+  item, on a sales order, consumed by a build or being built is no target
+  (`test_char_a_depleted_item_not_in_stock_is_no_target`, one case
+  each). A pick for a transfer or a remove never takes from an empty item.
 - **Request bodies** (built: `core/write_request.py`, pure). One request
   per movement: `POST /api/stock/<transfer|remove|add|count>/` with
   `items` (one `{pk, quantity}` per stock item the pick took, quantities as
@@ -2133,7 +2135,7 @@ the test suite.
 | `test_char_a_write_that_empties_an_item` | A remove of all an item holds, or a count to 0: with delete on deplete, the entry has no item and below API 530 the marker search misses it; without, the item holds 0 with its entry |
 | `test_char_a_later_split_does_not_copy_the_marked_entry` | A split of a marked item after the write leaves the marker on the item it was written to only |
 | `test_char_depleted_items_are_read` | An item emptied and kept is left out by the `in_stock` filter and given by `depleted`, so a receive or a count can target it |
-| `test_char_a_depleted_item_not_in_stock_is_no_target` | An emptied item then marked lost or sent to a customer is given by `depleted` but is not in stock: it is no target |
+| `test_char_a_depleted_item_not_in_stock_is_no_target` | An emptied item then marked lost, sent to a customer, installed in another item, put on a sales order, consumed by a build or marked as being built is given by `depleted` but is not in stock: it is no target |
 | `test_char_failure_before_forward_writes_nothing` | A request that never reached the server changed nothing and left no marker (the control case of the fault proxy) |
 | `test_char_roles_endpoint_shows_the_minimum_as_the_setup_check_reads_it` | `GET /api/user/roles/` names each role with its permissions, or null for none, as the setup check reads it |
 | `test_char_user_without_part_view_cannot_read_the_catalog` | Without view on Part, `GET /api/part/` answers 403 and the roles say so |
