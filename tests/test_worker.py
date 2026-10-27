@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from slack_sdk.errors import SlackApiError
@@ -42,7 +42,7 @@ from stockthread.core.model import (
 )
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import STATUS_OK, SourcePick, StockItem, Take
-from stockthread.core.validate import DETAIL_OTHER_AUTHOR, DETAIL_SOURCE_LEFT_OUT
+from stockthread.core.validate import DETAIL_OTHER_AUTHOR, DETAIL_PLACE_NAMED, DETAIL_SOURCE_LEFT_OUT
 from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.plan_record import plan_hash, views_of
@@ -3615,6 +3615,77 @@ def test_a_source_the_model_leaves_out_is_not_filled_by_the_default(store: Store
     assert movement["source"] is None
     assert {"code": "implied_source", "source": "rule", "detail": DETAIL_SOURCE_LEFT_OUT} in movement["reasons"]
     assert [item.question["ask"] for item in store.questions(KEY)] == ["name_location"]
+
+
+SHELVED = replace(
+    CATALOG,
+    locations=(*CATALOG.locations, LocationRecord(12, "Shelf B")),
+    default_sources={MovementType.TAKE_TO_VEHICLE: 10},
+)
+
+
+def _unsourced_reading(store: Store, clock: Clock, text: str) -> dict[str, Any]:
+    unsourced = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "truck 1")
+    worker = Worker(
+        approving(), store, OWNER, FakeSlack(), lambda: SHELVED, clock, llm=FakeLLM(Extraction(MODEL, (unsourced,)))
+    )
+    enqueue(store, message(ROOT, text))
+    read_and_answered(worker, clock)
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    [movement] = record.result["movements"]
+    return cast(dict[str, Any], movement)
+
+
+@pytest.mark.parametrize("text", ["pulled 2 Disc 40 shelf B to truck 1", "truck 1 got 2 Disc 40, shelf b is empty now"])
+def test_a_stock_location_named_with_no_from_word_is_not_replaced_by_the_default(
+    store: Store, clock: Clock, text: str
+) -> None:
+    """T19: the text names shelf B, a stock location that is neither side, so it may be the source the reading left
+    out. The default source (main stock) does not stand in for it: the source stays unsettled."""
+    movement = _unsourced_reading(store, clock, text)
+    assert movement["source"] is None
+    assert {"code": "implied_source", "source": "rule", "detail": DETAIL_PLACE_NAMED} in movement["reasons"]
+
+
+@pytest.mark.parametrize("text", ["2 Disc 40 to truck 1", "2 Disc 40 main stock to truck 1", "truck 1 got 2 Disc 40"])
+def test_naming_only_the_destination_or_the_default_keeps_the_default(store: Store, clock: Clock, text: str) -> None:
+    movement = _unsourced_reading(store, clock, text)
+    assert movement["source"] is not None
+    assert "implied_source" not in {reason["code"] for reason in movement["reasons"]}
+
+
+def test_a_place_another_movement_of_the_post_goes_to_keeps_the_default(store: Store, clock: Clock) -> None:
+    take = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "truck 1")
+    back = CandidateMovement(MovementType.RETURN, (LineItem("ONT 100", Decimal(1)),), "truck 1", "shelf B")
+    llm = FakeLLM(Extraction(MODEL, (take, back)))
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: SHELVED, clock, llm=llm)
+    enqueue(store, message(ROOT, "2 Disc 40 to truck 1, and returned 1 ONT 100 to shelf B"))
+    read_and_answered(worker, clock)
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert record.result["movements"][0]["source"] is not None
+
+
+def test_a_destination_the_post_names_only_loosely_does_not_account_for_a_named_place(
+    store: Store, clock: Clock
+) -> None:
+    """ "shelf" fits shelf A and shelf B, so it does not account for "shelf B", which may be the source."""
+    shelves = replace(SHELVED, locations=(*SHELVED.locations, LocationRecord(13, "Shelf A")))
+    take = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "truck 1")
+    back = CandidateMovement(MovementType.RETURN, (LineItem("Disc 40", Decimal(1)),), "truck 1", "shelf")
+    llm = FakeLLM(Extraction(MODEL, (take, back)))
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: shelves, clock, llm=llm)
+    enqueue(store, message(ROOT, "2 Disc 40 shelf B to truck 1, returned 1 Disc 40 back on the shelf"))
+    read_and_answered(worker, clock)
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    movement = record.result["movements"][0]
+    assert movement["source"] is None
+    assert {"code": "implied_source", "source": "rule", "detail": DETAIL_PLACE_NAMED} in movement["reasons"]
 
 
 def test_no_to_a_doubt_about_the_reading_ends_the_plan(store: Store, clock: Clock) -> None:

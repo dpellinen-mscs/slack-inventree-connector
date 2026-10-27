@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 
 from stockthread.core.matching import (
@@ -11,6 +12,7 @@ from stockthread.core.matching import (
     LocationRecord,
     PartRecord,
     location_rivals,
+    locations_named,
     match_location,
     match_part,
     part_rivals,
@@ -268,3 +270,59 @@ def test_a_record_that_could_not_match_when_confirmed_is_a_new_rival_once_it_can
     learned = Alias("disc 40", 1, rivals=part_rivals("disc 40", then))
     now = Catalog(parts=(*PARTS, PRO), locations=LOCATIONS, part_aliases=(learned,))
     assert match_part("disc 40", now).candidates == (1, 7)
+
+
+def test_a_location_is_named_by_its_name_or_an_alias_word_for_word() -> None:
+    assert locations_named("pulled 2 D40s truck 2 to my van", CATALOG, "U0SAM") == {12}
+    assert locations_named("van 3 gave me 2, main stock got the rest", CATALOG, "U0SAM") == {13}
+    assert locations_named("grabbed 2 at the shop", CATALOG, "U0SAM") == {13}  # an alias anyone may use
+    assert locations_named("2 off the rig", CATALOG, "U0MIKE") == {12}  # Mike's own alias
+    assert locations_named("2 off the rig", CATALOG, "U0SAM") == frozenset()  # not Sam's
+    assert locations_named("Truck-2 and TRUCK 1", CATALOG, "U0SAM") == {11, 12}
+
+
+def test_a_location_is_named_only_by_its_whole_name() -> None:
+    assert locations_named("2 D40s in the truck", CATALOG, "U0SAM") == frozenset()  # "truck" names no one truck
+    assert locations_named("truck 12 got 2", CATALOG, "U0SAM") == frozenset()
+    assert locations_named("2 from the vehicles", CATALOG, "U0SAM") == frozenset()  # structural: holds no stock
+    assert locations_named("workshop vac", CATALOG, "U0SAM") == frozenset()
+    assert locations_named("Sam's truck: 2 D40s. Truck\n2 is full", CATALOG, "U0SAM") == frozenset()
+
+
+def test_my_vehicle_names_the_poster_s_vehicle() -> None:
+    assert locations_named("2 D40s my truck to the Smith job", CATALOG, "U0SAM") == {11}
+    assert locations_named("2 D40s my van to the Smith job", CATALOG, "U0SAM") == frozenset()  # Sam has a truck
+    assert locations_named("2 D40s my truck to the Smith job", CATALOG, "U0NOBODY") == frozenset()
+
+
+def test_a_name_with_no_word_of_three_letters_and_no_letters_with_digits_names_nothing() -> None:
+    shelves = (LocationRecord(20, "Shelves/B"), LocationRecord(21, "Shelves/B 4"), LocationRecord(22, "Bin 4"))
+    catalog = Catalog(parts=PARTS, locations=shelves)
+    assert locations_named("plan b 4 to bin 4", catalog, "U0SAM") == {22}
+
+
+def test_letters_and_digits_may_be_written_apart_or_together() -> None:
+    places = (
+        LocationRecord(30, "Vehicles/Van3"),
+        LocationRecord(31, "Vehicles/Van 4"),
+        LocationRecord(32, "Bins/A1"),
+        LocationRecord(33, "Bins/R3-S2"),
+    )
+    catalog = Catalog(parts=PARTS, locations=places)
+    assert locations_named("pulled 2 ONTs van 3 to my truck", catalog, "U0SAM") == {30}
+    assert locations_named("pulled 2 ONTs van3 to my truck", catalog, "U0SAM") == {30}
+    assert locations_named("pulled 2 ONTs van4 to my truck", catalog, "U0SAM") == {31}
+    assert locations_named("2 ONTs A1 to van 4", catalog, "U0SAM") == {31, 32}
+    assert locations_named("a 1 inch drill bit", catalog, "U0SAM") == frozenset()  # "A1" is not written apart
+    assert locations_named("2 ONTs r3-s2 to van 4", catalog, "U0SAM") == {31, 33}
+    assert locations_named("to van 4 from r3-s2 a1", catalog, "U0SAM") == {31, 32, 33}  # one-word names at the end
+
+
+def test_naming_is_fast_on_a_large_catalog_and_a_long_post() -> None:
+    many = tuple(LocationRecord(pk, f"Aisle {pk}/Shelf {pk}") for pk in range(1000, 2000))
+    aliases = tuple(Alias(f"bay {pk} top", pk) for pk in range(1000, 2000))
+    catalog = Catalog(parts=PARTS, locations=many, location_aliases=aliases)
+    text = "grabbed 2 ONTs from shelf 1999 and some more " * 500
+    started = time.monotonic()
+    assert locations_named(text, catalog, "U0SAM") == {1999}
+    assert time.monotonic() - started < 1.0
