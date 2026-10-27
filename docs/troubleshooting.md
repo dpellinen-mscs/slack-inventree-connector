@@ -5,7 +5,9 @@ Start with the two checks and the log. They answer most questions.
 - `stockthread check-config` says whether the settings file and the environment are valid, and prints the settings
   it will use with every secret hidden.
 - `stockthread check-setup` reads InvenTree and says what must be fixed: the server version, the token's expiry
-  and roles, `[vehicles]` paths, learned aliases, and, with writes on, who can write.
+  and roles, `[vehicles]` paths, learned aliases, and, with writes on, who can write. It exits with 0 when all is
+  well, 1 when something must be fixed, and 2 when it could not check at all. `ERROR GET /api/ failed: ConnectError`
+  means nothing answered at `inventree.url`: check the address, the port and that the server is up.
 - `stockthread run` logs to the terminal (standard error), one line per decision. Lines name posts by their Slack
   timestamp, as in post 1729900000.000100, and never quote the words of a post.
 - `stockthread trail '<link to a message>'` prints what happened to one post: each dry run with every reason it

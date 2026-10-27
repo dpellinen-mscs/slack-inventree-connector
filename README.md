@@ -66,7 +66,8 @@ install an app. About 15 minutes.
    server version, the token's expiry (a warning 30 days before), the roles of the token's user
    (what is missing, and what is more than needed), any `[vehicles]` path that is not a stock
    location, and any learned alias whose part or location can no longer be matched (the matcher
-   ignores it). It exits with 1 when something must be fixed. It only reads.
+   ignores it). It exits with 1 when something must be fixed, and with 2 when the check could not
+   run at all (the settings do not load, or InvenTree cannot be reached). It only reads.
 
 6. **Run it,** and stop it with Ctrl-C:
 
