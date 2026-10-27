@@ -9,9 +9,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 from pydantic import SecretStr
 
+from stockthread import inventree
 from stockthread.apply import check_post_markers
 from stockthread.config import InvenTreeSettings
 from stockthread.core.marker import AttemptKind, Marker, new_marker_id
@@ -20,7 +22,7 @@ from stockthread.core.model import Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import Take
 from stockthread.core.write_request import build_request
-from stockthread.inventree import InvenTreeReader
+from stockthread.inventree import InvenTreeError, InvenTreeReader
 from stockthread.store import Store
 
 if TYPE_CHECKING:
@@ -135,3 +137,50 @@ async def test_step_two_excuses_a_depleting_write_only_by_inventrees_404(
         findings = await check_post_markers(reader, store, never_sent)
     store.close()
     assert [(f.kind, f.marker) for f in findings] == [(FindingKind.MISSING, unsent)]
+
+
+async def test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_refused(
+    api: RawApi, scratch: Scratch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The history list comes newest first, so an entry written between two pages of a search pushes the last row
+    of the first page onto the second: it comes back twice, and the count grows. The reader refuses that list
+    rather than return it (`InvenTreeReader.list_all`; #220 item 4). Pages of 2 here; the reader's are 100."""
+    item = scratch.stock(10)
+    marker_id = new_marker_id()
+    for attempt in (1, 2, 3):
+        send(api, Operation.REMOVE, [Take(item["pk"], Decimal(1))], Marker(marker_id, AttemptKind.APPLY, attempt))
+
+    def write_one_more() -> None:
+        quoted = f"see [sic:{marker_id}:a09]"  # matched by the search, though not one of ours
+        response = api.post("/api/stock/remove/", {"items": [{"pk": item["pk"], "quantity": 1}], "notes": quoted})
+        assert response.status_code == 201, response.text[:500]
+
+    first = api.get("/api/stock/track/", search=marker_id, limit=2, offset=0)
+    write_one_more()
+    second = api.get("/api/stock/track/", search=marker_id, limit=2, offset=2)
+    assert (first["count"], second["count"]) == (3, 4)
+    assert second["results"][0]["pk"] == first["results"][-1]["pk"]
+
+    class Interleaved(httpx.AsyncBaseTransport):
+        """The real server, with one more matching entry written after the first page is read."""
+
+        def __init__(self) -> None:
+            self.inner = httpx.AsyncHTTPTransport()
+            self.pages = 0
+
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            response = await self.inner.handle_async_request(request)
+            if request.url.path == "/api/stock/track/":
+                self.pages += 1
+                if self.pages == 1:
+                    await response.aread()
+                    write_one_more()
+            return response
+
+    monkeypatch.setattr(inventree, "PAGE_SIZE", 2)
+    token = Path(os.environ["STOCKTHREAD_IT_TOKEN_FILE"]).read_text(encoding="utf-8").strip()
+    settings = InvenTreeSettings(url=os.environ["STOCKTHREAD_IT_URL"])
+    async with InvenTreeReader(settings, SecretStr(token), transport=Interleaved()) as reader:
+        with pytest.raises(InvenTreeError, match="the list changed while it was read"):
+            await reader.marker_entries(marker_id)
+        assert len(await reader.marker_entries(marker_id)) == 3  # read again once it holds still: all three
