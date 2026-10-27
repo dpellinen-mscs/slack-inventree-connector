@@ -39,6 +39,7 @@ from stockthread.core.signals import (
     NUMBER_WORDS,
     PLAN_OR_CONDITION,
     QUESTION_OR_REQUEST,
+    SITE_WORDS,
     SUSPICIOUS,
     THIRD_PERSON,
     VAGUE,
@@ -633,6 +634,8 @@ _NAMES_A_PLACE = {
 """Words that open a place. Not "on", "in", "at", "for" or "up": "picked up 2", "in the back", "for the Smith job"."""
 _EMOJI = re.compile(r":[\w+-]+:")
 """A Slack emoji code, such as ":truck:"."""
+_PURPOSE = re.compile(r"\bfor\s+(\S+\s+){0,3}$", re.IGNORECASE)
+"""The words before a job that says why, not where: "for the Smith job", "for the Oak St site"."""
 _A_NUMBER = re.compile(rf"(?<!\w)(\d+|{'|'.join(NUMBER_WORDS)})(?![^\W\d])", re.IGNORECASE)
 
 
@@ -641,7 +644,8 @@ def _one_clause(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     van 3" and "took 4 ONTs from shelf B to van 4" read as 4 ONTs from shelf A to van 3 (#200). It is doubted when a
     clause among those it draws on, from the first to the last, has a rival: a place on a side whose place the
     movement takes from another clause, or a number that is neither a line's quantity nor in a field's words
-    ("van 3 took 4 ONTs too"), or a vehicle that is not one of its places ("van 4 got the drops"). An item counts
+    ("van 3 took 4 ONTs too"), or a vehicle, job or site that is not one of its places ("van 4 got the drops", "the
+    Smith job got the drops"; not "for the Smith job", which says why). An item counts
     where its quantity is stated. A list under a heading ("Van 3 from shelf A:" then a line per item) has no rival
     and passes, as does another movement after the last clause."""
     starts = [0] + [m.end() for m in _CLAUSE_END.finditer(text)]
@@ -688,7 +692,16 @@ def _one_clause(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     numbers = [m for m in _A_NUMBER.finditer(text) if not any(start <= m.start() < end for start, end in own)]
     names += [(m.start(), m.end()) for m in _EMOJI.finditer(text)]  # ":truck:" is no place
     # A vehicle needs no "to" or number to be a place ("van 3 got the drops"); one of this movement's places is not.
-    vehicles = [m for m in VEHICLE_WORDS.finditer(text) if not any(start <= m.start() < end for start, end in names)]
+    places_named = [
+        m for m in VEHICLE_WORDS.finditer(text) if not any(start <= m.start() < end for start, end in names)
+    ]
+    # So does a job or a site ("the Smith job got the drops"), unless it says why ("for the Smith job").
+    places_named += [
+        m
+        for m in SITE_WORDS.finditer(text)
+        if not any(start <= m.start() < end for start, end in names)
+        and not _PURPOSE.search(text[max(s for s in starts if s <= m.start()) : m.start()])
+    ]
     rival = (
         any(
             first <= n <= last and n not in mine
@@ -696,7 +709,7 @@ def _one_clause(movement: CandidateMovement, text: str) -> set[ReviewReason]:
             for n in clauses(list(_NAMES_A_PLACE[side].finditer(text)))
         )
         or any(first <= n <= last for n in clauses(numbers))
-        or any(first <= n <= last and n not in set().union(*sides.values()) for n in clauses(vehicles))
+        or any(first <= n <= last and n not in set().union(*sides.values()) for n in clauses(places_named))
     )
     return {_rule(ReasonCode.MOVEMENT_UNCLEAR, DETAIL_MIXED)} if rival else set()
 
