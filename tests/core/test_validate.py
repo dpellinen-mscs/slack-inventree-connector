@@ -854,3 +854,39 @@ def test_a_rival_movement_with_no_place_word_is_seen_by_its_number(text: str, so
     """The other clause names its place with no "from" or "to", but states a number this movement does not use. A
     sentence stop or "then"/"also"/"plus" ends a clause too, so the line's own words never reach back over it."""
     assert mixed(take(quantity="4", source_text=source), text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "van 3 got 4 Disc 60, took 2 Disc 40 from main stock to truck 1",
+        "took 2 Disc 40 from main stock to truck 1, van 3 got the 4 Disc 60",
+        "took 2 Disc 40 to truck 1\nSam's truck got 4 Disc 60",
+        "Truck 1:\n2 Disc 40\nVan 3:\n4 Disc 60",
+        "Truck 1:\n2 Disc 40\nvan3:\n4 Disc 60",
+        "took 2 Disc 40 to truck 1. the trailer has 4 Disc 60",
+    ],
+)
+def test_a_rival_vehicle_with_no_place_word_and_no_spare_number_is_seen(text: str) -> None:
+    """Every number is a line's quantity and the other vehicle has no "from" or "to": its clause names a vehicle
+    that is not one of this movement's places, so the movement may hold another's line."""
+    lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(4)))
+    movement = take(line_items=lines, source_text="main stock" if "main stock" in text else None)
+    assert mixed(movement, text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "took 2 Disc 40 from main stock to truck 1, truck 1 also got 4 Disc 60",
+        "Truck 1:\n2 Disc 40\nTruck 1 again:\n4 Disc 60",
+        "left the van at the shop. took 2 Disc 40 and 4 Disc 60 from main stock to truck 1",
+        "took 2 Disc 40 and 4 Disc 60 from main stock to truck 1. van 3 is in the shop",
+        "took 2 Disc 40 from van 3 to truck 1 and 4 Disc 60 from van 3 too",
+        ":truck: 2 Disc 40 + 4 Disc 60 going on truck 1",
+    ],
+)
+def test_a_vehicle_that_is_one_of_the_movements_places_or_outside_its_clauses_is_no_rival(text: str) -> None:
+    lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(4)))
+    source = "van 3" if "from van 3" in text else "main stock" if "main stock" in text else None
+    assert not mixed(take(line_items=lines, source_text=source), text)
