@@ -40,6 +40,9 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Fixed
 
+- The rules now see another person as the actor in more shapes, whatever the model says: names with accents
+  ("José took"), "removed", "transferred", "has taken", "taken by Mike", "Mike and I took" and "me & Mike took".
+  Such a take used to apply with no click when the model left out `actor_not_poster`.
 - An Apply click now approves a plan its post's second or later dry run made, as after an answered question.
   The click compared the plan's revision with the dry run's, which are counted apart, so such a plan was refused
   as "no plan" and could not be applied at all.
