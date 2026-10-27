@@ -22,7 +22,7 @@ from stockthread import trail
 from stockthread import worker as worker_module
 from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules, resolve
-from stockthread.core.matching import Catalog, LocationRecord, PartRecord
+from stockthread.core.matching import Catalog, LocationRecord, PartRecord, locations_named
 from stockthread.core.model import (
     CandidateMovement,
     Extraction,
@@ -3686,6 +3686,34 @@ def test_a_destination_the_post_names_only_loosely_does_not_account_for_a_named_
     movement = record.result["movements"][0]
     assert movement["source"] is None
     assert {"code": "implied_source", "source": "rule", "detail": DETAIL_PLACE_NAMED} in movement["reasons"]
+
+
+@pytest.mark.parametrize(("text", "reads"), [("2 Disc 40 shelf B to truck 1, 1 ONT 100 to truck 1", 1), (SHUFFLED, 0)])
+def test_a_post_is_searched_for_named_places_at_most_once(
+    store: Store, clock: Clock, monkeypatch: pytest.MonkeyPatch, text: str, reads: int
+) -> None:
+    """The search reads the whole catalog, so a post with many unsourced movements reads it once, and a post with
+    none (here every movement states its source) not at all."""
+    searched = []
+
+    def counted(*args: Any) -> frozenset[int]:
+        searched.append(args)
+        return locations_named(*args)
+
+    monkeypatch.setattr(worker_module, "locations_named", counted)
+    take = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "truck 1")
+    more = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("ONT 100", Decimal(1)),), None, "truck 1")
+    if not reads:
+        take, more = replace(take, source_text="shelf B"), replace(more, source_text="shelf B")
+    llm = FakeLLM(Extraction(MODEL, (take, more)))
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: SHELVED, clock, llm=llm)
+    enqueue(store, message(ROOT, text))
+    read_and_answered(worker, clock)
+    assert len(searched) == reads
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    assert [movement["source"] is None for movement in record.result["movements"]] == [bool(reads)] * 2
 
 
 def test_no_to_a_doubt_about_the_reading_ends_the_plan(store: Store, clock: Clock) -> None:

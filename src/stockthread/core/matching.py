@@ -316,12 +316,12 @@ def _spellings(name: str) -> list[str]:
 
 
 def locations_named(text: str, catalog: Catalog, poster: str) -> frozenset[int]:
-    """The stock locations a text names anywhere in it: a location's name or one of its aliases word for word (as
-    rule 2, in any of its `_spellings`), or "my truck" for the poster's vehicle. No typos and no single words of a
-    longer name: "the truck" names no one truck. A name does not run across punctuation: "Sam's truck: 2 d40s" does
-    not name truck 2, and a name that holds such punctuation ("Cage (north)") is never found."""
+    """The stock locations a text names anywhere in it: a location's name, full path or one of its aliases word for
+    word (as rule 2, in any of its `_spellings`), or "my truck" for the poster's vehicle. No typos and no single
+    words of a longer name: "the truck" names no one truck. A name does not run across punctuation: "Sam's truck: 2
+    d40s" does not name truck 2, and a name that holds such punctuation ("Cage (north)") is never found."""
     locations, _, aliases, vocabulary = _location_rules(catalog, poster)
-    names: dict[int, list[str]] = {pk: [location.name] for pk, location in locations.items()}
+    names: dict[int, list[str]] = {pk: [location.name, location.path] for pk, location in locations.items()}
     for alias in aliases:
         if alias.record in names:
             names[alias.record].append(alias.text)

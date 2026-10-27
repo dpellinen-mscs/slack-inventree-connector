@@ -60,6 +60,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
+from functools import cache, partial
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -1744,6 +1745,7 @@ class Worker:
         line's own; validation then runs again on that movement, with the answer messages' text in the post. So it
         does when a picked or confirmed part changes the units a line may be stocked in (`_stocking`)."""
         found = []
+        named = cache(partial(locations_named, _post_text(messages), catalog, poster))
         for n, view in enumerate(views):
             movement, reasons = view.movement, view.reasons
             items = [effects.parts.get((n, line), match) for line, match in enumerate(view.items)]
@@ -1759,9 +1761,7 @@ class Worker:
                 )
             if n in effects.types or n in effects.retyped or stocking != _stocking(view.items, catalog):
                 reasons = self._reasons(movement, extraction, messages, late, others, stocking)
-                reasons = _place_left_out(
-                    movement, extraction.movements, _post_text(messages), catalog, poster, reasons
-                )
+                reasons = _place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
             source = effects.places.get((n, "source"))
             if source is None:
                 # A picked type takes its own default source, or none.
@@ -1968,11 +1968,12 @@ class Worker:
         others: bool,
     ) -> list[MovementView]:
         views = []
+        named = cache(partial(locations_named, _post_text(messages), catalog, poster))
         for movement in extraction.movements:
             items = [_part(item.item_text, catalog, poster) for item in movement.line_items]
             stocking = _stocking(items, catalog)
             reasons = self._reasons(movement, extraction, messages, late, others, stocking)
-            reasons = _place_left_out(movement, extraction.movements, _post_text(messages), catalog, poster, reasons)
+            reasons = _place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
             source = _location(movement.source_text, catalog, poster) or _default_source(movement, catalog, reasons)
             reasons = _by_default(reasons, source)
             views.append(
@@ -2287,15 +2288,16 @@ def _post_text(messages: Sequence[MessageInput]) -> str:
 def _place_left_out(
     movement: CandidateMovement,
     readings: Sequence[CandidateMovement],
-    text: str,
+    named: Callable[[], frozenset[int]],
     catalog: Catalog,
     poster: str,
     reasons: Sequence[ReviewReason],
 ) -> tuple[ReviewReason, ...]:
     """The reasons, with the rule's implied source for a text with no "from" word marked `DETAIL_PLACE_NAMED` when
-    the text names a stock location that is neither a destination of the post's movements (`readings`; matched by
-    name or alias: "the shelf" may be any shelf) nor the movement type's default source: "pulled 2 ONTs shelf B to
-    van 3" states shelf B as the source (T19), so the default must not settle it."""
+    the text names (`named`: the post's `locations_named`, read once per post) a stock location that is neither a
+    destination of the post's movements (`readings`; matched by name or alias: "the shelf" may be any shelf) nor the
+    movement type's default source: "pulled 2 ONTs shelf B to van 3" states shelf B as the source (T19), so the
+    default must not settle it."""
     unstated = ReviewReason(ReasonCode.IMPLIED_SOURCE, ReasonSource.RULE)
     default = catalog.default_sources.get(movement.movement_type)
     if movement.source_text is not None or default is None or unstated not in reasons:
@@ -2305,10 +2307,10 @@ def _place_left_out(
         destination = _location(read.destination_text, catalog, poster)
         if destination is not None and destination.rule in _SURE and destination.record is not None:
             sides.add(destination.record)
-    if not locations_named(text, catalog, poster) - sides:
+    if not named() - sides:
         return tuple(reasons)
-    named = replace(unstated, detail=DETAIL_PLACE_NAMED)
-    return tuple(named if reason == unstated else reason for reason in reasons)
+    marked = replace(unstated, detail=DETAIL_PLACE_NAMED)
+    return tuple(marked if reason == unstated else reason for reason in reasons)
 
 
 def _default_source(movement: CandidateMovement, catalog: Catalog, reasons: Sequence[ReviewReason]) -> Match | None:

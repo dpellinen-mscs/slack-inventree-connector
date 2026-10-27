@@ -301,6 +301,15 @@ def test_a_name_with_no_word_of_three_letters_and_no_letters_with_digits_names_n
     assert locations_named("plan b 4 to bin 4", catalog, "U0SAM") == {22}
 
 
+def test_a_location_is_named_by_its_full_path() -> None:
+    shelves = (LocationRecord(20, "Shelves/B"), LocationRecord(21, "Shelves/B 4"), LocationRecord(22, "Bin 4"))
+    catalog = Catalog(parts=PARTS, locations=shelves)
+    assert locations_named("pulled 2 ONTs shelves B to bin 4", catalog, "U0SAM") == {20, 22}
+    assert locations_named("pulled 2 ONTs Shelves/B 4 to bin 4", catalog, "U0SAM") == {20, 21, 22}  # B is in B 4
+    assert locations_named("2 from the warehouse main stock", CATALOG, "U0SAM") == {13}
+    assert locations_named("2 D40s vehicles truck 2", CATALOG, "U0SAM") == {12}
+
+
 def test_letters_and_digits_may_be_written_apart_or_together() -> None:
     places = (
         LocationRecord(30, "Vehicles/Van3"),
