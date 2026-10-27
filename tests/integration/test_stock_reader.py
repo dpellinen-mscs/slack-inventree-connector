@@ -75,20 +75,54 @@ def test_char_depleted_items_are_read(api: RawApi, scratch: Scratch) -> None:
     )  # never the empty one
 
 
-@pytest.mark.parametrize("change", [{"status": 70}, {"customer": "new"}], ids=["lost", "at-a-customer"])
-def test_char_a_depleted_item_not_in_stock_is_no_target(api: RawApi, scratch: Scratch, change: dict[str, Any]) -> None:
-    """An item emptied and then marked lost, or sent to a customer, is given by InvenTree's `depleted` filter but is
-    not in stock. The reader leaves it out, so a receive or a count of the part there has no target and goes to a
-    human, rather than adding into a lost item (review of #112)."""
+def _customer(api: RawApi) -> int:
+    return int(api.create("/api/company/", {"name": f"Acme {uuid.uuid4().hex[:8]}", "is_customer": True})["pk"])
+
+
+def _build(api: RawApi, part: int | None = None) -> int:
+    """A new build order for `part` (made an assembly), or for a new assembly."""
+    tag = uuid.uuid4().hex[:8]
+    if part is None:
+        part = api.create("/api/part/", {"name": f"Assembly {tag}", "description": "x", "assembly": True})["pk"]
+    else:
+        patched = api.http.patch(f"/api/part/{part}/", json={"assembly": True})
+        assert patched.status_code == 200, patched.text[:500]
+    return int(api.create("/api/build/", {"part": part, "quantity": 1, "title": tag})["pk"])
+
+
+def _link(api: RawApi, scratch: Scratch, kind: str) -> dict[str, Any]:
+    """The change that takes an item out of stock as `kind` says, with any record it links to made new."""
+    if kind == "lost":
+        return {"status": 70}
+    if kind == "at-a-customer":
+        return {"customer": _customer(api)}
+    if kind == "installed":
+        return {"belongs_to": scratch.stock(1, location=scratch.other)["pk"]}
+    if kind == "on-a-sales-order":
+        return {"sales_order": api.create("/api/order/so/", {"customer": _customer(api)})["pk"]}
+    if kind == "consumed-by-a-build":
+        return {"consumed_by": _build(api)}
+    assert kind == "being-built"
+    # Measured: is_building needs a build, and the build must be for the item's own part (else a 400 on `build`).
+    return {"is_building": True, "build": _build(api, scratch.part)}
+
+
+@pytest.mark.parametrize(
+    "kind", ["lost", "at-a-customer", "installed", "on-a-sales-order", "consumed-by-a-build", "being-built"]
+)
+def test_char_a_depleted_item_not_in_stock_is_no_target(api: RawApi, scratch: Scratch, kind: str) -> None:
+    """An item emptied and then marked lost, sent to a customer, installed in another item, put on a sales order,
+    consumed by a build or marked as being built is given by InvenTree's `depleted` filter but is not in stock. The
+    reader leaves it out, so a receive or a count of the part there has no target and goes to a human, rather than
+    adding into a lost item (review of #112; #220 item 5)."""
     emptied = scratch.stock(2, delete_on_deplete=False)
     response = api.post("/api/stock/remove/", {"items": [{"pk": emptied["pk"], "quantity": 2}], "notes": "r"})
     assert response.status_code == 201, response.text[:500]
-    if change.get("customer") == "new":
-        change = {
-            "customer": api.create("/api/company/", {"name": f"Acme {uuid.uuid4().hex[:8]}", "is_customer": True})["pk"]
-        }
+    change = _link(api, scratch, kind)
     patched = api.http.patch(f"/api/stock/{emptied['pk']}/", json=change)
     assert patched.status_code == 200, patched.text[:500]
+    stored = scratch.item(emptied["pk"])
+    assert {key: stored[key] for key in change} == change  # the server took the link, not just answered 200
     assert [
         row["pk"] for row in api.get("/api/stock/", part=scratch.part, location=scratch.parent, depleted="true")
     ] == [emptied["pk"]]
