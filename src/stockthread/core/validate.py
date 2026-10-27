@@ -82,17 +82,23 @@ _TYPE_VERBS = {
 }
 """A movement type that changes stock in a way a take cannot needs one of its words in the text."""
 _TAKE_OUTS = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
-_FROM = r"(?<!\w)(from|off|out of)"
+_FROM = r"(?<!\w)(from|frm|off|out of|outta)"
 _TO = r"((?<!\w)(to|into|onto|on|in|at|for|up)|→|->)"
 """Whole words only: "from main shop" must not read as "…in shop"."""
+_ARROW = r"[-\u2013\u2014=]+>|[→⇒⟶➔➜➝➞➡⇨]|(?<=\w) > (?=\w)"
+"""An arrow, as typed or as a symbol: "->", "=>", a dash then ">", "→", "⇒", "⟶", or a lone ">" between two words."""
 _NAMES_A_SOURCE = re.compile(
-    rf"(?<!\bdrop )(?<!\bdropped ){_FROM}\s+(?!\d)\w|→|->"
-    r"|(?<!\w)at (the )?(shelf|shelves|bin|rack|warehouse|shop|stockroom|storeroom|storage|cage|receiving)\b",
+    rf"(?<!\bdrop )(?<!\bdropped ){_FROM}[\s\u200b-\u200d\u2060\ufeff:\"'\u201c\u2018(#*_]+"
+    rf"(?!\d+\s+{CONTAINER_WORDS.pattern})\w|{_ARROW}|(?<!\w)source\s*[:=]"
+    r"|(?<!\w)at (the )?(shelf|shelves|bin|rack|warehouse|shop|stockroom|storeroom|storage|cage|receiving|yard"
+    r"|depot)\b",
     re.IGNORECASE,
 )
-"""Wording that names a source: "from shelf B", "off the van", "out of stock", "truck 1 → truck 2", "grabbed 2 at
-shelf B". "dropped off" names a destination. Any arrow counts, so "2 wall mounts → my truck" is asked for its source
-once. "at" counts only before a storage word: "at the Smith job" is where stock goes."""
+"""Wording that names a source: "from shelf B", "off the van", "out of stock", "from 3rd floor cage", "from: shelf B",
+"truck 1 → truck 2", "source: shelf B", "grabbed 2 at shelf B". A count of containers is no place ("from 3 boxes").
+"dropped off" names a destination. Any arrow counts, so "2 wall mounts → my truck" is asked for its source once. "at"
+counts only before a storage word: "at the Smith job" is where stock goes, and "at truck 1" may be either. A miss
+lets a default source settle a source the text names (T19), so this errs towards asking."""
 
 
 def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:

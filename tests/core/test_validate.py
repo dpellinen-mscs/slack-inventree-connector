@@ -785,6 +785,24 @@ def test_a_place_cannot_hide_a_multiplier(text: str, source: str) -> None:
         ("grabbed 2 Disc 40 at shelf B, to truck 1", True),  # #201 finding 6
         ("2 Disc 40 at the warehouse onto truck 1", True),
         ("2 Disc 40 to truck 1 at the Smith job", False),  # "at" a job is where stock goes
+        ("took 2 Disc 40 from 3rd floor cage to truck 1", True),  # T19 review: a place may start with a digit
+        ("2 Disc 40 from #3 to truck 1", True),
+        ("2 Disc 40 out of 2nd van to truck 1", True),
+        ("from: shelf B, 2 Disc 40 to truck 1", True),
+        ('2 Disc 40 from "Truck 1" to truck 2', True),
+        ("2 Disc 40 from (shelf B) to truck 1", True),
+        ("2 Disc 40 from\u200bshelf B to truck 1", True),
+        ("2 Disc 40 outta shelf B to truck 1", True),
+        ("2 Disc 40 frm shelf B to truck 1", True),
+        ("source: shelf B, 2 Disc 40 to truck 1", True),
+        ("truck 1 => truck 2: 2 Disc 40", True),
+        ("truck 1 ⇒ truck 2: 2 Disc 40", True),
+        ("truck 1 \u2013> truck 2: 2 Disc 40", True),  # an en dash
+        ("truck 1 ⟶ truck 2: 2 Disc 40", True),
+        ("truck 1 > truck 2: 2 Disc 40", True),
+        ("grabbed 2 Disc 40 at the yard, to truck 1", True),
+        ("2 Disc 40 from 3 boxes to truck 1, 2 from 2 bags", False),  # a count of containers is not a place
+        ("> grabbed 2 Disc 40 to truck 1", False),  # a Slack quote
     ],
 )
 def test_an_implied_source_says_when_the_text_names_one_the_reading_left_out(text: str, left_out: bool) -> None:
