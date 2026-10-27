@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,7 @@ from stockthread import run
 from stockthread.config import InvenTreeSettings, PolicySettings, parse_settings
 from stockthread.core.matching import Alias, Catalog, LocationRecord, PartRecord, stale_aliases
 from stockthread.core.model import MovementType, PostKey
-from stockthread.inventree import InvenTreeReader
+from stockthread.inventree import InvenTreeError, InvenTreeReader
 from stockthread.run import _stored_aliases, inventree_findings
 from stockthread.setup_check import (
     DEFAULT_AUTO_APPLY,
@@ -33,6 +33,7 @@ from stockthread.setup_check import (
     check_posters,
     check_roles,
     check_sites,
+    check_token,
     check_vehicles,
     exit_code,
 )
@@ -221,8 +222,18 @@ ROOT = {"server": "InvenTree", "version": "1.5.6", "apiVersion": 530}
 LOCATIONS = [{"pk": 10, "pathstring": "Vehicles/Sam", "description": "", "structural": False, "parent": None}]
 
 
-def inventree(roles: dict[str, Any], forbidden: frozenset[str] = frozenset()) -> tuple[InvenTreeReader, list[str]]:
-    """A reader whose server answers the setup check; paths in `forbidden` answer 403, as a missing view role does."""
+TOKENS: list[Any] = [
+    {"id": 1, "name": "laptop", "expiry": "2027-01-15", "in_use": False, "token": "inv-****1111"},
+    {"id": 2, "name": "stockthread", "expiry": "2027-10-27", "in_use": True, "token": "inv-****2222"},
+]
+"""`GET /api/user/tokens/` as measured (`test_char_token_expiry`): the user's tokens, the one sent `in_use`."""
+
+
+def inventree(
+    roles: dict[str, Any], forbidden: frozenset[str] = frozenset(), tokens: Any = None
+) -> tuple[InvenTreeReader, list[str]]:
+    """A reader whose server answers the setup check; paths in `forbidden` answer 403, as a missing view role does.
+    `tokens` is the body of `GET /api/user/tokens/` (TOKENS by default)."""
     asked: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -234,6 +245,8 @@ def inventree(roles: dict[str, Any], forbidden: frozenset[str] = frozenset()) ->
             return httpx.Response(200, json=ROOT)
         if path == "/api/user/roles/":
             return httpx.Response(200, json=roles)
+        if path == "/api/user/tokens/":
+            return httpx.Response(200, json=TOKENS if tokens is None else tokens)
         results = {"/api/part/": [], "/api/stock/location/": LOCATIONS}[path]
         return httpx.Response(200, json={"count": len(results), "results": results})
 
@@ -251,7 +264,7 @@ async def test_a_missing_catalog_view_prints_the_roles_error_and_skips_the_catal
     client, asked = inventree(roles, forbidden=frozenset({"/api/part/"}))
     async with client:
         findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
-    assert [(f.level, f.text) for f in findings[1:]] == [
+    assert [(f.level, f.text) for f in findings[2:]] == [
         (Level.ERROR, "roles: part lacks view, needed for dry runs (the catalog cannot be read)"),
         (
             Level.WARN,
@@ -267,8 +280,8 @@ async def test_a_catalog_refused_despite_the_roles_is_an_error_and_the_roles_sti
     client, _ = inventree(MINIMUM, forbidden=frozenset({"/api/stock/location/"}))
     async with client:
         findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
-    assert levels(findings) == [Level.OK, Level.OK, Level.ERROR]
-    assert findings[2].text.startswith("location paths and aliases: not checked, the catalog could not be read: ")
+    assert levels(findings) == [Level.OK, Level.OK, Level.OK, Level.ERROR]
+    assert findings[3].text.startswith("location paths and aliases: not checked, the catalog could not be read: ")
 
 
 @pytest.mark.anyio
@@ -276,7 +289,69 @@ async def test_a_readable_catalog_checks_the_vehicle_paths() -> None:
     client, _ = inventree(MINIMUM)
     async with client:
         findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
-    assert findings[2] == Finding(Level.OK, "vehicles: every one of the 1 paths is a stock location")
+    assert findings[3] == Finding(Level.OK, "vehicles: every one of the 1 paths is a stock location")
+
+
+def test_the_token_expiry_warns_within_30_days_and_errs_once_past() -> None:
+    today = date(2027, 9, 1)
+    assert check_token(None, today) == Finding(Level.OK, "token: never expires")
+    assert check_token(date(2027, 10, 2), today) == Finding(Level.OK, "token: expiry date 2027-10-02, in 31 days")
+    assert check_token(date(2027, 10, 1), today) == Finding(
+        Level.WARN, "token: expiry date 2027-10-01, in 30 days; create a new one before then"
+    )
+    assert check_token(today, today) == Finding(
+        Level.WARN, "token: expiry date 2027-09-01, today; create a new one before then"
+    )
+    assert check_token(date(2027, 8, 31), today) == Finding(
+        Level.ERROR, "token: its expiry date 2027-08-31 has passed; create a new one"
+    )
+
+
+@pytest.mark.anyio
+async def test_the_setup_check_reports_the_expiry_of_the_token_in_use_only() -> None:
+    client, asked = inventree(MINIMUM)
+    async with client:
+        findings = await inventree_findings(client, {}, writes=True, today=date(2027, 10, 20))
+    assert findings[1] == Finding(Level.WARN, "token: expiry date 2027-10-27, in 7 days; create a new one before then")
+    assert "/api/user/token/" not in asked  # that endpoint creates a token
+    assert exit_code(findings) == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("tokens", "expected"),
+    [
+        ([{**TOKENS[1], "expiry": None}], None),
+        ([{**TOKENS[1], "expiry": "2028-02-29"}], date(2028, 2, 29)),
+        ({"count": 2, "results": TOKENS}, "did not return a list"),
+        ([TOKENS[0]], "marked 0 tokens in use, not 1"),
+        ([TOKENS[1], {**TOKENS[0], "in_use": True}], "marked 2 tokens in use, not 1"),
+        ([{**TOKENS[1], "in_use": "true"}], "marked 0 tokens in use, not 1"),
+        ([{**TOKENS[1], "expiry": "next year"}], "no valid expiry date"),
+        ([{**TOKENS[1], "expiry": 20271027}], "no valid expiry date"),
+        ([{k: v for k, v in TOKENS[1].items() if k != "expiry"}], "no valid expiry date"),
+    ],
+)
+async def test_the_reader_takes_the_expiry_of_the_one_token_in_use(tokens: Any, expected: date | str | None) -> None:
+    client, _ = inventree(MINIMUM, tokens=tokens)
+    async with client:
+        if isinstance(expected, str):
+            with pytest.raises(InvenTreeError, match=expected):
+                await client.token_expiry()
+        else:
+            assert await client.token_expiry() == expected
+
+
+@pytest.mark.anyio
+async def test_an_unreadable_expiry_is_a_warning_and_the_rest_still_runs() -> None:
+    client, _ = inventree(MINIMUM, forbidden=frozenset({"/api/user/tokens/"}))
+    async with client:
+        findings = await inventree_findings(client, {"U0SAM001": "Vehicles/Sam"}, writes=True)
+    assert findings[1] == Finding(
+        Level.WARN, "token: expiry not checked: InvenTree refused the token for GET /api/user/tokens/ (HTTP 403)"
+    )
+    assert findings[3] == Finding(Level.OK, "vehicles: every one of the 1 paths is a stock location")
+    assert exit_code(findings) == 0
 
 
 READ_ONLY: dict[str, Any] = {**MINIMUM, "roles": {**MINIMUM["roles"], "stock": ["view"]}}

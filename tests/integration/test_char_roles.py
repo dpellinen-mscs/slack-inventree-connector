@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
+import anyio
 import httpx
 import pytest
+from pydantic import SecretStr
 
+from stockthread.config import InvenTreeSettings
+from stockthread.inventree import InvenTreeReader
 from stockthread.setup_check import Level, check_roles, lacks_catalog_view
 
 if TYPE_CHECKING:
@@ -48,7 +53,7 @@ def restricted(api: RawApi) -> Iterator[Any]:
     """Build an httpx client that acts as a new user in a new group with the given roles."""
     clients: list[httpx.Client] = []
 
-    def build(group: int) -> httpx.Client:
+    def build(group: int, **token: Any) -> httpx.Client:
         tag = uuid.uuid4().hex[:8]
         body = {
             "username": f"connector-{tag}",
@@ -60,7 +65,7 @@ def restricted(api: RawApi) -> Iterator[Any]:
         # Measured: `group_ids` in the create request answers 500 (1.4.3 and 1.5.6), so the group is set afterwards.
         response = api.http.patch(f"/api/user/{user}/", json={"group_ids": [group]})
         assert response.status_code == 200, response.text[:500]
-        token = api.create("/api/user/tokens/", {"user": user, "name": "connector"})["token"]
+        token = api.create("/api/user/tokens/", {"user": user, "name": "connector", **token})["token"]
         # No keep-alive: the server may answer 403 before reading a POST body and then drop the connection, and a
         # reused connection fails the next request with "Server disconnected" (seen in CI on 1.4.3 and 1.5.6).
         client = httpx.Client(
@@ -188,3 +193,43 @@ def test_char_the_quickstarts_read_only_token_passes_while_writes_are_off(api: R
     assert body["roles"]["stock"] == ["view"]
     assert Level.ERROR not in {finding.level for finding in check_roles(body, writes=False)}
     assert Level.ERROR in {finding.level for finding in check_roles(body, writes=True)}
+
+
+def test_char_token_expiry(api: RawApi, restricted: Any) -> None:
+    """`GET /api/user/tokens/` answers the minimum user with its own tokens, the one that sent the request marked
+    `in_use`, and `expiry` an ISO date: the one given at creation, else about a year on. The reader takes that row
+    (`InvenTreeReader.token_expiry`) for the setup check. A token still works on its expiry date and answers 401
+    after it, so the check errs only once the date has passed. `GET /api/user/token/` is not a read: it creates a
+    token each time, so the connector never calls it."""
+    group, _ = _group(api, MINIMUM_ROLES)
+    user = restricted(group, expiry="2031-03-14")
+    me = user.get("/api/user/me/").json()["pk"]
+    api.create("/api/user/tokens/", {"user": me, "name": "spare"})
+    response = user.get("/api/user/tokens/")
+    assert response.status_code == 200
+    rows = response.json()
+    assert {row["user"] for row in rows} == {me}
+    assert sorted((row["name"], row["in_use"]) for row in rows) == [("connector", True), ("spare", False)]
+    assert next(row["expiry"] for row in rows if row["in_use"]) == "2031-03-14"
+    spare = date.fromisoformat(next(row["expiry"] for row in rows if not row["in_use"]))
+    assert 364 <= (spare - date.today()).days <= 367
+
+    async def read() -> date | None:
+        token = SecretStr(user.headers["Authorization"].removeprefix("Token "))
+        async with InvenTreeReader(InvenTreeSettings(url=str(api.http.base_url)), token) as reader:
+            return await reader.token_expiry()
+
+    assert anyio.run(read) == date(2031, 3, 14)
+
+    def answer(expiry: date) -> httpx.Response:
+        token = api.create("/api/user/tokens/", {"user": me, "name": f"on-{expiry}", "expiry": expiry.isoformat()})
+        with httpx.Client(base_url=api.http.base_url, headers={"Authorization": f"Token {token['token']}"}) as client:
+            return client.get("/api/part/", params={"limit": 1})
+
+    today = datetime.now(UTC).date()  # the server's clock is UTC
+    assert answer(today).status_code == 200
+    expired = answer(date(2020, 1, 1))
+    assert (expired.status_code, expired.json()) == (401, {"detail": "Token has expired"})
+
+    assert user.get("/api/user/token/").status_code == 200
+    assert len(user.get("/api/user/tokens/").json()) == 5

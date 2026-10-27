@@ -2,10 +2,10 @@
 """The setup check (`stockthread check-setup`): what an admin should fix before the first dry run (design section 5,
 "Locations" and "Least privilege").
 
-It reads only: the settings for writes, approvers and the policy, the InvenTree version, the roles of the token's
-user, the parts and stock locations, which Slack users have posted in the watched channels, and the stored aliases
-(from the local database, ids only). Every finding is a fixed sentence about settings, roles, paths or record ids;
-nothing of a message is printed, not even an alias's text.
+It reads only: the settings for writes, approvers and the policy, the InvenTree version, the token's expiry, the
+roles of the token's user, the parts and stock locations, which Slack users have posted in the watched channels, and
+the stored aliases (from the local database, ids only). Every finding is a fixed sentence about settings, roles,
+paths, dates or record ids; nothing of a message is printed, not even an alias's text.
 
 Pure: facts in, findings out. `run.check_setup` gathers the facts.
 """
@@ -15,6 +15,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from stockthread.alias_admin import unmatchable
@@ -107,6 +108,25 @@ def check_roles(body: Mapping[str, Any], *, writes: bool) -> list[Finding]:
     if not found and not later:
         found.append(Finding(Level.OK, "roles: the token's user has the minimum roles and no more"))
     return [*found, *later]
+
+
+TOKEN_WARN_DAYS = 30
+"""A token that expires within this many days is a warning: InvenTree's default lifetime is one year."""
+
+
+def check_token(expiry: date | None, today: date) -> Finding:
+    """When the InvenTree token expires (`InvenTreeReader.token_expiry`). After that day every read and write is
+    refused, so the connector can do nothing until the admin puts a new token in `INVENTREE_TOKEN`. The token
+    still works on its expiry date (`test_char_token_expiry`)."""
+    if expiry is None:
+        return Finding(Level.OK, "token: never expires")
+    days = (expiry - today).days
+    if days < 0:
+        return Finding(Level.ERROR, f"token: its expiry date {expiry.isoformat()} has passed; create a new one")
+    when = "today" if days == 0 else f"in {days} days"
+    if days <= TOKEN_WARN_DAYS:
+        return Finding(Level.WARN, f"token: expiry date {expiry.isoformat()}, {when}; create a new one before then")
+    return Finding(Level.OK, f"token: expiry date {expiry.isoformat()}, {when}")
 
 
 def check_vehicles(catalog: Catalog, vehicles: Mapping[str, str]) -> list[Finding]:

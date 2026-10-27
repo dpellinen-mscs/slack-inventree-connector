@@ -19,7 +19,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Protocol, TypeVar
 
@@ -50,6 +50,7 @@ from stockthread.setup_check import (
     check_posters,
     check_roles,
     check_sites,
+    check_token,
     check_vehicles,
     lacks_catalog_view,
 )
@@ -521,14 +522,20 @@ async def inventree_findings(
     aliases: Sequence[StoredAlias] = (),
     default_sources: Mapping[str, str] | None = None,
     sites: Sequence[str] = (),
+    today: date | None = None,
 ) -> list[Finding]:
-    """Version, roles, `[vehicles]`, `policy.default_source` and `locations.sites` paths, and the records `aliases`
-    name. A catalog that
+    """Version, the token's expiry (as of `today`, the UTC date by default), roles, `[vehicles]`,
+    `policy.default_source` and `locations.sites` paths, and the records `aliases` name. A catalog or an expiry that
     cannot be read is a finding, so the roles still print."""
     version = check_version(await reader.server_info())
+    try:
+        token = check_token(await reader.token_expiry(), today or datetime.now(UTC).date())
+    except InvenTreeError as exc:
+        token = Finding(Level.WARN, f"token: expiry not checked: {exc}")
     roles = await reader.user_roles()
     found = [
         Finding(Level.OK if version.writes_allowed else Level.WARN, f"inventree: {version.message}"),
+        token,
         *check_roles(roles, writes=writes),
     ]
     if lacks_catalog_view(roles):
