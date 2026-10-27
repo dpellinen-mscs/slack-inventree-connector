@@ -61,6 +61,8 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Added
 
+- `check-setup` warns when `inventree.url` is plain http to a host that is not this machine: the token goes with
+  every request.
 - `docs/architecture.md`: the process, the life of a post module by module, a map of every module and the
   rules the layout keeps; a test checks the map against `src/` and the rules against the code.
 - `docs/configuration.md`: every setting with its default, the secrets and the rules across settings; a test

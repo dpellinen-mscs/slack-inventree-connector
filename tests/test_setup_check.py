@@ -34,6 +34,7 @@ from stockthread.setup_check import (
     check_roles,
     check_sites,
     check_token,
+    check_transport,
     check_vehicles,
     exit_code,
 )
@@ -591,4 +592,24 @@ def test_the_setup_check_reports_the_policy_first(tmp_path: Path, monkeypatch: p
         },
         {"SLACK_BOT_TOKEN": "xoxb-synthetic", "SLACK_APP_TOKEN": "xapp-synthetic", "INVENTREE_TOKEN": "inv-synthetic"},
     )
-    assert run.check_setup(settings)[0].text.startswith("approvers: none in slack.approvers")
+    findings = run.check_setup(settings)
+    assert findings[0].text.startswith("approvers: none in slack.approvers")
+    assert check_transport("http://inventree.local:8000") in findings
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://inventree.example.com", "http://localhost:8000", "http://127.0.0.1:8000/", "http://[::1]:8000"],
+)
+def test_a_token_sent_over_https_or_kept_on_this_machine_is_ok(url: str) -> None:
+    assert check_transport(url).level is Level.OK
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://inventree.example.com", "http://192.168.1.20:8000", "http://stock-server:8000", "http://localhost.evil"],
+)
+def test_a_token_sent_over_plain_http_to_another_machine_is_a_warning(url: str) -> None:
+    finding = check_transport(url)
+    assert finding.level is Level.WARN
+    assert url.split("//")[1].split(":")[0] not in finding.text  # never quotes the host
