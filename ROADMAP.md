@@ -39,7 +39,7 @@ Safety invariants apply from the first line of code, and each one has tests:
 - [x] Configuration: typed settings from environment and file, validated at startup, secrets redacted in every log and error
 - [x] Domain model: post, plan revision with input hash, request, line item, match result, review reason, decision
 - [x] Audit store: schema, migrations, append-only log, request keys, marker and snapshot columns ([0009](docs/decisions/0009-audit-store.md))
-- [x] InvenTree test harness: pinned versions in Docker, seeded from `eval/catalog/`, torn down after each run, with one PostgreSQL job
+- [x] InvenTree test harness: pinned versions in Docker, seeded from `eval/catalog/`, torn down after each run, on PostgreSQL as well as SQLite for every pinned version
 - [ ] Characterization tests for every InvenTree behavior the design relies on (design section 11; its table lists 34 tests, kept equal to the suite by `tests/test_docs_characterization.py`)
 - [x] Characterization of a transfer with the server-wide "merge stock on transfer" setting on
 - [x] Fault proxy for delayed, dropped and failed responses (`tests/support/faultproxy.py`)

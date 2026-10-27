@@ -7,6 +7,7 @@ What CI tests on every change, and what the connector does with anything else.
 | InvenTree | API version | Database | Tested |
 | --- | --- | --- | --- |
 | 1.4.3 | 511 | SQLite | integration tests, against a real server in Docker |
+| 1.4.3 | 511 | PostgreSQL | integration tests, against a real server in Docker |
 | 1.5.6 | 530 | SQLite | integration tests, against a real server in Docker |
 | 1.5.6 | 530 | PostgreSQL | integration tests, against a real server in Docker |
 
