@@ -9,8 +9,8 @@ disagree.
 ## The settings file
 
 `stockthread` reads `stockthread.toml` in the directory it is started in.
-`--config PATH` or the environment variable `STOCKTHREAD_CONFIG` names
-another file. `stockthread check-config` validates the file and prints the
+`--config PATH` after the command (`stockthread check-config --config PATH`)
+or the environment variable `STOCKTHREAD_CONFIG` names another file. `stockthread check-config` validates the file and prints the
 settings it will use, with every secret hidden.
 
 Settings are checked once, at startup:
@@ -51,11 +51,11 @@ Settings are checked once, at startup:
 | `inventree.timeout_seconds` | `10` | Timeout of one request to InvenTree (1 to 300). |
 | `writes.enabled` | `false` | The switch of the write gate. Off: every movement is a dry run, and the connector never opens its writing client. Writes also stay off on an InvenTree version outside the tested range. |
 | `policy.auto_apply` | `["take_to_vehicle", "take_to_site"]` | Movement types that apply with no click when nothing is in doubt ([ADR 0004](decisions/0004-default-write-policy.md)). Every other type waits for Apply. `[]` makes every movement review-first. A type beyond the two shipped take-outs makes `check-setup` warn. Allowed: `take_to_vehicle`, `take_to_site`, `return`, `transfer`, `receive`, `consume`, `count`. |
-| `policy.max_quantity` | `100` | A larger quantity on a line is a review reason. |
-| `policy.default_source` | `{}` | A default source location per movement type. Unset, an implied source ("2 Disc 40 on my truck") is a review reason. |
+| `policy.max_quantity` | `100` | A larger quantity on a line is a review reason (at least 1). |
+| `policy.default_source` | `{}` | A default source location per movement type: a table from the type to the stock location's whole path, letter for letter (`default_source = { take_to_vehicle = "Warehouse/Main Stock" }`), for a movement that states no source ([ADR 0020](decisions/0020-default-source.md)). Unset, an implied source ("2 Disc 40 on my truck") is a review reason. `receive` and `count` are refused: they take stock from no source. |
 | `locations.sites` | `[]` | The whole paths of the stock locations that are sites, such as `["Sites"]`; a structural folder counts, and so does every location under it. A `take_to_site` applies with no click only when its destination is one of them ([ADR 0022](decisions/0022-sites-for-take-to-site.md)). Empty means every take to a site waits for Apply (`check-setup` warns with writes on). |
-| `apply.settle_seconds` | `120` | How long a write whose outcome is unknown waits before recovery looks for it. It must be longer than `inventree.timeout_seconds`, and longer than the server's own request timeout, which the connector cannot read (InvenTree's Docker image: gunicorn's 30 s, unless you changed it or a proxy in front waits longer). |
-| `undo.max_age_hours` | `168` | An Undo is refused after this long from when the write was made (7 days). |
+| `apply.settle_seconds` | `120` | How long a write whose outcome is unknown waits before recovery looks for it (at least 1). It must be longer than `inventree.timeout_seconds`, and longer than the server's own request timeout, which the connector cannot read (InvenTree's Docker image: gunicorn's 30 s, unless you changed it or a proxy in front waits longer). |
+| `undo.max_age_hours` | `168` | An Undo is refused after this long from when the write was made (7 days; at least 1). |
 | `storage.database` | `"stockthread.db"` | The SQLite database file, created readable by its owner only. A relative path is taken from the directory the connector is started in ([operations](operations.md)). |
 | `storage.retention_days` | `30` | Message text (raw Slack events, dry-run results) is blanked this many days after a post no longer needs it (1 to 3650). Ids, states and the audit log are kept. It must be longer than `slack.plan_expiry_hours`, `slack.catch_up_hours` and `undo.max_age_hours`. |
 | `llm.base_url` | required in `[llm]` | An OpenAI-compatible endpoint, such as `"http://localhost:11434/v1"` for a local server. With no `[llm]` section, no post ever leaves this machine, and the posts the built-in rules cannot read get no reply. |

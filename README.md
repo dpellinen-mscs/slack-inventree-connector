@@ -112,7 +112,7 @@ What to expect in this version:
   is done with; ids, states and the audit log stay, so `trail` still shows what happened.
   [Operations](docs/operations.md) covers backing it up, restoring it and upgrading over it.
 - To see why a post got the reply it did, copy the link of any of its messages (*Copy link* in
-  Slack) and run `.venv/bin/stockthread trail '<link>'`. It prints each dry run with every reason it
+  Slack) and run `.venv/bin/stockthread trail '<link>'` (or `trail <channel id> <ts>`). It prints each dry run with every reason it
   needs a person, the question asked, who answered and with what, and the audit log. It only reads
   the database, and prints ids and codes rather than the words of the post, unless you add `--text`.
 - `.venv/bin/stockthread aliases list` prints the confirmed aliases ("disc 40" means part 12), each
