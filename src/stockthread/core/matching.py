@@ -240,7 +240,10 @@ def _part_rules(
 ) -> tuple[dict[int, tuple[str, ...]], list[Alias], Callable[[int], set[str]]]:
     parts = {p.pk: p for p in catalog.parts if p.active and not p.template and not p.virtual}
     aliases = [a for a in catalog.part_aliases if a.user is None or a.user == poster]
-    alias_texts = {pk: [a.text for a in aliases if a.record == pk] for pk in parts}
+    alias_texts: dict[int, list[str]] = {pk: [] for pk in parts}
+    for alias in aliases:
+        if alias.record in alias_texts:
+            alias_texts[alias.record].append(alias.text)
 
     def vocabulary(pk: int) -> set[str]:
         part = parts[pk]
