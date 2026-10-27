@@ -920,3 +920,38 @@ def test_a_vehicle_that_is_one_of_the_movements_places_or_outside_its_clauses_is
     lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(4)))
     source = "van 3" if "from van 3" in text else "main stock" if "main stock" in text else None
     assert not mixed(take(line_items=lines, source_text=source), text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "took 2 Disc 40 to truck 1\nthe Smith job got 4 Disc 60",
+        "took 2 Disc 40 from main stock to truck 1, Smith job got the 4 Disc 60",
+        "Truck 1:\n2 Disc 40\nSmith job:\n4 Disc 60",
+        "took 2 Disc 40 to truck 1. the Oak St site has 4 Disc 60",
+        "took 2 Disc 40 to truck 1, left 4 Disc 60 at the jobsite",
+    ],
+)
+def test_a_rival_site_with_no_place_word_and_no_spare_number_is_seen(text: str) -> None:
+    """As a rival vehicle, but the other place is a job or a site (T6): "the Smith job got the drops"."""
+    lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(4)))
+    movement = take(line_items=lines, source_text="main stock" if "main stock" in text else None)
+    assert mixed(movement, text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Truck 1:\n2 Disc 40 from main stock for the Smith job\n4 Disc 60",
+        "took 2 Disc 40 for the Smith job, and 4 Disc 60, all to truck 1",
+        "took 2 Disc 40 and 4 Disc 60 from main stock to truck 1. Smith job is tomorrow",
+        "Smith job tomorrow. took 2 Disc 40 and 4 Disc 60 from main stock to truck 1",
+        "took 2 Disc 40 to the Smith job and 4 Disc 60 to the Smith job too",
+    ],
+)
+def test_a_site_that_is_a_purpose_one_of_the_places_or_outside_the_clauses_is_no_rival(text: str) -> None:
+    """ "for the Smith job" says why, not where; a job named before the first or after the last clause is no rival."""
+    lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(4)))
+    destination = "the Smith job" if "to the Smith job" in text else "truck 1"
+    source = "main stock" if "main stock" in text else None
+    assert not mixed(take(line_items=lines, source_text=source, destination_text=destination), text)
