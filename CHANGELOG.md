@@ -40,6 +40,8 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Fixed
 
+- HTTP mode: a request whose `X-Slack-Request-Timestamp` is not plain digits ("1e3", or hundreds of digits) is
+  refused with 401. It used to get a 500 and an ERROR log line with a traceback quoting the header.
 - An Apply click now approves a plan its post's second or later dry run made, as after an answered question.
   The click compared the plan's revision with the dry run's, which are counted apart, so such a plan was refused
   as "no plan" and could not be applied at all.

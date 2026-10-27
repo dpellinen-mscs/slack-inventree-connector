@@ -71,13 +71,14 @@ def send(
     age: int = 0,
     path: str = "/slack/events",
     method: str = "POST",
+    timestamp: str | None = None,
 ) -> tuple[int, bytes]:
-    timestamp = int(time.time()) - age
+    timestamp = str(int(time.time()) - age) if timestamp is None else timestamp
     content_type = "application/x-www-form-urlencoded" if raw.startswith("payload=") else "application/json"
     headers = {"Content-Type": content_type}
     if signed:
         digest = hmac.new(secret.encode(), f"v0:{timestamp}:{raw}".encode(), hashlib.sha256).hexdigest()
-        headers |= {"X-Slack-Request-Timestamp": str(timestamp), "X-Slack-Signature": f"v0={digest}"}
+        headers |= {"X-Slack-Request-Timestamp": timestamp, "X-Slack-Signature": f"v0={digest}"}
     assert server.port is not None
     connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=10)
     try:
@@ -124,6 +125,20 @@ def test_a_request_without_a_valid_signature_is_refused_and_not_stored(
 ) -> None:
     assert send(server, body_of("message_plain"), **how)[0] == 401
     assert send(server, body_of("url_verification"), **how)[0] == 401
+    assert stored(db) == []
+
+
+@pytest.mark.parametrize("timestamp", ["not-a-number", "1e3", "", "1.5", "-1", "0x10", "²", "9" * 400])
+def test_a_timestamp_that_is_not_plain_digits_is_refused_and_never_logged(
+    server: HttpServer, db: Path, caplog: pytest.LogCaptureFixture, timestamp: str
+) -> None:
+    """Signed with the right secret over that very timestamp: still refused, as a 401 and not a 500 whose
+    traceback would quote the header."""
+    caplog.set_level(logging.DEBUG)
+    assert send(server, body_of("message_plain"), timestamp=timestamp)[0] == 401
+    assert "Traceback" not in caplog.text
+    assert "Exception while serving" not in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert stored(db) == []
 
 

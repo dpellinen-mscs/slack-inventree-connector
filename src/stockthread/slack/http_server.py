@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import threading
 import time
 from collections.abc import Iterable
@@ -59,6 +60,10 @@ class ServeError(Exception):
     """The address cannot be listened on. The message names the address and the error, nothing else."""
 
 
+_SECONDS = re.compile(r"[0-9]{1,12}")
+"""A Slack request timestamp: whole seconds since the epoch."""
+
+
 def signed(application: WSGIApplication, signing_secret: str, path: str) -> WSGIApplication:
     """Refuse a POST to `path` with a missing, wrong or stale signature (401), before `application` sees it.
 
@@ -76,7 +81,8 @@ def signed(application: WSGIApplication, signing_secret: str, path: str) -> WSGI
             length = 0
         body = environ["wsgi.input"].read(length) if length > 0 else b""
         timestamp, signature = environ.get("HTTP_X_SLACK_REQUEST_TIMESTAMP"), environ.get("HTTP_X_SLACK_SIGNATURE")
-        if not verifier.is_valid(body, timestamp, signature):
+        # Slack sends whole seconds as digits. Anything else makes the verifier raise (ValueError, OverflowError).
+        if not _SECONDS.fullmatch(timestamp or "") or not verifier.is_valid(body, timestamp, signature):
             start_response("401 Unauthorized", [("Content-Type", "text/plain"), ("Content-Length", "0")])
             return [b""]
         environ["wsgi.input"] = io.BytesIO(body)
