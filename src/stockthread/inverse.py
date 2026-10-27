@@ -15,7 +15,8 @@ measured on 1.4.3 and 1.5.6). It needs one entry per line, on that line's item, 
 - a remove (12): add back what was removed; the item must still exist where it was;
 - a count (10): count back to what the snapshot held; the item must hold the count the apply set.
 
-An item the undo takes stock from must be available (status OK, nothing allocated). No entry of the request's id
+An item the undo takes stock from must be available (status OK, nothing allocated), and an item it adds to
+must stay under `QUANTITY_LIMIT`. No entry of the request's id
 may carry another attempt (a second apply or an undo that wrote), and on every stock item the undo touches, no
 history entry since the snapshot may be another than the apply's: another writer's change there is one the undo
 would silently fold in. An add onto an item that held 0, or a count of one, has no undo: back at 0 the item may be
@@ -39,7 +40,7 @@ from typing import Any
 from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.model import Operation
 from stockthread.core.resolve import StockItem, Take
-from stockthread.core.write_request import WriteRequest, _check_quantity, _decimal, build_request
+from stockthread.core.write_request import QUANTITY_LIMIT, WriteRequest, _check_quantity, _decimal, build_request
 from stockthread.inventree import MarkedEntry
 from stockthread.precondition import Pair, Snapshot, _pk, _quantity, built_from, pairs, places, record
 from stockthread.readback import ADDED, COUNTED, MOVED, REMOVED, SPLIT_CHILD, _number
@@ -212,7 +213,7 @@ def check_undo(
     a split took from, only those older than the apply's split entry count (history entry pks grow with time, and
     InvenTree writes a change and its entry in one transaction): the undo leaves that item alone, so a change to it
     after the apply is no reason to refuse. An item the undo takes stock from must be available (status OK, nothing
-    allocated: an allocation writes no history entry)."""
+    allocated: an allocation writes no history entry), and an item it adds to must stay under `QUANTITY_LIMIT`."""
     if others := _others(marker, entries):
         return others
     operation, place, destination = places(view)
@@ -250,6 +251,11 @@ def check_undo(
             return NoUndo(
                 f"stock item {pk} is not available (status {now.status}, allocated {_decimal(now.allocated)})"
             )
+        if UNDO_OPERATION[operation] is Operation.ADD and now.quantity + reversal.quantity >= QUANTITY_LIMIT:
+            # As `precondition.check` for an apply: InvenTree checks the line, not the total it makes (#222). The
+            # history check above already refuses another writer's change, so this guards a change with no entry.
+            total = _decimal(now.quantity + reversal.quantity)
+            return NoUndo(f"stock item {pk} would hold {total} after the undo, more than InvenTree stores")
     return None
 
 
