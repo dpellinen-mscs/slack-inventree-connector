@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The provider adapter for OpenAI-compatible endpoints: hosted providers, and local servers such as Ollama,
 llama.cpp and vLLM, which serve the same `POST {base_url}/chat/completions`.
 

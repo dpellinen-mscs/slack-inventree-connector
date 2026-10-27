@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The audit trail of one post, for an operator (`stockthread trail`): what the connector saw, why it decided
 what it decided, and who answered what (design section 8).
 

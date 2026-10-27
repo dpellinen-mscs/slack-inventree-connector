@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Integration tests against a real InvenTree server.
 
 They run only when STOCKTHREAD_IT_URL and STOCKTHREAD_IT_TOKEN_FILE are set, as

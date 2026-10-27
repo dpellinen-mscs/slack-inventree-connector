@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The rule-based extractor: what the corpus does not pin down (design section 9)."""
 
 from __future__ import annotations

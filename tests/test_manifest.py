@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The Slack app manifest asks for what the connector uses, and nothing more."""
 
 from __future__ import annotations

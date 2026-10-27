@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The one focused question per post (design section 4, "Questions")."""
 
 from __future__ import annotations

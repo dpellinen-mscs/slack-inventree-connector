@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A connector run that starts an undo and is killed while its write is on its way: run as a process of its own by
 `tests/integration/test_apply_server.py`, which kills it with SIGKILL, so nothing it would do afterwards happens.
 

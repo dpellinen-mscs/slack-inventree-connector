@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Confirmed aliases in the store (ADR 0012): only a verified request teaches one, a later confirmation replaces it."""
 
 from __future__ import annotations

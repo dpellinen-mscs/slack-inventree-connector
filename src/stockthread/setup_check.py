@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The setup check (`stockthread check-setup`): what an admin should fix before the first dry run (design section 5,
 "Locations" and "Least privilege").
 

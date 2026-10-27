@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Grouping in the store: a message belongs to exactly one post, whatever order it arrives in (design section 4)."""
 
 from __future__ import annotations

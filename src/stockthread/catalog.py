@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The catalog snapshot the matcher works on, read from InvenTree (design section 10).
 
 The snapshot is all or nothing: a record with a missing or mistyped field fails the whole load, because a

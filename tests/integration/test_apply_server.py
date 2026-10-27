@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """`apply.apply_request` against a real server: the whole protocol, with the connector's own reader and writer."""
 
 from __future__ import annotations

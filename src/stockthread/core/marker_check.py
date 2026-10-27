@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Step 2 of the apply protocol: do the markers found in the stock history agree with the recorded states?
 
 Design section 7, "Apply protocol" and "The marker". Before a request of a post is sent, the history is searched for

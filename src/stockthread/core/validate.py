@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Validate: review reasons derived by rule from the post text and the candidate (design section 7).
 
 Every reason an extractor can raise is also derived here by rule, where the text or the fields

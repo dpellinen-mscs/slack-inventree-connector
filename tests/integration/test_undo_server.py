@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Undo against a real server: write a planned request, build its undo from the entries InvenTree wrote
 (`inverse`), send it, and find every total the movement touched back where the snapshot had it."""
 

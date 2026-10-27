@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """HTTP serving: recorded payloads over a real socket, through waitress and the real Bolt app (ADR 0013)."""
 
 from __future__ import annotations

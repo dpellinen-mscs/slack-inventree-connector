@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Deterministic matching of item and location text to InvenTree records (design section 10).
 
 The rules run in order, and the first rule with any hit decides:

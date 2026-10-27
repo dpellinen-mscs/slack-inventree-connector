@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Matching rules and safety properties that the corpus does not pin down (design section 10)."""
 
 from __future__ import annotations

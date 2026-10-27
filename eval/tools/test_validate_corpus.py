@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Tests for validate_corpus.py. Standard library only:
 
     python3 -m unittest discover -s eval/tools -p "test_*.py"

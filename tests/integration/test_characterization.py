@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Characterization tests: server behavior the design relies on (design section 11).
 
 Each test turns one claim from docs/research/inventree.md into a fact for the

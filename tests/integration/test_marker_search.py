@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The marker search of the apply protocol (design section 7, step 2) against a real server."""
 
 from __future__ import annotations

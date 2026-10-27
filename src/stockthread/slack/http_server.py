@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """HTTP serving for `stockthread run` (design section 4, "Transport"; ADR 0013).
 
 Bolt's WSGI adapter, served by waitress: pure Python, one process with a few threads, so the instance lock,

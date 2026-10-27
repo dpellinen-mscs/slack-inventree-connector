@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Decided movement views as `precondition` and `readback` take them: line n is part n, the source is location
 `SOURCE`, the destination `DESTINATION`."""
 

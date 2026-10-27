@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Ingest against every Slack fixture's expected result, plus what the fixtures do not cover."""
 
 from __future__ import annotations

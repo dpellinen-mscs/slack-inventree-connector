@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """What a plan an approver confirmed teaches (ADR 0012, narrowed by ADR 0021): each item and place text of it
 that the whole-word and fuzzy rules fit to that one record alone becomes an alias of it. A pick among several records
 the text fits teaches nothing. The worker stores them once every request of the plan is verified (`Worker.work_due`);

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """docs/configuration.md lists every setting of `config.Settings` with its default, and nothing else."""
 
 from __future__ import annotations

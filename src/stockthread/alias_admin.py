@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """What an admin sees of the aliases (`stockthread aliases`, ADR 0012): a list, an export, a removal, and an alias
 typed by hand (#174).
 

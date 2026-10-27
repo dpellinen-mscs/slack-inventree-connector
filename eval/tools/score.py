@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Score extractor and matcher output against the eval corpus.
 
 Standard library only:

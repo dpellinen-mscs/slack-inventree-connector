@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The soak's growth judge (`tests/soak/soak.py`): a leak keeps growing, a pool levels off."""
 
 from __future__ import annotations

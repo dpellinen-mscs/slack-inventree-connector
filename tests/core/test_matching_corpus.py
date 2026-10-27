@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The matcher against every match expectation in the eval corpus (eval/README.md, "Match conventions").
 
 The matcher gets the expected text, so an extraction error cannot hide a matching error.

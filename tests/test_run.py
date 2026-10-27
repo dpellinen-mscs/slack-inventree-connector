@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """`stockthread run`: startup checks, the lock, the catalog cache, and one post from the queue to its reply."""
 
 from __future__ import annotations

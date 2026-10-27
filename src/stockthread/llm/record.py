@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Record a model's answers to the eval corpus, so they are scored later without a provider.
 
     LLM_BASE_URL=... LLM_MODEL=... LLM_API_KEY=... python -m stockthread.llm.record eval --out FILE

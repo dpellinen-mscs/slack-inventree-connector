@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Characterization of InvenTree roles: what a dedicated connector user needs (design sections 4 and 11).
 
 Each test creates its own group, user and API token on the disposable server.

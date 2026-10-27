@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The fault proxy against a stub upstream: each fault happens where it says, before or after forwarding."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Approval by the policy in the run loop (ADR 0004, 0019): `Worker.approve_due` lets the policy judge each plan a
 reply made in this process, once, and `run.policy_approver` judges it with the settings, the server's version read
 again and the catalog's vehicles."""

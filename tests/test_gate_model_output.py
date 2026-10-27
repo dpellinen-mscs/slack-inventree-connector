@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The model cannot authorize a write (design section 6, ADR 0004; ROADMAP M3 DoD): every corpus post runs through
 the worker as `stockthread run` builds it with writes on, and the model's recorded answer is varied. Stripping the
 model's flags never turns a post the policy does not approve into one it approves, and an answer that names a

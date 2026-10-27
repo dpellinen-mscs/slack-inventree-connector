@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """One undo end to end (`apply.undo_apply`), against the fake InvenTree that moves a whole stock item: the apply takes
 item 57 from location 10 to location 11, the undo takes it back. The real server, splits, adds, removes and counts
 included: integration/test_undo_server.py."""

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The undo of a write (design section 7, "Undo"): pure, so every undo body the connector could send is built and
 checked here.
 

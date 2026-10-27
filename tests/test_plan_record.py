@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Views rebuilt from the dry-run record (ADR 0016): exactly what the record holds, or nothing."""
 
 from __future__ import annotations

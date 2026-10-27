@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The rule-based extractor against the eval corpus, scored by the reference scorer (eval/README.md).
 
 Zero hard failures is the bar. `python -m pytest tests/core/test_extract_rules_corpus.py -s` prints the report.

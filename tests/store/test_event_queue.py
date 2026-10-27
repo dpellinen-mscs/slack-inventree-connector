@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The durable Slack event queue: store before acknowledging, pick up after a restart (design section 4)."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A plan of two requests against a real server (ADR 0002, M3 DoD): the first is verified, the second's write never
 reaches the server and recovery concludes it `failed`. The plan is partly applied, and the undo of the first puts
 every total back; the second's stock item never moved."""

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Answers: what the answers given in a post's thread change about one reading of it (design section 4, "Acting on
 an answer").
 

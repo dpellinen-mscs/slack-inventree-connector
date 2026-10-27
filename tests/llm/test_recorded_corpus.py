@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Recorded model answers against the eval corpus, scored by the reference scorer (eval/README.md).
 
 Every file in `eval/recorded/` is one model's answers to one prompt version. Each is scored twice: the model

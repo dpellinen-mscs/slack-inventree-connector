@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The marker that the connector writes into the notes of every stock change (design section 7).
 
 `[sic:<22 random characters>:<a or u><two-digit attempt number>]`. The random id

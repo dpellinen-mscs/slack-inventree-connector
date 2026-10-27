@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Step 3 of the apply protocol, the snapshot and the precondition (design section 7, "Apply protocol").
 
 Pure: the caller reads the stock items of every (part, location) pair the movement touches (`pairs`), with

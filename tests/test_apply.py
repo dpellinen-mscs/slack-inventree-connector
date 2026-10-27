@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Step 2 of the apply protocol against a reader: search, compare, and excuse only InvenTree's 404 (design §7)."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """docs/design.md section 11 names every characterization test, and every name it gives is a test."""
 
 from __future__ import annotations

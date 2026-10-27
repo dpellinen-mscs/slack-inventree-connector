@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The claims of docs/locations.md, checked against the matcher on the layout it shows."""
 
 from __future__ import annotations

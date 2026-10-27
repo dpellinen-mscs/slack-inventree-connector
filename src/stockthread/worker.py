@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The worker: from the durable queue to a dry-run reply in the thread (design section 4, "Worker").
 
 Two steps, both run only by the holder of the instance lock:

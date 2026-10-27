@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The write gate: switch, policy and validation, each able to block alone (design section 6, ADR 0004).
 
 `judge` is evaluated twice: when a plan is approved (by a click on Apply, or by the policy), and again right before

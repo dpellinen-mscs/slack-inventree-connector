@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Retention in the store (design section 6, "Privacy"; threat model T10): old message text is blanked, rows stay."""
 
 from __future__ import annotations

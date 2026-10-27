@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The read-only client against a real server, seeded from eval/catalog."""
 
 from __future__ import annotations

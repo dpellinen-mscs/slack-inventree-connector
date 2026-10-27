@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The worker's apply step and receipts: `Worker.work_due` runs the step of the apply protocol each request is due for
 (through `applier.work_request` against the fake InvenTree of test_apply_request.py), and `Worker.post_receipts` posts
 the receipt each plan is due in its thread and records it."""

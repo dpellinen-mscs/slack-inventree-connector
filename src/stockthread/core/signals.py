@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Text patterns that the rule-based extractor and the validator share.
 
 They are heuristics over informal English. A hit is a review reason or a reason to decline,

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The worker's step of the apply protocol (design section 7): approval of a post's plan by the policy, and the next
 step of each request one is due for. Both act on the views rebuilt from the dry-run record the plan was made from
 (ADR 0016), and judge the gate with what is read now: the settings, the server's version check, the vehicles, the

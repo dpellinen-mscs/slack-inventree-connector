@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The rule-based extractor (design section 9): no network, no key, and no guessing.
 
 It reads one message of the common shapes, "took 2 Disc 40 to my truck" or "2 ONTs on truck 1",

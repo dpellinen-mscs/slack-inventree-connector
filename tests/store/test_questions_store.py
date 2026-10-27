@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Questions in the store: a reply's question and its buttons are stored with the reply (migration 0010)."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The worker's step of the apply protocol (`applier`): approval by the policy and the next step of each request, on
 views rebuilt from the dry-run record (ADR 0016), against the fake InvenTree of test_apply_request.py."""
 

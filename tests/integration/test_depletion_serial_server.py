@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """M3 DoD against a real server: depletion with deletion, and serialized stock, are verified and undone correctly or
 go to review.
 

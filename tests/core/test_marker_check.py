@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Step 2 of the apply protocol: found markers against recorded states (design section 7)."""
 
 from collections.abc import Iterable

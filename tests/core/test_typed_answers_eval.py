@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The typed-answer eval set (`eval/typed_answers.json`): every reply reads as the hand-reviewed answer, or as none."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A decided plan becomes its requests, one per movement in the post's order; anything less is refused whole."""
 
 from __future__ import annotations

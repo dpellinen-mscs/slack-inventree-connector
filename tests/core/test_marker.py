@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The marker format of design section 7."""
 
 import pytest

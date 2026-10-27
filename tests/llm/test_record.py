@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Recording a model's answers to the corpus, and reading a recording back."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Apply buttons in the store: a dry-run reply posted with one stores it with the reply (migration 0022), so it is taken
 down once its plan is closed (`Worker.take_down_buttons`)."""
 

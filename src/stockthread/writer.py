@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The one InvenTree client that can change stock (design section 7, step 4 of the apply protocol).
 
 It sends one built `WriteRequest` once and says what InvenTree answered. It never retries: a retry happens only as

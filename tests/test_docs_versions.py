@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """docs/versions.md names the versions CI tests: the InvenTree matrix, the tested API range, and Python."""
 
 from __future__ import annotations

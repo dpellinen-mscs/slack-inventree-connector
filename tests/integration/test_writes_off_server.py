@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """M3 DoD against a real server: with writes off, `stockthread run` sends InvenTree nothing but GET requests.
 
 Every message of the eval corpus is queued and answered with its dry run by `run.run`, as `stockthread run` starts

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Ingest: decide what to do with one Slack payload, before anything else sees it (design section 4).
 
 Pure: the transport (Socket Mode or HTTP, through Bolt) verifies the request and hands over
