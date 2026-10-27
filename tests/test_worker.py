@@ -4943,3 +4943,28 @@ def test_a_length_in_its_parts_own_unit_with_its_stock_read_makes_a_plan(
     stocked(store, clock, FakeStock({(3, 10): [ok(57, 80)]}), "took 50 m of drop cable from main stock to truck 1",
             cables(units))  # fmt: skip
     assert [(state, requests) for _, _, state, requests in plans(path)] == plan
+
+
+def dry_run_of(worker: Worker, store: Store, slack: FakeSlack, clock: Clock, text: str) -> str:
+    enqueue(store, message("1790000000.000100", text))
+    clock.at("1790000001.000000")
+    worker.step()
+    clock.at("1790000015.000101")
+    worker.step()
+    [reply] = slack.posted
+    return json.dumps(reply["blocks"], ensure_ascii=False)
+
+
+def test_slacks_escapes_are_read_as_the_characters_typed(
+    worker: Worker, store: Store, slack: FakeSlack, clock: Clock
+) -> None:
+    """Slack sends a typed "&", "<" and ">" as "&amp;", "&lt;" and "&gt;": "->" is an arrow to the pipeline."""
+    shown = dry_run_of(worker, store, slack, clock, "took 2 Disc 40 from main stock -&gt; truck 1")
+    assert "*Vehicles/Truck 1*" in shown
+
+
+def test_a_quoted_post_is_escaped_once_for_slack(worker: Worker, store: Store, slack: FakeSlack, clock: Clock) -> None:
+    """The reply quotes "R&amp;D kit" as Slack sent it, so Slack shows "R&D kit", not "R&amp;D kit"."""
+    shown = dry_run_of(worker, store, slack, clock, "took 2 R&amp;D kit from main stock to truck 1")
+    assert "R&amp;D kit" in shown
+    assert "&amp;amp;" not in shown

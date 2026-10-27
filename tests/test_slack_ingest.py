@@ -25,6 +25,7 @@ from stockthread.slack.ingest import (
     ingest_action,
     ingest_event,
     revised_message,
+    typed,
     unwrap_socket,
 )
 
@@ -387,3 +388,18 @@ def test_an_edit_that_does_not_name_this_app_is_still_a_revision(fields: dict[st
     body = changed()
     body["event"]["message"].update(fields)
     assert revised_message(body, SETTINGS) == ("C0ACME001", body["event"]["message"]["ts"])
+
+
+@pytest.mark.parametrize(
+    ("sent", "shown"),
+    [
+        ("2 R&amp;D kits -&gt; van 3", "2 R&D kits -> van 3"),
+        ("&lt;b&gt; is not bold", "<b> is not bold"),
+        ("typed &amp;gt; as is", "typed &gt; as is"),  # "&amp;" last: a typed entity stays typed
+        ("<https://example.com/a?b=1&amp;c=2|the sheet> <@U0000001>",
+         "<https://example.com/a?b=1&c=2|the sheet> <@U0000001>"),
+        ("no escapes", "no escapes"),
+    ],
+)  # fmt: skip
+def test_text_is_read_as_typed(sent: str, shown: str) -> None:
+    assert typed(sent) == shown
