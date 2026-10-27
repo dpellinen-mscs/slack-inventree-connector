@@ -631,6 +631,8 @@ _NAMES_A_PLACE = {
     "destination": re.compile(r"(?<!\w)(to|into|onto)\s+\w|(→|->)\s*\w"),
 }
 """Words that open a place. Not "on", "in", "at", "for" or "up": "picked up 2", "in the back", "for the Smith job"."""
+_EMOJI = re.compile(r":[\w+-]+:")
+"""A Slack emoji code, such as ":truck:"."""
 _A_NUMBER = re.compile(rf"(?<!\w)(\d+|{'|'.join(NUMBER_WORDS)})(?![^\W\d])", re.IGNORECASE)
 
 
@@ -639,8 +641,9 @@ def _one_clause(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     van 3" and "took 4 ONTs from shelf B to van 4" read as 4 ONTs from shelf A to van 3 (#200). It is doubted when a
     clause among those it draws on, from the first to the last, has a rival: a place on a side whose place the
     movement takes from another clause, or a number that is neither a line's quantity nor in a field's words
-    ("van 3 took 4 ONTs too"). An item counts where its quantity is stated. A list under a heading ("Van 3 from
-    shelf A:" then a line per item) has no rival and passes, as does another movement after the last clause."""
+    ("van 3 took 4 ONTs too"), or a vehicle that is not one of its places ("van 4 got the drops"). An item counts
+    where its quantity is stated. A list under a heading ("Van 3 from shelf A:" then a line per item) has no rival
+    and passes, as does another movement after the last clause."""
     starts = [0] + [m.end() for m in _CLAUSE_END.finditer(text)]
 
     def clauses(found: list[re.Match[str]]) -> set[int]:
@@ -674,19 +677,27 @@ def _one_clause(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         for found in lines
         for m in found
     ]
-    own += [
+    names = [
         (m.start(), m.end())
         for item in movement.line_items
         if item.item_text
         for m in _occurrences(item.item_text, text)
     ]
-    own += [(m.start(), m.end()) for found in places.values() for m in found]
+    names += [(m.start(), m.end()) for found in places.values() for m in found]
+    own += names
     numbers = [m for m in _A_NUMBER.finditer(text) if not any(start <= m.start() < end for start, end in own)]
-    rival = any(
-        first <= n <= last and n not in mine
-        for side, mine in sides.items()
-        for n in clauses(list(_NAMES_A_PLACE[side].finditer(text)))
-    ) or any(first <= n <= last for n in clauses(numbers))
+    names += [(m.start(), m.end()) for m in _EMOJI.finditer(text)]  # ":truck:" is no place
+    # A vehicle needs no "to" or number to be a place ("van 3 got the drops"); one of this movement's places is not.
+    vehicles = [m for m in VEHICLE_WORDS.finditer(text) if not any(start <= m.start() < end for start, end in names)]
+    rival = (
+        any(
+            first <= n <= last and n not in mine
+            for side, mine in sides.items()
+            for n in clauses(list(_NAMES_A_PLACE[side].finditer(text)))
+        )
+        or any(first <= n <= last for n in clauses(numbers))
+        or any(first <= n <= last and n not in set().union(*sides.values()) for n in clauses(vehicles))
+    )
     return {_rule(ReasonCode.MOVEMENT_UNCLEAR, DETAIL_MIXED)} if rival else set()
 
 

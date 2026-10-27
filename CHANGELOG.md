@@ -21,7 +21,8 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 - A movement put together from the fields of two stated movements needs a person: "took 2 Disc 40 from main stock
   to truck 1" and "took 4 Disc 40 from receiving to van 3" read as 4 from main stock to truck 1 is no longer written
   with no click. A movement told over several clauses with no other place or number among them (a heading over a
-  list) is unchanged (#200).
+  list) is unchanged (#200). Another vehicle named in one of its clauses counts too, with no "to" or number:
+  "Truck 1:" over 2 Disc 40 then "van3:" over 4 Disc 60, read as one take of both to truck 1, waits.
 - A post that holds another person's message (a reply in someone else's thread, read with the post) waits for an
   approver: its "my truck" would be read as the poster's truck, so the policy no longer writes it with no click.
 - A take-out whose text has a return word ("returned", "brought back", "back to") needs a person: a model that
