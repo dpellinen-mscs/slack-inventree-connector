@@ -24,8 +24,8 @@ the default policy, almost no take-out could apply without a click, so ADR 0004'
    implied-source reason says so (`validate.DETAIL_SOURCE_LEFT_OUT`) and the thread asks for the source. Otherwise a
    model that leaves out "from shelf B" would move stock from the default with no click. A post that says "from" for
    another reason ("a call from Sam"), or an arrow with no source before it ("2 wall mounts → my truck"), costs one
-   question. So does a text that names, word for word, a stock location (its name or an alias, or "my truck") that
-   is neither a destination of the post's movements nor the default: "pulled 2 ONTs shelf B to van 3"
+   question. So does a text that names, word for word, a stock location (its name, full path or an alias, or "my
+   truck") that is neither a destination of the post's movements nor the default: "pulled 2 ONTs shelf B to van 3"
    (`validate.DETAIL_PLACE_NAMED`, `matching.locations_named`).
 3. A `default` match can authorize a write, as an exact match can. For the policy it counts as an automatic place
    only for a source the post does not state, and only while it is still that type's default when judged
