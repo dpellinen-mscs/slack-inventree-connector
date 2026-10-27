@@ -4,8 +4,8 @@ Start with the two checks and the log. They answer most questions.
 
 - `stockthread check-config` says whether the settings file and the environment are valid, and prints the settings
   it will use with every secret hidden.
-- `stockthread check-setup` reads InvenTree and says what must be fixed: the server version, the token's roles,
-  `[vehicles]` paths, learned aliases, and, with writes on, who can write.
+- `stockthread check-setup` reads InvenTree and says what must be fixed: the server version, the token's expiry
+  and roles, `[vehicles]` paths, learned aliases, and, with writes on, who can write.
 - `stockthread run` logs to the terminal (standard error), one line per decision. Lines name posts by their Slack
   timestamp, as in post 1729900000.000100, and never quote the words of a post.
 - `stockthread trail '<link to a message>'` prints what happened to one post: each dry run with every reason it
@@ -71,6 +71,11 @@ Everything else waits for an approver to click Apply. The log line `post ...: pl
 decided and why.
 
 If the token lacks *add* on *Stock Item*, `check-setup` says so, and InvenTree refuses every write.
+
+An InvenTree token expires, by default one year after it was made. It still works on its expiry date. After that
+InvenTree refuses every read and write (HTTP 401, `Token has expired`), and the log says `InvenTree refused the
+token`. `check-setup` warns 30 days before. Make a new token for the connector's user in InvenTree, put it in
+`INVENTREE_TOKEN`, and restart.
 
 `check-setup` warns about two policies that write with nobody able to step in, and one that writes less than it says:
 

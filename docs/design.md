@@ -1053,9 +1053,13 @@ needs.
   it comes with "add". While `writes.enabled` is false, a dry run needs
   only the view permissions: a token without "add" on Stock Item passes
   the check with a note, and "add" is never reported as more than needed.
-  A superuser gets one warning. According
-  to the research, tokens expire after one year by default. Where the API
-  exposes the expiry, the connector reports it at startup.
+  A superuser gets one warning. A token expires one year after it is
+  made unless its admin set another day (`test_char_token_expiry`). The
+  setup check reads the expiry of the token it sends from
+  `GET /api/user/tokens/` (the row marked `in_use`; never
+  `GET /api/user/token/`, which makes a new token) and warns within 30
+  days of it. `run` does not check it: a token past its expiry is refused
+  on every read, which the log shows.
 - **Pack units.** A container unit or a stated pack size is always a
   review reason. v1.0 never converts packs. A human gives the quantity in
   the unit the part is stocked in.
@@ -2115,6 +2119,7 @@ the test suite.
 | `test_char_roles_endpoint_shows_the_minimum_as_the_setup_check_reads_it` | `GET /api/user/roles/` names each role with its permissions, or null for none, as the setup check reads it |
 | `test_char_user_without_part_view_cannot_read_the_catalog` | Without view on Part, `GET /api/part/` answers 403 and the roles say so |
 | `test_char_the_quickstarts_read_only_token_passes_while_writes_are_off` | The quickstart's read-only token shows stock as view only: enough with writes off, not with writes on |
+| `test_char_token_expiry` | `GET /api/user/tokens/` gives a user its own tokens, the one sent marked `in_use`, with the expiry date (a year on by default); `GET /api/user/token/` makes a new token |
 
 Two Slack claims need a capture from a real workspace before the fixtures
 are frozen: a photo with a caption arrives as one message, and the app

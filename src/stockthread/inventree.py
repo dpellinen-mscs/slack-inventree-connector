@@ -16,6 +16,7 @@ import math
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import date
 from types import TracebackType
 from typing import Any
 
@@ -258,6 +259,27 @@ class InvenTreeReader:
         if not isinstance(data, dict):
             raise InvenTreeError("GET /api/user/roles/ did not return an object")
         return data
+
+    async def token_expiry(self) -> date | None:
+        """The day the token this reader sends expires, or None when it never does. Read from `GET
+        /api/user/tokens/`, the user's own tokens, where InvenTree marks the one that authenticated the request
+        `in_use` (`test_char_token_expiry`). Never `GET /api/user/token/`: that creates a new token. Nothing else of
+        the rows is kept: they carry the user's email and the token's masked text."""
+        rows = await self.get("/api/user/tokens/")
+        if not isinstance(rows, list):
+            raise InvenTreeError("GET /api/user/tokens/ did not return a list")
+        in_use = [row for row in rows if isinstance(row, dict) and row.get("in_use") is True]
+        if len(in_use) != 1:
+            raise InvenTreeError(f"GET /api/user/tokens/ marked {len(in_use)} tokens in use, not 1")
+        expiry = in_use[0].get("expiry", "")
+        if expiry is None:  # only an explicit null: a server without the field says nothing about the expiry
+            return None
+        if isinstance(expiry, str):
+            try:
+                return date.fromisoformat(expiry)
+            except ValueError:
+                pass
+        raise InvenTreeError("GET /api/user/tokens/ gave the token in use no valid expiry date")
 
     async def locations(self) -> list[dict[str, Any]]:
         return await self.list_all("/api/stock/location/")
