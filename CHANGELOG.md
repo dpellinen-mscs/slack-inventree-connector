@@ -47,6 +47,9 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Fixed
 
+- Message text is read as typed: Slack sends "&", "<" and ">" as "&amp;", "&lt;" and "&gt;", and the connector
+  passed them on. A reply quoted "R&D kit" as "R&amp;D kit", the rules never saw a typed "->" as an arrow, and the
+  model was given the escaped text. Links and mentions keep Slack's own form.
 - Text sent to an LLM provider now also has Slack webhook URLs, Google API keys, `Bearer` values, labels after an
   underscore (`access_token=`, `DB_PASSWORD=`) and international or space-separated phone numbers masked.
 - The rules now see another person as the actor in more shapes, whatever the model says: names with accents

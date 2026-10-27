@@ -127,6 +127,7 @@ from stockthread.slack.ingest import (
     ingest_event,
     posted_by_app,
     revised_message,
+    typed,
 )
 from stockthread.slack.replies import (
     ANSWER_ACTION,
@@ -2177,7 +2178,7 @@ def _as_changed(stored: NewMessage, changes: Sequence[Decision | None]) -> tuple
             return None
     if deleted:
         return MessageInput(original.ts, "", newest.edited_ts, deleted=True), source
-    return MessageInput(newest.ts, newest.text, newest.edited_ts, newest.file_ids), source
+    return MessageInput(newest.ts, typed(newest.text), newest.edited_ts, newest.file_ids), source
 
 
 def _write_began(plan: PlanRow) -> bool:

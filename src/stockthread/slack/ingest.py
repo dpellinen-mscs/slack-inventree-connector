@@ -155,6 +155,12 @@ def _text(value: Any) -> str:
     return value
 
 
+def typed(text: str) -> str:
+    """Message text as the person typed it. Slack sends "&", "<" and ">" as "&amp;", "&lt;" and "&gt;", and keeps
+    "<" and ">" bare only around its own links and mentions. "&amp;" goes last, so a typed "&gt;" stays as typed."""
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
 def _optional(value: Any) -> str | None:
     return None if value is None else _text(value)
 
