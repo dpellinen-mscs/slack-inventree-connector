@@ -486,7 +486,37 @@ def test_other_actors_in_more_shapes(text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "text", ["I just took 2 Disc 40 from main stock to truck 1", "ok I took 2 Disc 40 from main stock to truck 1"]
+    "text",
+    [
+        "José took 2 Disc 40 from main stock to truck 1",
+        "Zoë grabbed 2 Disc 40 from main stock to truck 1",
+        "Mike removed 2 Disc 40 from main stock to truck 1",
+        "Mike transferred 2 Disc 40 from main stock to truck 1",
+        "Mike has taken 2 Disc 40 from main stock to truck 1",
+        "Mike had already taken 2 Disc 40 from main stock to truck 1",
+        "2 Disc 40 taken by Mike from main stock to truck 1",
+        "2 Disc 40 were moved by <@U1> from main stock to truck 1",
+        "Mike and I took 2 Disc 40 from main stock to truck 1",
+        "me and Mike took 2 Disc 40 from main stock to truck 1",
+        "me & Mike took 2 Disc 40 from main stock to truck 1",
+    ],
+)
+def test_other_actors_beyond_ascii_names_and_the_simple_past(text: str) -> None:
+    """The model may miss these, and a take to a vehicle can apply with no click: the rules must see them (T22)."""
+    assert ReasonCode.ACTOR_NOT_POSTER in codes(take(), text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I just took 2 Disc 40 from main stock to truck 1",
+        "ok I took 2 Disc 40 from main stock to truck 1",
+        "I have taken 2 Disc 40 from main stock to truck 1",
+        "I've removed 2 Disc 40 from main stock to truck 1",
+        "took 2 Disc 40 from main stock to truck 1",
+        "2 Disc 40 taken by me from main stock to truck 1",
+        "transferred 2 Disc 40 from main stock to truck 1",
+    ],
 )
 def test_the_poster_is_not_another_actor(text: str) -> None:
     assert ReasonCode.ACTOR_NOT_POSTER not in codes(take(), text)

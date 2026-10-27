@@ -52,15 +52,21 @@ CORRECTION = re.compile(r"\b(actually|correction|make that|i mean|sorry|wait)\b|
 """A later message or phrase that changes a stated value."""
 _WHEN = r"(?:then|yesterday|today|earlier|this morning|also|so)"
 _ADVERB = r"(?:\s+(?:just|also|already|then|finally))?"
-_SOMEONE = r"(?!(?:i|we)\b)[a-z']+"
+_SOMEONE = r"(?!(?:i|we)\b)(?:[^\W\d_]|')+"
+_DID = (
+    r"(took|taken|grabbed|put|loaded|moved|removed|transferred|returned|brought|used|installed|received|dropped"
+    r"|pulled|picked up|counted)"
+)
 THIRD_PERSON = re.compile(
     rf"(?:(?:^|[.!\n]\s*)(?:(?:fyi|btw|ok|{_WHEN}),?\s+)?(?!(?:just|and|finally|already|{_WHEN})\b)"
-    rf"{_SOMEONE}(?:\s+{_SOMEONE}){{0,2}}?{_ADVERB}|<@\w+(?:\|[^>]*)?>{_ADVERB}|(?<![\w@])@\w+{_ADVERB})"
-    r"\s+(took|grabbed|put|loaded|moved|returned|brought|used|installed|received|dropped|pulled|picked up|counted)\b",
+    rf"(?:{_SOMEONE}\s+(?:and|&)\s+(?:i|me)|(?:i|me)\s+(?:and|&)\s+{_SOMEONE}"
+    rf"|{_SOMEONE}(?:\s+{_SOMEONE}){{0,2}}?){_ADVERB}|<@\w+(?:\|[^>]*)?>{_ADVERB}|(?<![\w@])@\w+{_ADVERB})"
+    rf"\s+{_DID}\b"
+    rf"|\b{_DID}\s+by\s+(?!(?:me|myself)\b)\S",
     re.IGNORECASE,
 )
 """Someone other than the poster did it: "Mike put 2 poe 8 on his truck", "Then Mike Smith just took",
-"<@U04ABC> grabbed", "fyi, the new guy took"."""
+"<@U04ABC> grabbed", "fyi, the new guy took", "José has taken", "Mike and I took", "taken by Mike"."""
 MENTION = re.compile(r"<@\w+(?:\|[^>]*)?>|(?<![\w@])@\w+")
 """A person named by a Slack mention: they may be the one who moved the stock."""
 HEDGE = re.compile(r"\b(i think|maybe|probably|i guess|not sure|might have|might be|or so|ish)\b", re.IGNORECASE)
