@@ -974,7 +974,9 @@ needs.
   marker, the Slack user id and the https link to the message, nothing
   else (`write_notes`). Each body is posted to every pinned version in
   `tests/integration/test_built_requests.py`. The server checks each line
-  alone, not the total it makes: an add that takes an item past 15 digits
+  alone, not the total it makes. An add that takes an item past 15 digits
+  answers 500 and writes nothing on PostgreSQL and on 1.4.3, an outcome the
+  connector cannot tell from a write that ran. On 1.5.6 with SQLite it
   answers 201, and every later read of the item answers 500
   (`test_char_an_add_past_the_stored_digits_breaks_the_item`). The builder
   does not yet refuse such a total (#222).
@@ -2097,7 +2099,7 @@ the test suite.
 | `test_char_error_body_format` | The shape of a 4xx answer from InvenTree, which recovery uses to tell it from a proxy |
 | `test_char_refusals_carry_a_detail_alone` | A 401 (no token, bad token), 403 (no add role) or 405 (wrong method) is JSON with a `detail` string alone and changes nothing |
 | `test_char_quantity_precision_is_refused_not_rounded` | A line with more than 5 decimal places or 10 digits before the point is a 400 on the line, nothing rounded or changed |
-| `test_char_an_add_past_the_stored_digits_breaks_the_item` | Lines are checked alone: an add that takes an item past 15 digits answers 201, then every read of the item answers 500 |
+| `test_char_an_add_past_the_stored_digits_breaks_the_item` | Lines are checked alone: an add that takes an item past 15 digits is a 500 that writes nothing (PostgreSQL, 1.4.3), or a 201 after which every read of the item answers 500 (1.5.6 with SQLite) |
 | `test_char_structural_locations_hold_no_stock` | A transfer into a structural location, whole or partial, is a 400 on `location` that moves nothing |
 | `test_char_history_filter_refuses_a_malformed_id` | A history query filtered by an id that is not a stock item (malformed, negative) is a 400 on `item` |
 | `test_char_web_links_are_served_by_the_ui` | The receipt's `/web/` links answer the web UI's page, as every `/web/` path does, so the routes cannot be confirmed from outside |
