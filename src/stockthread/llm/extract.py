@@ -51,19 +51,23 @@ _SECRETS = re.compile(
     r"\b(?:xox[a-z]|xapp)-[A-Za-z0-9-]{8,}"  # Slack tokens
     r"|\b(?:sk|pk|rk|ghp|gho|ghs|github_pat|glpat|inv)[-_][A-Za-z0-9_-]{16,}"  # API keys by their prefix
     r"|\bAKIA[0-9A-Z]{16}\b"
+    r"|\bAIza[0-9A-Za-z_-]{35}"  # a Google API key
+    r"|(?:https?://)?hooks\.slack\.com/services/\S+"  # a Slack webhook: its path is the secret
     r"|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"  # a JSON web token
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
     r"|(?<=://)[^\s/@:]+:[^\s/@]+(?=@)"  # user:password in a URL
-    r"|\(?\b\d{3}\)?[-. ]\d{3}[-.]\d{4}\b",  # a phone number
+    r"|\(?\b\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b"  # a phone number
+    r"|(?<![\w+])\+\d{1,3}(?:[ .-]?\d){6,14}\b",  # an international one
     re.DOTALL,
 )
 _RANDOM = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9]{32,}(?![A-Za-z0-9])")
 """A long run of letters and digits with no separator. A part number with dashes ("UAP-AC-PRO-5") is not one."""
 _SEPARATOR = r"((?:\s+is(?![\w'\u2019]))?(?:\s+now\b)?\s*[:=]?\s*)"
 _AFTER_A_LABEL = re.compile(
-    r"(?i)\b((?:pass(?:word|code|phrase|wd)|pwd|pw|psk|wpa\d? key|secret|api[ _-]?key|lock ?box(?: code)?"
+    r"(?i)(?<![a-z0-9])((?:pass(?:word|code|phrase|wd)|pwd|pw|psk|wpa\d? key|secret|api[ _-]?key|bearer"
+    r"|lock ?box(?: code)?"
     r"|(?:gate|door|alarm|pin|access)[ _-]?code)\b)" + _SEPARATOR + r"(\S+)"
-    r"|\b((?:token|pin|code|key|login)\b)(\s+is(?![\w'\u2019])(?:\s+now\b)?\s*:?\s*|\s*[:=]\s*)(\S+)"
+    r"|(?<![a-z0-9])((?:token|pin|code|key|login)\b)(\s+is(?![\w'\u2019])(?:\s+now\b)?\s*:?\s*|\s*[:=]\s*)(\S+)"
 )
 """After a label that names a secret, the next word is masked. After a word that often means something else
 ("token", "pin", "code"), only when "is", ":" or "=" comes between."""

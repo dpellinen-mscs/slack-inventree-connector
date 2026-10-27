@@ -40,6 +40,8 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Fixed
 
+- Text sent to an LLM provider now also has Slack webhook URLs, Google API keys, `Bearer` values, labels after an
+  underscore (`access_token=`, `DB_PASSWORD=`) and international or space-separated phone numbers masked.
 - The rules now see another person as the actor in more shapes, whatever the model says: names with accents
   ("José took"), "removed", "transferred", "has taken", "taken by Mike", "Mike and I took" and "me & Mike took".
   Such a take used to apply with no click when the model left out `actor_not_poster`.
