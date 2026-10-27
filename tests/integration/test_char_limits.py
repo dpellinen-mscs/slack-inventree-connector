@@ -7,6 +7,7 @@ When one fails, the design is what changes.
 
 from __future__ import annotations
 
+import os
 import uuid
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -19,6 +20,9 @@ if TYPE_CHECKING:
 # The largest quantity the builder sends, and the smallest step it can express.
 LARGEST = Decimal(10) ** (QUANTITY_DIGITS - QUANTITY_PLACES) - 1
 STEP = Decimal(1).scaleb(-QUANTITY_PLACES)
+DB = os.environ.get("STOCKTHREAD_IT_DB", "sqlite")
+OVERFLOW_STORED_FROM = 530
+"""From this API version, SQLite stores an item total past 15 digits (and then cannot read the item)."""
 
 
 def _add(api: RawApi, pk: int, quantity: Decimal) -> tuple[int, object]:
@@ -49,16 +53,30 @@ def test_char_quantity_precision_is_refused_not_rounded(api: RawApi, scratch: Sc
 
 
 def test_char_an_add_past_the_stored_digits_breaks_the_item(api: RawApi, scratch: Scratch) -> None:
-    """Each line is checked alone, not the total: an add that takes an item past 15 digits answers 201.
+    """Each line is checked alone, not the total: an add that takes an item past 15 digits passes the checks.
 
-    After it, every read of that item answers 500, so the item can no longer be read back or moved. The item
-    lives in a location of its own, so no other test lists it.
+    - SQLite, API 530 (1.5.6): it answers 201, and after it every read of the item answers 500, so the item can no
+      longer be read back or moved.
+    - PostgreSQL (numeric overflow) and SQLite, API 511 (1.4.3): it answers 500 and writes nothing, no history entry
+      either, which the connector cannot tell from a write that ran.
+
+    The item lives in a location of its own, so no other test lists it.
     """
     alone = int(api.create("/api/stock/location/", {"name": f"overflow-{uuid.uuid4().hex[:8]}"})["pk"])
     item = scratch.stock(1, location=alone)
     assert _add(api, item["pk"], STEP)[0] == 201
-    assert _add(api, item["pk"], LARGEST)[0] == 201  # the total, 10000000000.00001, has 16 digits
-    assert api.status(f"/api/stock/{item['pk']}/") == 500
+    history = len(api.get("/api/stock/track/", item=item["pk"]))
+    marker = f"overflow-{uuid.uuid4().hex}"
+    body = {"items": [{"pk": item["pk"], "quantity": str(LARGEST)}], "notes": marker}
+    response = api.post("/api/stock/add/", body)  # the total, 10000000000.00001, has 16 digits
+    if DB == "sqlite" and api.get("/api/")["apiVersion"] >= OVERFLOW_STORED_FROM:
+        assert response.status_code == 201
+        assert api.status(f"/api/stock/{item['pk']}/") == 500
+        return
+    assert response.status_code == 500
+    assert Decimal(str(scratch.item(item["pk"])["quantity"])) == 1 + STEP
+    assert len(api.get("/api/stock/track/", item=item["pk"])) == history
+    assert api.get("/api/stock/track/", search=marker) == []
 
 
 def test_char_structural_locations_hold_no_stock(api: RawApi, scratch: Scratch) -> None:
