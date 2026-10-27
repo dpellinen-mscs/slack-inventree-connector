@@ -335,3 +335,13 @@ def test_naming_is_fast_on_a_large_catalog_and_a_long_post() -> None:
     started = time.monotonic()
     assert locations_named(text, catalog, "U0SAM") == {1999}
     assert time.monotonic() - started < 1.0
+
+
+def test_matching_a_part_is_fast_on_a_large_catalog() -> None:
+    many = tuple(PartRecord(pk, f"IPN-{pk}", f"Widget {pk}", "") for pk in range(1000, 5000))
+    aliases = tuple(Alias(f"gizmo {pk}", pk) for pk in range(1000, 5000))
+    catalog = Catalog(parts=many, locations=LOCATIONS, part_aliases=aliases)
+    started = time.monotonic()
+    assert match_part("gizmo 4999", catalog) == matched(4999, MatchRule.ALIAS)
+    assert part_rivals("gizmo 4999", catalog) == {4999}
+    assert time.monotonic() - started < 1.0
