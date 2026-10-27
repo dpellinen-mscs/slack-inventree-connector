@@ -253,6 +253,10 @@ def test_the_schema_is_in_the_strict_subset_and_names_every_value_of_the_model()
         "0123456789abcdef0123456789abcdef",
         "(555) 010-4477",
         "555-010-4477",
+        "555 010 4477",
+        "+44 20 7946 0000",
+        "https://hooks.slack.com/services/" + "/".join(("T00000000", "B00000000", "a" * 24)),  # built: no literal
+        "AIza" + "a" * 35,
     ],
 )
 def test_strings_that_look_like_credentials_are_masked_before_they_are_sent(secret: str) -> None:
@@ -279,6 +283,11 @@ def test_strings_that_look_like_credentials_are_masked_before_they_are_sent(secr
         ("wifi psk: hunter2, pw=hunter3", f"wifi psk: {MASK} pw={MASK}"),
         ("WPA2 key: hunter2", f"WPA2 key: {MASK}"),
         ("router at https://admin:hunter2@192.168.1.1/setup", f"router at https://{MASK}@192.168.1.1/setup"),
+        ("access_token=hunter2 ok", f"access_token={MASK} ok"),
+        ("DB_PASSWORD=hunter2", f"DB_PASSWORD={MASK}"),
+        ("client_secret: hunter2", f"client_secret: {MASK}"),
+        ("my_api_key hunter2", f"my_api_key {MASK}"),
+        ("Authorization: Bearer abcDEF123ghi", f"Authorization: Bearer {MASK}"),
     ],
 )
 def test_the_word_after_a_secret_label_is_masked(text: str, masked: str) -> None:
@@ -299,6 +308,9 @@ def test_the_word_after_a_secret_label_is_masked(text: str, masked: str) -> None
         "token issued to truck 1",
         "2 pin connectors and 3 key blanks to truck 1",
         "4 login cards in receiving",
+        "2x Disc 60 + 1x S16 PoE switch going on truck 2",
+        "+1 more ONT on truck 1, 3 boxes of 250 ties",
+        "took 12 drops, 2 ONTs and 1 router",
     ],
 )
 def test_ordinary_posts_are_sent_as_written(text: str) -> None:
@@ -306,7 +318,16 @@ def test_ordinary_posts_are_sent_as_written(text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "text", ["a-" * 50_000, "a1" * 50_000, "password " * 20_000, "x:" * 50_000 + "@", "is " * 30_000]
+    "text",
+    [
+        "a-" * 50_000,
+        "a1" * 50_000,
+        "password " * 20_000,
+        "x:" * 50_000 + "@",
+        "is " * 30_000,
+        "+1 " * 30_000,
+        "_" * 100_000,
+    ],
 )
 def test_masking_takes_linear_time(text: str) -> None:
     started = time.monotonic()
