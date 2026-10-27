@@ -39,6 +39,9 @@ and a write whose notes do not fit may change stock without the history entry th
 QUANTITY_PLACES = 5
 """InvenTree stores a stock quantity with 5 decimal places and 15 digits in all."""
 QUANTITY_DIGITS = 15
+QUANTITY_LIMIT = Decimal(10) ** (QUANTITY_DIGITS - QUANTITY_PLACES)
+"""No line may reach it, and no item may hold it: the server checks the line, not the total it makes, and an item
+past it answers 500 to every read (`test_char_an_add_past_the_stored_digits_breaks_the_item`)."""
 
 _USER = re.compile(r"[UW][A-Z0-9]{2,}")
 _LINK = re.compile(r"https://[!-~]+")
@@ -116,7 +119,7 @@ def _check_quantity(quantity: Decimal, *, zero_allowed: bool) -> None:
     exponent = _normal(quantity).as_tuple().exponent
     if isinstance(exponent, int) and exponent < -QUANTITY_PLACES:
         raise ValueError(f"InvenTree would round a quantity with more than {QUANTITY_PLACES} decimal places")
-    if quantity >= Decimal(10) ** (QUANTITY_DIGITS - QUANTITY_PLACES):
+    if quantity >= QUANTITY_LIMIT:
         raise ValueError("the quantity is larger than InvenTree stores")
 
 

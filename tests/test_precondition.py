@@ -142,6 +142,31 @@ def test_an_add_or_a_count_with_a_second_item_there_now_is_stale_unless_a_person
     assert isinstance(check(target, read, chosen={0}), Snapshot)
 
 
+def test_an_add_that_would_take_its_item_past_what_inventree_stores_is_stale() -> None:
+    """The server checks each line alone: a total past 15 digits answers 201 and leaves an item that every read
+    answers 500 for (`test_char_an_add_past_the_stored_digits_breaks_the_item`). A count sets the total to its
+    line, which the builder already holds under the limit, so only an add can get there."""
+    adding = view(MovementType.RECEIVE, lines=(("Disc 40", "9999999999"),), stock=(picked((70, "9999999999")),))
+    assert check(adding, {(1, DESTINATION): [item(70, "1")]}) == Stale(
+        "stock item 70 would hold 10000000000 after the add, more than InvenTree stores"
+    )
+    assert check(adding, {(1, DESTINATION): [item(70, "1")]}, chosen={0}) == Stale(
+        "stock item 70 would hold 10000000000 after the add, more than InvenTree stores"
+    )
+    assert isinstance(check(adding, {(1, DESTINATION): [item(70, "0.99999")]}), Snapshot)
+    halves = view(
+        MovementType.RECEIVE,
+        lines=(("Disc 40", "5000000000"), ("Disc 40", "4999999999")),
+        stock=(picked((70, "5000000000")), picked((70, "4999999999"))),
+        items=(Match(MatchStatus.MATCHED, MatchRule.EXACT, 1),) * 2,
+    )  # two lines of part 1: each alone fits, what they add to item 70 together does not
+    assert check(halves, {(1, DESTINATION): [item(70, "1")]}) == Stale(
+        "stock item 70 would hold 10000000000 after the add, more than InvenTree stores"
+    )
+    counting = view(MovementType.COUNT, lines=(("Disc 40", "9999999999"),), stock=(picked((70, "9999999999")),))
+    assert isinstance(check(counting, {(1, DESTINATION): [item(70, "9999999999")]}), Snapshot)
+
+
 def test_a_serialized_item_is_never_removed_and_moved_whole_only() -> None:
     read = {(1, SOURCE): [item(57, "1", serial="SN-1")], (1, DESTINATION): []}
     assert check(view(MovementType.CONSUME, stock=(picked((57, "1")),), lines=(("ONT", "1"),)), read) == Stale(
