@@ -17,10 +17,12 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
+from urllib.parse import urlsplit
 
 from stockthread.alias_admin import unmatchable
 from stockthread.core.matching import Catalog
 from stockthread.core.model import MovementType
+from stockthread.llm.openai_compatible import is_local
 from stockthread.store import StoredAlias
 
 MINIMUM_ROLES: Mapping[str, frozenset[str]] = {
@@ -108,6 +110,19 @@ def check_roles(body: Mapping[str, Any], *, writes: bool) -> list[Finding]:
     if not found and not later:
         found.append(Finding(Level.OK, "roles: the token's user has the minimum roles and no more"))
     return [*found, *later]
+
+
+def check_transport(url: str) -> Finding:
+    """The token is sent with every request: over plain http it can be read on the way, unless the server is on this
+    machine. Only a warning: a server on a private network the operator trusts may have no certificate."""
+    parts = urlsplit(url)
+    if parts.scheme == "https" or is_local(parts.hostname or ""):
+        return Finding(Level.OK, "inventree: the token is sent over https or stays on this machine")
+    return Finding(
+        Level.WARN,
+        "inventree: the token is sent over plain http to another machine, where anyone on the way can read it; "
+        "use https unless every network in between is yours",
+    )
 
 
 TOKEN_WARN_DAYS = 30

@@ -109,7 +109,7 @@ def check_endpoint(base_url: str, model: str, api_key: SecretStr | None) -> http
         raise ValueError("the provider URL is the base URL, without /chat/completions")
     if url.query or url.fragment or not base_url.isascii() or not base_url.isprintable() or " " in base_url:
         raise ValueError("the provider URL must be http(s)://host[:port][/path], without a query")
-    if url.scheme == "http" and api_key is not None and not _is_local(url.hostname):
+    if url.scheme == "http" and api_key is not None and not is_local(url.hostname):
         raise ValueError("an API key is only sent over https, or to a server on this machine")
     if not model.strip() or not model.isprintable():
         raise ValueError("the model name is empty or not printable")
@@ -155,7 +155,8 @@ def _content(raw: bytes) -> str:
     return content
 
 
-def _is_local(host: str) -> bool:
+def is_local(host: str) -> bool:
+    """`host` is this machine: "localhost" or a loopback address."""
     if host == "localhost":
         return True
     try:

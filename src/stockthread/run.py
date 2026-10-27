@@ -51,6 +51,7 @@ from stockthread.setup_check import (
     check_roles,
     check_sites,
     check_token,
+    check_transport,
     check_vehicles,
     lacks_catalog_view,
 )
@@ -493,6 +494,7 @@ def check_setup(settings: Settings) -> list[Finding]:
             auto_apply=settings.policy.auto_apply,
             sites=settings.locations.sites,
         ),
+        check_transport(settings.inventree.url),
         *asyncio.run(read()),
         *check_posters(posters_seen(settings.storage.database), settings.vehicles),
         *unread,
