@@ -92,7 +92,7 @@ What happens after a restore:
 1. Make a backup (above).
 2. Stop the connector.
 3. Install the new version into the same virtual environment. From an updated checkout:
-   `.venv/bin/pip install .`
+   `.venv/bin/pip install .` (`.venv/bin/stockthread --version` prints the version installed)
 4. Read the new [CHANGELOG](../CHANGELOG.md) entries for settings that changed, then run
    `.venv/bin/stockthread check-config`.
 5. Start the connector. It upgrades the database schema at start, one migration at a time. Each
