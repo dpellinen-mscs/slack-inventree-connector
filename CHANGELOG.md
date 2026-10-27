@@ -14,6 +14,11 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Changed
 
+- A configured `policy.default_source` no longer settles a source the text names in wording the check missed
+  (T19): "from 3rd floor cage", "from 3 boxes in the cage", "from: shelf B", "from (shelf B)", "out the van",
+  "outta", "frm", "src: shelf B", "@ shelf B", "at the yard", and the arrows "=>", "⇒", "⟶", a dash then ">" and a
+  lone ">" between words now mark the source as left out, so the thread asks for it. Typed arrows are read as Slack
+  sends them ("-&gt;"), which also makes a typed "->" count as a destination word again.
 - A take to a site is written with no click only when its destination is under one of the new `locations.sites`
   paths (such as `["Sites"]`). Unset, the default, every take to a site waits for Apply, and `check-setup` warns with
   writes on. A return read as a take to a site no longer puts stock back on a shelf unasked (#199, #210, ADR 0022).

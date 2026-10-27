@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from decimal import Decimal
 from typing import Any
@@ -769,6 +770,14 @@ def test_a_place_cannot_hide_a_multiplier(text: str, source: str) -> None:
     assert "line 1: a unit other than a count" in stocked_details(replace(cable(), source_text=source), text, ("m",))
 
 
+@pytest.mark.parametrize("dashes", ["-", "=", "\u2014", "-="])
+def test_a_long_run_of_dashes_is_read_in_linear_time(dashes: str) -> None:
+    """Slack allows 40,000 characters; an unanchored "[-=]+>" took seconds on a run with no ">" (T19 review)."""
+    started = time.perf_counter()
+    validate(take(source_text=None), dashes * (40_000 // len(dashes)), max_quantity=100)
+    assert time.perf_counter() - started < 1
+
+
 @pytest.mark.parametrize(
     ("text", "left_out"),
     [
@@ -777,7 +786,7 @@ def test_a_place_cannot_hide_a_multiplier(text: str, source: str) -> None:
         ("2 Disc 40 OUT OF main stock to truck 1", True),
         ("grabbed 2 Disc 40 to truck 1", False),
         ("dropped off the 2 Disc 40 at truck 1", False),  # "dropped off" names a destination
-        ("2 Disc 40 from 3 boxes to truck 1", False),  # a number is not a place
+        ("2 Disc 40 from 3 boxes to truck 1", True),  # asked: "from 3 boxes on shelf B" names shelf B
         ("2 Disc 40 to truck 1 for Fromm job", False),  # whole words only
         ("truck 1 → truck 2: 2 Disc 40", True),  # the corpus's arrow form (04-text-multi)
         ("truck 1 -> truck 2: 2 Disc 40", True),
@@ -785,6 +794,41 @@ def test_a_place_cannot_hide_a_multiplier(text: str, source: str) -> None:
         ("grabbed 2 Disc 40 at shelf B, to truck 1", True),  # #201 finding 6
         ("2 Disc 40 at the warehouse onto truck 1", True),
         ("2 Disc 40 to truck 1 at the Smith job", False),  # "at" a job is where stock goes
+        ("took 2 Disc 40 from 3rd floor cage to truck 1", True),  # T19 review: a place may start with a digit
+        ("2 Disc 40 from #3 to truck 1", True),
+        ("2 Disc 40 out of 2nd van to truck 1", True),
+        ("from: shelf B, 2 Disc 40 to truck 1", True),
+        ('2 Disc 40 from "Truck 1" to truck 2', True),
+        ("2 Disc 40 from (shelf B) to truck 1", True),
+        ("2 Disc 40 from\u200bshelf B to truck 1", True),
+        ("2 Disc 40 outta shelf B to truck 1", True),
+        ("2 Disc 40 frm shelf B to truck 1", True),
+        ("source: shelf B, 2 Disc 40 to truck 1", True),
+        ("truck 1 => truck 2: 2 Disc 40", True),
+        ("truck 1 ⇒ truck 2: 2 Disc 40", True),
+        ("truck 1 \u2013> truck 2: 2 Disc 40", True),  # an en dash
+        ("truck 1 ⟶ truck 2: 2 Disc 40", True),
+        ("truck 1 > truck 2: 2 Disc 40", True),
+        ("grabbed 2 Disc 40 at the yard, to truck 1", True),
+        ("took 2 Disc 40 from 3 boxes in the cage to truck 1", True),
+        ("truck 1 -&gt; truck 2: 2 Disc 40", True),  # Slack sends a typed ">" as "&gt;"
+        ("truck 1 =&gt; truck 2: 2 Disc 40", True),
+        ("truck 1 &gt; truck 2: 2 Disc 40", True),
+        ("2 Disc 40 out  of van 3 to truck 1", True),
+        ("2 Disc 40 out-of van 3 to truck 1", True),
+        ("took 2 Disc 40 out the van to truck 1", True),
+        ("src: shelf B, 2 Disc 40 to truck 1", True),
+        ("source shelf B, 2 Disc 40 to truck 1", True),
+        ("grabbed 2 Disc 40 @ shelf B, to truck 1", True),
+        ("grabbed 2 Disc 40 @shelf B, to truck 1", True),
+        ("2 Disc 40 from [shelf B] to truck 1", True),
+        ("2 Disc 40 from `shelf B` to truck 1", True),
+        ("2 Disc 40 from ~shelf B~ to truck 1", True),
+        ("2 Disc 40 from - shelf B to truck 1", True),
+        ("2 Disc 40 from <#C0000001|shelf-b> to truck 1", True),
+        ("> grabbed 2 Disc 40 to truck 1", False),  # a Slack quote
+        ("&gt; grabbed 2 Disc 40 to truck 1", False),
+        ("grabbed 2 Disc 40 to truck 1, 50% off", False),  # "off" names nothing here
     ],
 )
 def test_an_implied_source_says_when_the_text_names_one_the_reading_left_out(text: str, left_out: bool) -> None:

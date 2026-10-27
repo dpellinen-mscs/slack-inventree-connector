@@ -82,17 +82,24 @@ _TYPE_VERBS = {
 }
 """A movement type that changes stock in a way a take cannot needs one of its words in the text."""
 _TAKE_OUTS = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
-_FROM = r"(?<!\w)(from|off|out of)"
-_TO = r"((?<!\w)(to|into|onto|on|in|at|for|up)|→|->)"
+_FROM = r"(?<!\w)(from|frm|off|out\s+of|out-of|out the|outta|outa)"
+_ARROW = r"(?<![-\u2013\u2014=])[-\u2013\u2014=]+(>|&gt;)|[→⇒⟶➔➜➝➞➡⇨]|(?<=\w) (>|&gt;) (?=\w)"
+"""An arrow, typed or a symbol: "->", "=>", a dash then ">", "→", "⇒", "⟶", or a lone ">" between two words. Slack
+sends a typed ">" as "&gt;"."""
+_TO = rf"((?<!\w)(to|into|onto|on|in|at|for|up)|{_ARROW})"
 """Whole words only: "from main shop" must not read as "…in shop"."""
 _NAMES_A_SOURCE = re.compile(
-    rf"(?<!\bdrop )(?<!\bdropped ){_FROM}\s+(?!\d)\w|→|->"
-    r"|(?<!\w)at (the )?(shelf|shelves|bin|rack|warehouse|shop|stockroom|storeroom|storage|cage|receiving)\b",
+    rf"(?<!\bdrop )(?<!\bdropped ){_FROM}[\s\u200b-\u200d\u2060\ufeff:\"'\u201c\u2018(\[<#*_~`…-]+\w"
+    rf"|{_ARROW}|(?<!\w)(source|src)\b"
+    r"|(?<!\w)(at|@) ?(the )?(shelf|shelves|bin|rack|warehouse|shop|stockroom|storeroom|storage|cage|receiving|yard"
+    r"|depot)\b",
     re.IGNORECASE,
 )
-"""Wording that names a source: "from shelf B", "off the van", "out of stock", "truck 1 → truck 2", "grabbed 2 at
-shelf B". "dropped off" names a destination. Any arrow counts, so "2 wall mounts → my truck" is asked for its source
-once. "at" counts only before a storage word: "at the Smith job" is where stock goes."""
+"""Wording that names a source: "from shelf B", "off the van", "out of stock", "from 3rd floor cage", "from: shelf B",
+"truck 1 → truck 2", "source: shelf B", "grabbed 2 at shelf B". "from 3 boxes" counts too, as "from 3 boxes on
+shelf B" names shelf B. "dropped off" names a destination. Any arrow counts, so "2 wall mounts → my truck" is asked
+for its source once. "at" counts only before a storage word: "at the Smith job" is where stock goes, and "at truck 1"
+may be either. A miss lets a default source settle a source the text names (T19), so this errs towards asking."""
 
 
 def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
@@ -629,7 +636,7 @@ _CLAUSE_END = re.compile(r"\n|[.!?;](?=\s|$|[^\W\d])|(?<!\d),|,(?!\d)|[&+]|\b(an
 """Where a clause ends: a message or line, a sentence, a comma that is not in a number, "and", "&", "plus"."""
 _NAMES_A_PLACE = {
     "source": re.compile(rf"{_FROM}\s+\w"),
-    "destination": re.compile(r"(?<!\w)(to|into|onto)\s+\w|(→|->)\s*\w"),
+    "destination": re.compile(rf"(?<!\w)(to|into|onto)\s+\w|({_ARROW})\s*\w"),
 }
 """Words that open a place. Not "on", "in", "at", "for" or "up": "picked up 2", "in the back", "for the Smith job"."""
 _EMOJI = re.compile(r":[\w+-]+:")

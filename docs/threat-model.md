@@ -3,8 +3,8 @@
 It lists what can go wrong, which control answers it, and where the tests
 that prove the control live. The controls themselves are described in
 [`design.md`](design.md) sections 4 to 8. This revision (October 2026)
-checks every row against the code. The security review that closes the
-v1.0 item is still to come (ROADMAP).
+checks every row against the code, and the security review below closed
+the v1.0 item.
 
 Status: **built** means the code exists and has tests on `main`, or in the
 open PR named. **Partly built** says which part is missing. **Open** means
@@ -70,10 +70,31 @@ Slack (workspace, users, bots) ──► connector ──► InvenTree REST API
 | T16 | Undo does more harm than the original write | Undo reverses what the stock history shows the write did, not what the plan said, only if nothing else touched that stock since, through the same protocol (marker, snapshot, one write, read-back). Only the poster or an approver may ask, within `undo.max_age_hours` by the store's clock, after a Slack confirm dialog. Otherwise it refuses, changes nothing, and tells the person who clicked why ("undo it in InvenTree" past the age limit). | Built: `apply.undo_apply`, `inverse.py`, `applier.undo_refusal`; `tests/test_undo_apply.py`, `tests/test_inverse.py`, `tests/test_worker_undo.py` |
 | T17 | Unsafe configuration: writes on with no approvers, broad policy, wrong server | Unknown keys, wrong types and secrets in the file are refused. `check-config` prints the effective settings; `run` logs whether writes are on and where text goes. The API version is checked, and writes stay off outside the tested range: the gate blocks every plan on an untested server. `check-setup` warns when the InvenTree token would go over plain http to another machine (an LLM key over plain http is refused outright). | Built: config (#10), version check (#16) in the gate (#106); `check-setup` warns, with writes on, when `slack.approvers` is empty (the policy still applies clear take-outs) or `policy.auto_apply` goes beyond the take-outs (`setup_check.check_policy`; `tests/test_setup_check.py`) |
 | T18 | The policy applies a write nobody clicked | Only movement types in `policy.auto_apply` (default: the two take-outs), with no review reason, no model reason, no person's answer, every part and place found by the exact, normalized or alias rule, and every vehicle the poster's own or named exactly. A take to a site also needs its destination under `locations.sites` ([ADR 0022](decisions/0022-sites-for-take-to-site.md)). The policy judges a post's first plan once ([ADR 0019](decisions/0019-policy-judges-the-first-plan-once.md)). | Built: `gate._not_automatic`, `applier.approve_by_policy`; `tests/test_gate.py`, `tests/test_worker_approve.py` |
-| T19 | A default source moves stock from the wrong place | `policy.default_source` settles only a source the text does not state. A text that names one ("from", "off", "out of", an arrow) while the reading has none never takes the default, so a model cannot pick the source by leaving it out. | Built (ADR 0020): `core/validate.py` (`DETAIL_SOURCE_LEFT_OUT`), `catalog.assign_default_sources`, `gate.py` (`GateNow.default_sources`); `tests/core/test_validate.py`, `tests/test_gate.py`, `tests/test_worker.py`, `tests/test_gate_model_output.py` (every recorded source left out) |
+| T19 | A default source moves stock from the wrong place | `policy.default_source` settles only a source the text does not state. A text that names one ("from", "off", "out of", "outta", "source:", "at" a storage word, any typed or symbol arrow; punctuation or a digit may follow "from") while the reading has none never takes the default, so a model cannot pick the source by leaving it out. Known gaps: a source with no marker word ("pulled 2 ONTs shelf B to van 3", "van 3 gave me 2"), a typo of "from" that is a word ("form"), and "at" a vehicle, which may be either side. | Built (ADR 0020): `core/validate.py` (`DETAIL_SOURCE_LEFT_OUT`), `catalog.assign_default_sources`, `gate.py` (`GateNow.default_sources`); `tests/core/test_validate.py`, `tests/test_gate.py`, `tests/test_worker.py`, `tests/test_gate_model_output.py` (every recorded source left out) |
 | T20 | An alias makes a wrong match authorize writes with no click | An alias is learned only from a plan an approver confirmed and InvenTree read back as written ([ADR 0012](decisions/0012-first-confirmation-becomes-alias.md)), and a later rival makes it ask again. Edits and undos forget what a plan taught. Policy approvals, dry runs and model text teach nothing. An alias whose record cannot hold stock is ignored and reported. Admins list, export and remove aliases. An alias an admin types (`aliases add`) is shown with its record and every rival before `--yes` stores it. The audit log keeps each alias's record also after it is removed. | Built: `learning.py`, `Store.learn_alias`; `tests/test_worker_learn.py`, `tests/store/test_aliases.py`, `tests/test_learning.py`. `aliases add` (ADR 0021) and `aliases history`: `__main__.py`, `Store.add_alias`, `Store.alias_events`; `tests/store/test_aliases.py` |
 | T21 | A click on an old Apply button writes a plan nobody saw | The Apply button has a Slack confirm dialog. It counts only on the reply of the plan it shows, only while later dry runs are unchanged and the plan hash matches, and only if the reply showed every line. It is taken down once a decision is made, the plan expires, or a write begins. | Built: `Worker._handle_apply`, `slack/replies.py`; `tests/test_worker_apply_click.py` |
 | T22 | Someone acts for another person, or a post is acted on long after it was made | A post that names someone else as the actor, or mentions a person, needs an approver (`ACTOR_NOT_POSTER`), whatever the model says: the rules see any name in any alphabet before a verb, "has taken", "taken by Mike" and "Mike and I". A name the rules cannot tell from other words ("Mike's van got 2") still rests on the model's flag. A post found by catch-up after downtime is marked late and needs an approver. Plans expire after `slack.plan_expiry_hours`. | Built: `core/validate.py`, `slack/catchup.py`; `tests/core/test_validate.py`, `tests/test_slack_catchup.py`, `tests/test_worker.py` |
+
+## Security review (October 2026)
+
+Every row was traced against the code by reviewers with no prior context,
+in four passes on 2026-10-27. What they found and what changed:
+
+- T1: a timestamp header that is not a number gave a 500 with the header
+  in the log (#232).
+- T22 (major): actor wordings the rules missed, such as "José took" and
+  "taken by Mike" (#234).
+- T17: a warning for a token sent over plain http to another host (#235).
+- T11: more credential shapes masked before text goes to a provider (#236).
+- T6: a rival vehicle (#231), job or site (#237) in a mixed movement.
+- T19 (major): source wordings the check missed, typed arrows as Slack
+  sends them, and a slow pattern on long input (#238).
+- T2, T3, T4, T5, T7, T8, T9, T10, T12 to T16, T18, T20, T21: no finding.
+  T2 accepts a user's message with no `user_team` or `team` field. The
+  reviewers found no Slack delivery from a person without one, so this
+  is noted, not changed, until a recorded event shows otherwise.
+
+The known gaps left are named in rows T6, T19 and T22.
 
 ## Out of scope
 
