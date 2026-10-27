@@ -978,8 +978,11 @@ needs.
   answers 500 and writes nothing on PostgreSQL and on 1.4.3, an outcome the
   connector cannot tell from a write that ran. On 1.5.6 with SQLite it
   answers 201, and every later read of the item answers 500
-  (`test_char_an_add_past_the_stored_digits_breaks_the_item`). The builder
-  does not yet refuse such a total (#222).
+  (`test_char_an_add_past_the_stored_digits_breaks_the_item`). So the
+  precondition (section 7) holds an add back, and the post goes to
+  review, when the item it reads right before the write would reach
+  `QUANTITY_LIMIT` (10^10). A count needs no such check: it sets the
+  total to its line.
 - **A plan's requests** (built: `plan.py`, nothing calls it yet). A
   decided plan becomes one request per movement, in the post's order, each
   with its own apply marker. The lines of a movement that take from one

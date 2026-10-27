@@ -15,7 +15,8 @@ The plan holds when every stock item a line names is still where the plan found 
   them; a line that names none and takes serialized items still takes every available serialized item of the pair.
   Whatever a line takes, and whoever chose it, the pair is not mixed serialized and unserialized now
   (`core.resolve.pick_source`, `core.resolve._chosen`);
-- for an add or a count: the item is still the one target of the pair, not serialized (`core.resolve.target_item`).
+- for an add or a count: the item is still the one target of the pair, not serialized (`core.resolve.target_item`),
+  and an add leaves it under `QUANTITY_LIMIT`: the server checks the line, not the total it makes.
 
 A line a person named the stock items for (`chosen`, design section 4, "The stock question") keeps the person's
 choice: its items must still be there and fit as above, but it is not held to the rules a pick without a person
@@ -36,7 +37,7 @@ from typing import Any
 from stockthread.core.model import Match, Operation, operation_for
 from stockthread.core.resolve import StockItem, target_item
 from stockthread.core.validate import counts_pieces, in_stocking_unit
-from stockthread.core.write_request import WriteRequest, _decimal
+from stockthread.core.write_request import QUANTITY_LIMIT, WriteRequest, _decimal
 from stockthread.slack.replies import MovementView
 
 Pair = tuple[int, int]
@@ -177,6 +178,9 @@ def check(
                 return Stale(f"stock item {pk} is serialized now, and is moved whole or not at all")
         elif item.serial:
             return Stale(f"stock item {pk} is serialized now")
+        elif operation is Operation.ADD and item.quantity + quantity >= QUANTITY_LIMIT:
+            total = _decimal(item.quantity + quantity)
+            return Stale(f"stock item {pk} would hold {total} after the add, more than InvenTree stores")
     if not held.keys() <= history.keys():
         raise ValueError("the history of a stock item the request names was not read")
     return Snapshot(
