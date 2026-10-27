@@ -965,13 +965,19 @@ needs.
   `items` (one `{pk, quantity}` per stock item the pick took, quantities as
   decimal strings, `merge: false` on every transfer line), `notes`, and a
   `location` for a transfer only. The builder refuses rather than repairs:
-  no item twice, a quantity InvenTree would round (more than 5 decimal
-  places) or cannot store, zero except for a count, a transfer without a
+  no item twice, a quantity InvenTree refuses (more than 5 decimal places
+  or 10 digits before the point: a 400 on the line, nothing rounded,
+  `test_char_quantity_precision_is_refused_not_rounded`), zero except for
+  a count, a transfer without a
   destination or another operation with one, a malformed user id or
   link, or notes that would reach 200 characters. The notes are the
   marker, the Slack user id and the https link to the message, nothing
   else (`write_notes`). Each body is posted to every pinned version in
-  `tests/integration/test_built_requests.py`.
+  `tests/integration/test_built_requests.py`. The server checks each line
+  alone, not the total it makes: an add that takes an item past 15 digits
+  answers 201, and every later read of the item answers 500
+  (`test_char_an_add_past_the_stored_digits_breaks_the_item`). The builder
+  does not yet refuse such a total (#222).
 - **A plan's requests** (built: `plan.py`, nothing calls it yet). A
   decided plan becomes one request per movement, in the post's order, each
   with its own apply marker. The lines of a movement that take from one
@@ -1009,7 +1015,7 @@ needs.
   empty list.
   The authority for "the item is gone" is `GET /api/stock/<pk>/`
   answering 404. The 400 only corroborates it, because a malformed id
-  gets a 400 too. Markers are looked up by search, never through the
+  gets a 400 too (`test_char_history_filter_refuses_a_malformed_id`). Markers are looked up by search, never through the
   item filter alone.
 - **Serialized stock** always has quantity 1 per stock item, so "2 units"
   means two stock items. The research found that add and remove on a
@@ -1028,7 +1034,8 @@ needs.
   `stockthread check-setup`. It names the users who have posted, read as
   ids from the local database, since listing a channel's members would
   need another Slack scope). Structural locations
-  cannot hold stock and are never a match.
+  cannot hold stock (a transfer into one is a 400 on `location`,
+  `test_char_structural_locations_hold_no_stock`) and are never a match.
 - **Least privilege.** InvenTree tokens carry the full permissions of
   their user, so the docs describe a dedicated user with the smallest set
   of roles that allows stock adjustments: view on Part and Stock Location,
@@ -1499,6 +1506,9 @@ connector never has two InvenTree writes in flight and cannot race itself.
    for every movement of the plan, its state, what it was to change, links
    to its locations and stock items in InvenTree's web interface
    (`/web/stock/location/<pk>`, `/web/stock/item/<pk>`), and its marker.
+   The web UI routes in the browser, so the server answers its page for
+   every path under `/web/`, and no test can confirm these two routes
+   from outside (`test_char_web_links_are_served_by_the_ui`).
    It claims no more than every path to a state guarantees: a
    `verify_failed` request may have been found by the marker check with
    nothing sent, and a `failed` one concluded by recovery may still land
@@ -1644,7 +1654,8 @@ detected, and it also cannot corrupt the connector's movement.
 An outcome is **known** only when InvenTree itself answered: a 201 whose
 JSON body repeats the request's notes, or a 4xx with a JSON body in
 InvenTree's error format (a 400 naming only the endpoint's fields, or a
-`detail` alone on 401, 403, 404 or 405). Any other 2xx or 4xx (a cut-off
+`detail` alone on 401, 403, 404 or 405, `test_char_error_body_format` and
+`test_char_refusals_carry_a_detail_alone`). Any other 2xx or 4xx (a cut-off
 body, a proxy's or a gateway's answer) is unknown too: recovery then
 finds the marker if the write ran. A known 4xx
 moves the request to `failed`. Everything else is **unknown**: timeouts,
@@ -2084,6 +2095,12 @@ the test suite.
 | `test_char_transfer_merge_setting_on` | The server-wide merge setting does not merge a line that omits `merge` or sends `false`; only `merge: true` merges (1.5.6) |
 | `test_char_stock_list_cascade_false` | A stock list with `cascade=false` leaves out sub-locations |
 | `test_char_error_body_format` | The shape of a 4xx answer from InvenTree, which recovery uses to tell it from a proxy |
+| `test_char_refusals_carry_a_detail_alone` | A 401 (no token, bad token), 403 (no add role) or 405 (wrong method) is JSON with a `detail` string alone and changes nothing |
+| `test_char_quantity_precision_is_refused_not_rounded` | A line with more than 5 decimal places or 10 digits before the point is a 400 on the line, nothing rounded or changed |
+| `test_char_an_add_past_the_stored_digits_breaks_the_item` | Lines are checked alone: an add that takes an item past 15 digits answers 201, then every read of the item answers 500 |
+| `test_char_structural_locations_hold_no_stock` | A transfer into a structural location, whole or partial, is a 400 on `location` that moves nothing |
+| `test_char_history_filter_refuses_a_malformed_id` | A history query filtered by an id that is not a stock item (malformed, negative) is a 400 on `item` |
+| `test_char_web_links_are_served_by_the_ui` | The receipt's `/web/` links answer the web UI's page, as every `/web/` path does, so the routes cannot be confirmed from outside |
 | `test_char_history_deltas` | Each request the connector builds writes the history entries the read-back expects, and the totals add up |
 | `test_char_a_write_that_empties_an_item` | A remove of all an item holds, or a count to 0: with delete on deplete, the entry has no item and below API 530 the marker search misses it; without, the item holds 0 with its entry |
 | `test_char_a_later_split_does_not_copy_the_marked_entry` | A split of a marked item after the write leaves the marker on the item it was written to only |
