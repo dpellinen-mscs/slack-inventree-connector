@@ -27,10 +27,10 @@ from stockthread import run as run_module
 from stockthread.config import Settings, parse_settings
 from stockthread.core.model import Extraction, Match, MatchRule, MatchStatus, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
+from stockthread.dry_run import dry_run_record
 from stockthread.plan_record import plan_of
 from stockthread.run import run
 from stockthread.store import DryRunOutcome, NewPlan, Store
-from stockthread.worker import _record
 
 if TYPE_CHECKING:
     from conftest import Catalog, RawApi, Scratch
@@ -135,7 +135,7 @@ def approved_earlier(store: Store, scratch: Scratch) -> RequestKey:
         source=Match(MatchStatus.MATCHED, MatchRule.EXACT, scratch.parent),
         destination=Match(MatchStatus.MATCHED, MatchRule.EXACT, scratch.other),
     )
-    stored = _record(Extraction("rules", (movement.movement,)), [movement], late=False, poster=SAM, messages=(),
+    stored = dry_run_record(Extraction("rules", (movement.movement,)), [movement], late=False, poster=SAM, messages=(),
                      max_quantity=500)  # fmt: skip
     result: dict[str, Any] = json.loads(json.dumps(stored))
     made = plan_of(result)

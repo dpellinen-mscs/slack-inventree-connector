@@ -49,7 +49,6 @@ given up on, not withheld) before the call has ended.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -71,19 +70,15 @@ from stockthread.core import extract_rules
 from stockthread.core.answers import Effects, Given, Typed, replay
 from stockthread.core.grouping import seconds
 from stockthread.core.marker import is_marker_id
-from stockthread.core.matching import Catalog, locations_named, match_location, match_part
+from stockthread.core.matching import Catalog, locations_named, match_part
 from stockthread.core.model import (
     CandidateMovement,
     Extraction,
-    Flag,
     LineItem,
     Match,
-    MatchRule,
     MatchStatus,
     MessageInput,
-    MovementType,
     Operation,
-    PostFlag,
     PostKey,
     ReasonCode,
     ReasonSource,
@@ -104,19 +99,17 @@ from stockthread.core.requests import UNDOABLE, RequestState
 from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
 from stockthread.core.validate import (
-    DETAIL_MIXED,
     DETAIL_OTHER_AUTHOR,
-    DETAIL_PLACE_NAMED,
-    DETAIL_SOURCE_LEFT_OUT,
-    clauses_drawn_on,
     in_stocking_unit,
     photo_not_read,
     validate,
 )
+from stockthread.dry_run import dry_run_record, kept_reading, reading_digest, same_reading, standing_row
 from stockthread.gate import Judgement
 from stockthread.inventree import InvenTreeError
 from stockthread.learning import lessons
 from stockthread.llm.extract import NoReading, ProviderError
+from stockthread.places import by_default, default_source, is_default, located, place_left_out, rival_named
 from stockthread.plan_record import NotRebuilt, plan_hash, plan_of
 from stockthread.slack.catchup import is_catch_up
 from stockthread.slack.ingest import (
@@ -142,7 +135,6 @@ from stockthread.slack.replies import (
     apply_closed,
     click_feedback,
     dry_run_reply,
-    gate_reasons,
     question_closed,
     question_message,
     receipt,
@@ -1399,7 +1391,7 @@ class Worker:
             try:
                 # Only answers are new: the post reads as it did, so the reading that stands is kept rather than
                 # asked for again (a model may read the same words otherwise, and the answers would no longer fit).
-                kept = _kept_reading(history, seen, changes)
+                kept = kept_reading(history, seen, changes)
                 extraction, unheard = (kept, "") if kept is not None else self._extract(key, messages, now, ask)
             except LockLost:
                 raise
@@ -1416,7 +1408,7 @@ class Worker:
                 messages: Sequence[MessageInput] = messages,
                 unheard: str = unheard,
             ) -> dict[str, Any]:
-                return _record(
+                return dry_run_record(
                     extraction,
                     views,
                     late=late,
@@ -1450,8 +1442,8 @@ class Worker:
                 self.beat()  # a catalog read can take a while
             try:
                 views = self._views(extraction, messages, poster, catalog, late, others)
-                reading = _digest(record(views, late))
-                if answering and reading != _row(history)[0]:
+                reading = reading_digest(record(views, late))
+                if answering and reading != standing_row(history)[0]:
                     continue  # the post reads otherwise: answers start over
                 effects = self._replay(key, history, reading, answers, views, answering, catalog, poster)
                 if candidate and candidate[0].id in answering:
@@ -1514,7 +1506,7 @@ class Worker:
                 )
         except Exception as error:
             _log_failure("question", key.ts, error)
-        if standing is not None and _same_reading(standing, decided):
+        if standing is not None and same_reading(standing, decided):
             log.info("post %s: revision %d reads as the reply that stands", key.ts, post.revision)
             self._finish(
                 key,
@@ -1578,7 +1570,7 @@ class Worker:
         for found in reversed(history):
             if found.outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or not found.result:
                 break
-            if _digest(found.result) != reading:
+            if reading_digest(found.result) != reading:
                 break
             same.add(found.revision)
         shape = [len(view.movement.line_items) for view in views]
@@ -1627,7 +1619,7 @@ class Worker:
         that read the post the same way), by question. A message edited since it was judged is not one: it is a
         thread message from then on, read with the post. A deleted one stays out of the reading, and its question
         is asked again."""
-        row = _row(history)[1]
+        row = standing_row(history)[1]
         if not row:
             return {}
         by_ts = {message.ts: message for message in messages}
@@ -1763,21 +1755,21 @@ class Worker:
                 )
             if n in effects.types or n in effects.retyped or stocking != _stocking(view.items, catalog):
                 reasons = self._reasons(movement, extraction, messages, late, others, stocking)
-                reasons = _place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
+                reasons = place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
                 # Unreachable with a rival pending today: its confirm is a reading question, asked before any
                 # whose answer recomputes, and a reading that changes starts the answers over. Kept so that a
                 # recompute reads the post as the first pass did.
                 picked = (effects.places.get((n, "source")), effects.places.get((n, "destination")))
-                reasons = _rival_named(movement, picked, _post_text(messages), catalog, poster, reasons)
+                reasons = rival_named(movement, picked, _post_text(messages), catalog, poster, reasons)
             source = effects.places.get((n, "source"))
             if source is None:
                 # A picked type takes its own default source, or none.
                 source = (
-                    _default_source(movement, catalog, reasons)
-                    if _is_default(view.source) or (n in effects.types and view.source is None)
+                    default_source(movement, catalog, reasons)
+                    if is_default(view.source) or (n in effects.types and view.source is None)
                     else view.source
                 )
-            reasons = _by_default(reasons, source)
+            reasons = by_default(reasons, source)
             found.append(
                 MovementView(
                     movement=movement,
@@ -1980,16 +1972,16 @@ class Worker:
             items = [_part(item.item_text, catalog, poster) for item in movement.line_items]
             stocking = _stocking(items, catalog)
             reasons = self._reasons(movement, extraction, messages, late, others, stocking)
-            reasons = _place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
-            reasons = _rival_named(movement, (), _post_text(messages), catalog, poster, reasons)
-            source = _location(movement.source_text, catalog, poster) or _default_source(movement, catalog, reasons)
-            reasons = _by_default(reasons, source)
+            reasons = place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
+            reasons = rival_named(movement, (), _post_text(messages), catalog, poster, reasons)
+            source = located(movement.source_text, catalog, poster) or default_source(movement, catalog, reasons)
+            reasons = by_default(reasons, source)
             views.append(
                 MovementView(
                     movement=movement,
                     items=items,
                     source=source,
-                    destination=_location(movement.destination_text, catalog, poster),
+                    destination=located(movement.destination_text, catalog, poster),
                     reasons=reasons,
                     units=_own_units(movement, stocking),
                 )
@@ -2211,22 +2203,6 @@ def _closed_already(blocks: Sequence[Any], closing: Mapping[str, Any]) -> bool:
     return isinstance(first, Mapping) and first.get("text") == closing["elements"][0]["text"]
 
 
-def _row(history: Sequence[DryRunRecord]) -> tuple[str | None, set[int]]:
-    """The reading that stands and the revisions of the newest dry runs in a row that read the post that way; None
-    and no revisions when the newest record kept no reading (a notice, a silent or failed one, an expired record)."""
-    reading: str | None = None
-    row: set[int] = set()
-    for found in reversed(history):
-        if found.outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED) or not found.result:
-            break
-        digest = _digest(found.result)
-        if reading is not None and digest != reading:
-            break
-        reading = digest
-        row.add(found.revision)
-    return reading, row
-
-
 def _typed_line(effects: Effects, movement: int, line: int, item: LineItem) -> LineItem:
     """A line item with the quantity and serials typed for it in the thread. A quantity typed for a pack-unit
     question counts pieces: the line's unit is the piece and its pack size is dropped. A line the post named no item
@@ -2265,109 +2241,8 @@ def _own_units(movement: CandidateMovement, stocking: Sequence[str | None]) -> t
     return units if any(unit is not None for unit in units) else ()
 
 
-def _location(text: str | None, catalog: Catalog, poster: str) -> Match | None:
-    return match_location(text, catalog, poster) if text else None
-
-
-def _is_default(match: Match | None) -> bool:
-    return match is not None and match.rule is MatchRule.DEFAULT
-
-
-def _by_default(reasons: Sequence[ReviewReason], source: Match | None) -> tuple[ReviewReason, ...]:
-    """The reasons without the implied source, by rule or by the model, when the source is the movement type's
-    default: the admin's policy says where an unstated source is (design section 6, "Implied source")."""
-    if not _is_default(source):
-        return tuple(reasons)
-    return tuple(reason for reason in reasons if reason.code is not ReasonCode.IMPLIED_SOURCE)
-
-
-_NAMED = (DETAIL_SOURCE_LEFT_OUT, DETAIL_PLACE_NAMED)
-"""The implied-source details of a text that names a source: no default settles them."""
-
-
-_SURE = (MatchRule.EXACT, MatchRule.NORMALIZED, MatchRule.ALIAS)
-"""The rules whose single match accounts for a named place (`_place_left_out`); the whole-word and fuzzy rules guess."""
-
-
 def _post_text(messages: Sequence[MessageInput]) -> str:
     return "\n".join(message.text for message in messages if not message.deleted)
-
-
-def _place_left_out(
-    movement: CandidateMovement,
-    readings: Sequence[CandidateMovement],
-    named: Callable[[], frozenset[int]],
-    catalog: Catalog,
-    poster: str,
-    reasons: Sequence[ReviewReason],
-) -> tuple[ReviewReason, ...]:
-    """The reasons, with the rule's implied source for a text with no "from" word marked `DETAIL_PLACE_NAMED` when
-    the text names (`named`: the post's `locations_named`, read once per post) a stock location that is neither a
-    destination of the post's movements (`readings`; matched by name or alias: "the shelf" may be any shelf) nor the
-    movement type's default source: "pulled 2 ONTs shelf B to van 3" states shelf B as the source (T19), so the
-    default must not settle it."""
-    unstated = ReviewReason(ReasonCode.IMPLIED_SOURCE, ReasonSource.RULE)
-    default = catalog.default_sources.get(movement.movement_type)
-    if movement.source_text is not None or default is None or unstated not in reasons:
-        return tuple(reasons)  # with no default the source is asked for anyway
-    sides = {default}
-    for read in readings:  # a destination of the post's movements, found for sure, is accounted for
-        destination = _location(read.destination_text, catalog, poster)
-        if destination is not None and destination.rule in _SURE and destination.record is not None:
-            sides.add(destination.record)
-    if not named() - sides:
-        return tuple(reasons)
-    marked = replace(unstated, detail=DETAIL_PLACE_NAMED)
-    return tuple(marked if reason == unstated else reason for reason in reasons)
-
-
-def _rival_named(
-    movement: CandidateMovement,
-    picked: Sequence[Match | None],
-    text: str,
-    catalog: Catalog,
-    poster: str,
-    reasons: Sequence[ReviewReason],
-) -> tuple[ReviewReason, ...]:
-    """The reasons, with `validate.DETAIL_MIXED` added when a clause the movement draws on from another
-    (`validate.clauses_drawn_on`) names a stock location that is not one of its places: "took 2 ONTs to van 3,
-    Riverside Apartments got 4 drops" read as 6 items to van 3. The rules know vehicles, jobs and sites by their
-    words; a place named by neither ("Riverside Apartments") only the catalog knows (T6). Its places are its source
-    and destination as read or `picked` by a person (source first), and its type's default source when it states
-    none and none was picked. Unlike in `_place_left_out`, a
-    destination of the post's other movements is no place of its own: a model could add a movement to Riverside
-    Apartments to hide the rival."""
-    mixed = ReviewReason(ReasonCode.MOVEMENT_UNCLEAR, ReasonSource.RULE, DETAIL_MIXED)
-    if mixed in reasons:
-        return tuple(reasons)
-    drawn_on = clauses_drawn_on(movement, text)
-    if not drawn_on:
-        return tuple(reasons)
-    places = [
-        *picked,
-        _location(movement.source_text, catalog, poster),
-        _location(movement.destination_text, catalog, poster),
-    ]
-    mine = {place.record for place in places if place is not None and place.record is not None}
-    default = catalog.default_sources.get(movement.movement_type)
-    if default is not None and movement.source_text is None and (not picked or picked[0] is None):
-        mine.add(default)  # only a movement that takes its source from the default: "from shelf B" does not
-    # One search over all of them: each reads the whole catalog. A line break ends a name as a comma does.
-    if not locations_named("\n".join(drawn_on), catalog, poster) - mine:
-        return tuple(reasons)
-    return (*reasons, mixed)
-
-
-def _default_source(movement: CandidateMovement, catalog: Catalog, reasons: Sequence[ReviewReason]) -> Match | None:
-    """The movement type's `policy.default_source`, for a movement that states no source; else None. A text that
-    names a source the reading left out ("from shelf B") gets none: the default is for an unstated source, and a
-    model must not move stock from it by leaving the stated one out (`validate.DETAIL_SOURCE_LEFT_OUT`), nor from it
-    when the text names another stock location (`_place_left_out`)."""
-    if movement.source_text is not None or movement.movement_type not in catalog.default_sources:
-        return None
-    if any(reason.code is ReasonCode.IMPLIED_SOURCE and reason.detail in _NAMED for reason in reasons):
-        return None
-    return Match(MatchStatus.MATCHED, MatchRule.DEFAULT, catalog.default_sources[movement.movement_type])
 
 
 def _stock_lines(view: MovementView) -> list[tuple[int, Operation, int, int, Decimal]]:
@@ -2435,91 +2310,6 @@ def _with_stock(
     ]
 
 
-def _picked(pick: SourcePick) -> list[dict[str, Any]]:
-    return [{"item": take.item, "quantity": _number(take.quantity)} for take in pick.takes]
-
-
-def _match(match: Match | None) -> dict[str, Any] | None:
-    if match is None:
-        return None
-    return {
-        "status": match.status.value,
-        "rule": None if match.rule is None else match.rule.value,
-        "record": match.record,
-        "candidates": list(match.candidates),
-    }
-
-
-def _number(value: Decimal | None) -> str | None:
-    return None if value is None else format(value, "f")
-
-
-def _record(
-    extraction: Extraction,
-    views: Sequence[MovementView],
-    *,
-    late: bool,
-    poster: str,
-    messages: Sequence[MessageInput],
-    max_quantity: int,
-    llm_unavailable: bool = False,
-    llm_no_reading: bool = False,
-) -> dict[str, Any]:
-    """What the dry run decided, for the audit trail: candidates as extracted, matches (InvenTree ids and the
-    rule), and every reason that kept a movement from "could apply". It quotes the post: stored, never logged."""
-    return {
-        "declined": extraction.declined,
-        "llm_unavailable": llm_unavailable,  # declined by rule, and the model was never heard
-        "llm_no_reading": llm_no_reading,  # declined by rule, and the model refused or did not finish
-        "post_flags": sorted(flag.value for flag in extraction.post_flags),
-        "late": late,
-        "poster": poster,  # personal aliases match by poster
-        "messages": [message.ts for message in messages],
-        "max_quantity": max_quantity,
-        "movements": [
-            {
-                "type": view.movement.movement_type.value,
-                "flags": sorted(flag.value for flag in view.movement.flags),
-                "source_text": view.movement.source_text,
-                "source": _match(view.source),
-                "destination_text": view.movement.destination_text,
-                "destination": _match(view.destination),
-                **{f"{side}_named": view.named[side] for side in ("source", "destination") if side in view.named},
-                "items": [
-                    {
-                        "item_text": item.item_text,
-                        "quantity": _number(item.quantity),
-                        "unit": item.unit,
-                        "pack_size": _number(item.pack_size),
-                        "serials": list(item.serials),
-                        "part": _match(part),
-                        **({"named": view.named[line]} if line in view.named else {}),
-                        # Only once stock was read: a record without it digests as records did before.
-                        **({"stock": None if pick is None else _picked(pick)} if view.stock else {}),
-                        # Only for a length in its part's own unit (`MovementView.units`), likewise.
-                        **({"part_units": units} if units is not None else {}),
-                    }
-                    for line, (item, part, pick, units) in enumerate(
-                        zip(
-                            view.movement.line_items,
-                            view.items,
-                            view.stock or [None] * len(view.items),
-                            view.units or [None] * len(view.items),
-                            strict=True,
-                        )
-                    )
-                ],
-                "reasons": [
-                    {"code": reason.code.value, "source": reason.source.value, "detail": reason.detail}
-                    for reason in view.reasons
-                ],
-                "gate": sorted([code.value, detail] for code, detail in gate_reasons(view)),
-            }
-            for view in views
-        ],
-    }
-
-
 def _plan(key: PostKey, result: Mapping[str, Any]) -> NewPlan | None:
     """The plan a reply showing the record `result` makes (ADR 0016), or None. Worked out before anything is posted:
     whatever goes wrong here makes no plan, and never keeps a reply that was sent from being recorded."""
@@ -2529,83 +2319,6 @@ def _plan(key: PostKey, result: Mapping[str, Any]) -> NewPlan | None:
         _log_failure("plan", key.ts, error)
         return None
     return None if made is None else NewPlan(*made)
-
-
-def _reading(result: Mapping[str, Any]) -> Any:
-    """The movements, matches and reasons a record decided. Lateness is left out: it depends on when the post was
-    read, not on what the thread says."""
-    movements = json.loads(json.dumps(result.get("movements")))
-    for movement in movements or ():
-        movement["reasons"] = [r for r in movement["reasons"] if r["code"] != ReasonCode.LATE_INGEST.value]
-        movement["gate"] = [g for g in movement["gate"] if g[0] != ReasonCode.LATE_INGEST.value]
-    return movements
-
-
-def _digest(result: Mapping[str, Any]) -> str:
-    """What a record read, before any answer: its `reading`, or for a record without one (none applied an answer
-    then) the digest of its movements."""
-    stored = result.get("reading")
-    if isinstance(stored, str):
-        return stored
-    canonical = json.dumps(_reading(result), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _same_reading(standing: Mapping[str, Any], decided: Mapping[str, Any]) -> bool:
-    """Whether a revision decided the same movements, matches and reasons as the reply that stands, with the same
-    answers. A new answer always posts a reply, even one that changes nothing: it asks the next question."""
-
-    def answered(result: Mapping[str, Any]) -> tuple[Any, ...]:
-        return (result.get("answers") or [], result.get("ignored") or [], result.get("rejected"))
-
-    return bool(standing) and _reading(standing) == _reading(decided) and answered(standing) == answered(decided)
-
-
-def _kept_reading(history: Sequence[DryRunRecord], read: Sequence[str], changes: int) -> Extraction | None:
-    """The extraction of the newest dry run, when it read the same messages with the same changes as now: only
-    answers are new. None otherwise, or when it kept no reading (a notice, a silent or failed one, an expired
-    record)."""
-    if not history:
-        return None
-    last = history[-1]
-    result = last.result
-    if (
-        last.outcome not in (DryRunOutcome.REPLIED, DryRunOutcome.UNCHANGED)
-        or not result
-        or not last.extractor
-        or last.changes_through != changes
-        or result.get("messages") != list(read)
-        or not result.get("movements")
-    ):
-        return None
-    extracted = result.get("extracted") or [movement["type"] for movement in result["movements"]]
-    return Extraction(
-        last.extractor,
-        tuple(
-            CandidateMovement(
-                MovementType(kind),
-                tuple(
-                    LineItem(
-                        item["item_text"],
-                        _decimal(item["quantity"]),
-                        item["unit"],
-                        _decimal(item["pack_size"]),
-                        tuple(item["serials"]),
-                    )
-                    for item in movement["items"]
-                ),
-                movement["source_text"],
-                movement["destination_text"],
-                frozenset(Flag(flag) for flag in movement["flags"]),
-            )
-            for kind, movement in zip(extracted, result["movements"], strict=True)
-        ),
-        frozenset(PostFlag(flag) for flag in result["post_flags"]),
-    )
-
-
-def _decimal(value: str | None) -> Decimal | None:
-    return None if value is None else Decimal(value)
 
 
 def _retry_after(error: Exception) -> int:

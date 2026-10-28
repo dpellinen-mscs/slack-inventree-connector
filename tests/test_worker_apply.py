@@ -30,6 +30,7 @@ from stockthread.core.grouping import seconds
 from stockthread.core.matching import Catalog
 from stockthread.core.model import Extraction, MovementType, PostKey, RequestKey
 from stockthread.core.requests import RequestState
+from stockthread.dry_run import dry_run_record
 from stockthread.gate import Policy
 from stockthread.inventree import (
     DEPLETING_MARKER_FOUND_FROM,
@@ -51,7 +52,6 @@ from stockthread.worker import (
     Stepper,
     Undoer,
     Worker,
-    _record,
 )
 from stockthread.writer import Outcome
 
@@ -126,7 +126,9 @@ def approved(store: Store, post: PostKey = POST, take: MovementView = TAKE, now:
     """The take-out's dry run posted in `post`'s thread, and its plan approved by the policy."""
     store.place_message(OWNER, post, user_id=SAM, thread_ts=None, window_seconds=5)
     extraction = Extraction("rules", (take.movement,))
-    result = json.loads(json.dumps(_record(extraction, [take], late=False, poster=SAM, messages=(), max_quantity=500)))
+    result = json.loads(
+        json.dumps(dry_run_record(extraction, [take], late=False, poster=SAM, messages=(), max_quantity=500))
+    )
     made = plan_of(result)
     assert made is not None
     store.finish_dry_run(OWNER, post, DryRunOutcome.REPLIED, "1700000100.000100", result=result, plan=NewPlan(*made))
@@ -727,7 +729,7 @@ def test_a_plan_whose_second_write_inventree_refused_is_partly_applied_and_its_f
     other = view(lines=(("Disc 40", "1"),), stock=(picked((58, "1")),))
     store.place_message(OWNER, POST, user_id=SAM, thread_ts=None, window_seconds=5)
     extraction = Extraction("rules", (TAKE.movement, other.movement))
-    record = _record(extraction, [TAKE, other], late=False, poster=SAM, messages=(), max_quantity=500)
+    record = dry_run_record(extraction, [TAKE, other], late=False, poster=SAM, messages=(), max_quantity=500)
     result = json.loads(json.dumps(record))
     made = plan_of(result)
     assert made is not None

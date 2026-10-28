@@ -23,9 +23,9 @@ from stockthread.core.model import (
     ReasonSource,
     ReviewReason,
 )
+from stockthread.dry_run import dry_run_record
 from stockthread.plan_record import NotRebuilt, plan_hash, plan_of, views_of
 from stockthread.slack.replies import MovementView
-from stockthread.worker import _record
 
 TO_TRUCK = view(
     lines=(("Disc 40", "2"), ("U7 Lite", "1.5")),
@@ -46,7 +46,7 @@ RETURN = view(
 
 def record(*views: MovementView) -> dict[str, Any]:
     extraction = Extraction("rules", tuple(v.movement for v in views))
-    stored = _record(extraction, views, late=False, poster="U0SAM0001", messages=(), max_quantity=500)
+    stored = dry_run_record(extraction, views, late=False, poster="U0SAM0001", messages=(), max_quantity=500)
     returned: dict[str, Any] = json.loads(json.dumps(stored))  # as the store gives it back
     return returned
 

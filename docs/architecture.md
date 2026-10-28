@@ -87,6 +87,8 @@ Every module under `src/stockthread/`:
 | `config.py` | Settings: one TOML file for behavior, environment variables for secrets. |
 | `run.py` | `stockthread run`: starts the listener, catch-up and the worker, and wires InvenTree into them. |
 | `worker.py` | The worker: from the queue to dry runs, questions, approvals, writes and receipts. |
+| `places.py` | A movement's source and destination: the default source, and when a named place keeps it out. |
+| `dry_run.py` | The dry-run record a reply decided, and what the worker reads back from it. |
 | `setup_check.py` | `stockthread check-setup`: what an admin should fix before the first dry run. |
 | `alias_admin.py` | `stockthread aliases`: list, export, add, remove, history. |
 | `trail.py` | `stockthread trail`: one post's audit trail, for an operator. |

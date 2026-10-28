@@ -23,12 +23,13 @@ from stockthread.config import Settings, parse_settings
 from stockthread.core.matching import Catalog
 from stockthread.core.model import Extraction, MovementType, PostKey, RequestKey
 from stockthread.core.requests import RequestState
+from stockthread.dry_run import dry_run_record
 from stockthread.gate import Policy
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, ServerInfo, VersionCheck
 from stockthread.plan_record import plan_of
 from stockthread.slack.replies import CLICK_FEEDBACK, MovementView, receipt
 from stockthread.store import DryRunOutcome, NewPlan, Store
-from stockthread.worker import UNDO_ALREADY, UNDO_ERROR, UNDO_FEEDBACK, UNDO_WRITES_OFF, Undoer, Worker, _record
+from stockthread.worker import UNDO_ALREADY, UNDO_ERROR, UNDO_FEEDBACK, UNDO_WRITES_OFF, Undoer, Worker
 
 S = RequestState
 OWNER = "worker-1"
@@ -78,7 +79,9 @@ def store(tmp_path: Path) -> Iterator[Store]:
 def fake(store: Store) -> FakeInvenTree:
     """The fake after the take-out was approved by the policy, written, read back and its receipt posted."""
     extraction = Extraction("rules", (TAKE.movement,))
-    result = json.loads(json.dumps(_record(extraction, [TAKE], late=False, poster=SAM, messages=(), max_quantity=500)))
+    result = json.loads(
+        json.dumps(dry_run_record(extraction, [TAKE], late=False, poster=SAM, messages=(), max_quantity=500))
+    )
     made = plan_of(result)
     assert made is not None
     store.finish_dry_run(OWNER, POST, DryRunOutcome.REPLIED, "1700000100.000100", result=result, plan=NewPlan(*made))

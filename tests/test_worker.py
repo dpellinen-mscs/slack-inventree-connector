@@ -43,6 +43,7 @@ from stockthread.core.model import (
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import STATUS_OK, SourcePick, StockItem, Take
 from stockthread.core.validate import DETAIL_MIXED, DETAIL_OTHER_AUTHOR, DETAIL_PLACE_NAMED, DETAIL_SOURCE_LEFT_OUT
+from stockthread.dry_run import reading_digest
 from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.plan_record import plan_hash, views_of
@@ -77,7 +78,6 @@ from stockthread.worker import (
     PosterBusy,
     PostStillRunning,
     Worker,
-    _digest,
     _stock_lines,
     _with_stock,
 )
@@ -4438,7 +4438,7 @@ def test_stock_is_read_for_the_part_picked_by_button_and_does_not_change_the_rea
     assert record is not None
     assert record.result is not None
     assert record.result["movements"][0]["items"][0]["stock"] == [{"item": 57, "quantity": "2"}]
-    assert record.result["reading"] == _digest(first.result)  # stock is read after the answers, not digested
+    assert record.result["reading"] == reading_digest(first.result)  # stock is read after the answers, not digested
     slack = worker.slack
     assert isinstance(slack, FakeSlack)
     assert "(from stock item #57)" in reply_text(slack.posted[1])
