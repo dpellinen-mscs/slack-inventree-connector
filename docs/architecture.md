@@ -89,6 +89,8 @@ Every module under `src/stockthread/`:
 | `worker.py` | The worker: from the queue to dry runs, questions, approvals, writes and receipts. |
 | `places.py` | A movement's source and destination: the default source, and when a named place keeps it out. |
 | `dry_run.py` | The dry-run record a reply decided, and what the worker reads back from it. |
+| `picking.py` | Which lines of a dry run are settled enough to read stock for, and the stock items they act on. |
+| `failures.py` | How the worker sorts the errors it catches: transient, an outage, or a rate limit; their short codes. |
 | `setup_check.py` | `stockthread check-setup`: what an admin should fix before the first dry run. |
 | `alias_admin.py` | `stockthread aliases`: list, export, add, remove, history. |
 | `trail.py` | `stockthread trail`: one post's audit trail, for an operator. |
