@@ -22,7 +22,9 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 - A configured `policy.default_source` no longer settles a source the text names with no marker word: a post that
   names a stock location word for word (its name, full path ("Shelves/B"), an alias, or "my truck") that is neither a
   destination of the post's movements nor the default ("pulled 2 ONTs shelf B to van 3", "van 3 gave me 2") marks the
-  source as left out (T19). No recorded corpus post changes.
+  source as left out (T19). No recorded corpus post changes. A name that holds punctuation itself ("Cage (north)",
+  "Shelf B: top") is found across it, as "pulled 2 ONTs cage (north) to van 3"; other names still stop at a comma,
+  colon, bracket or full stop.
 - A take to a site is written with no click only when its destination is under one of the new `locations.sites`
   paths (such as `["Sites"]`). Unset, the default, every take to a site waits for Apply, and `check-setup` warns with
   writes on. A return read as a take to a site no longer puts stock back on a shelf unasked (#199, #210, ADR 0022).

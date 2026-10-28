@@ -289,6 +289,17 @@ def test_a_location_is_named_only_by_its_whole_name() -> None:
     assert locations_named("Sam's truck: 2 D40s. Truck\n2 is full", CATALOG, "U0SAM") == frozenset()
 
 
+def test_a_name_that_holds_punctuation_is_named_across_it() -> None:
+    places = (LocationRecord(40, "Storage/Cage (north)"), LocationRecord(41, "Bins/Shelf B: top"))
+    catalog = Catalog(parts=PARTS, locations=(*LOCATIONS, *places))
+    assert locations_named("pulled 2 ONTs cage (north) to truck 1", catalog, "U0SAM") == {11, 40}
+    assert locations_named("pulled 2 ONTs Storage/Cage (North), truck 1 has them", catalog, "U0SAM") == {11, 40}
+    assert locations_named("2 ONTs cage north to truck 1", catalog, "U0SAM") == {11, 40}
+    assert locations_named("2 ONTs shelf b: top to truck 1", catalog, "U0SAM") == {11, 41}
+    assert locations_named("2 ONTs in the cage to truck 1", catalog, "U0SAM") == {11}  # one word of a longer name
+    assert locations_named("Sam's truck: 2 D40s", catalog, "U0SAM") == frozenset()  # "Truck 2" holds no colon
+
+
 def test_my_vehicle_names_the_poster_s_vehicle() -> None:
     assert locations_named("2 D40s my truck to the Smith job", CATALOG, "U0SAM") == {11}
     assert locations_named("2 D40s my van to the Smith job", CATALOG, "U0SAM") == frozenset()  # Sam has a truck

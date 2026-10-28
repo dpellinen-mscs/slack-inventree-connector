@@ -3649,6 +3649,24 @@ def test_a_stock_location_named_with_no_from_word_is_not_replaced_by_the_default
     assert {"code": "implied_source", "source": "rule", "detail": DETAIL_PLACE_NAMED} in movement["reasons"]
 
 
+def test_a_named_stock_location_that_holds_punctuation_is_not_replaced_by_the_default(
+    store: Store, clock: Clock
+) -> None:
+    """T19: "Cage (north)" holds brackets, so a name that stops at punctuation would never find it."""
+    caged = replace(SHELVED, locations=(*SHELVED.locations, LocationRecord(13, "Cage (north)")))
+    unsourced = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "truck 1")
+    llm = FakeLLM(Extraction(MODEL, (unsourced,)))
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: caged, clock, llm=llm)
+    enqueue(store, message(ROOT, "pulled 2 Disc 40 cage (north) to truck 1"))
+    read_and_answered(worker, clock)
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    [movement] = record.result["movements"]
+    assert movement["source"] is None
+    assert {"code": "implied_source", "source": "rule", "detail": DETAIL_PLACE_NAMED} in movement["reasons"]
+
+
 @pytest.mark.parametrize("text", ["2 Disc 40 to truck 1", "2 Disc 40 main stock to truck 1", "truck 1 got 2 Disc 40"])
 def test_naming_only_the_destination_or_the_default_keeps_the_default(store: Store, clock: Clock, text: str) -> None:
     movement = _unsourced_reading(store, clock, text)
