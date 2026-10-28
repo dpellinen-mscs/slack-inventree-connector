@@ -65,7 +65,7 @@ def views_of(result: Mapping[str, Any] | None, input_hash: str) -> list[Movement
 
     Raises NotRebuilt for a record retention removed, one whose movements hash to anything else, one with a
     movement that has a gate reason or a line without stock read, and a record that does not have the form
-    `worker._record` writes. Picks carry their takes only: a pick with reasons has a gate reason."""
+    `dry_run.dry_run_record` writes. Picks carry their takes only: a pick with reasons has a gate reason."""
     if result is None:
         raise NotRebuilt("the dry-run record is gone")
     if plan_hash(result) != input_hash:

@@ -22,13 +22,13 @@ from stockthread.config import InvenTreeSettings, parse_settings
 from stockthread.core.matching import Catalog
 from stockthread.core.model import Extraction, Match, MatchRule, MatchStatus, MovementType, PostKey, RequestKey
 from stockthread.core.requests import RequestState
+from stockthread.dry_run import dry_run_record
 from stockthread.gate import Policy, Verdict
 from stockthread.inventree import InvenTreeReader, check_version
 from stockthread.plan_record import plan_of
 from stockthread.run import inventree_steps, policy_approver
 from stockthread.slack.replies import MovementView
 from stockthread.store import DryRunOutcome, NewPlan, Store
-from stockthread.worker import _record
 from stockthread.writer import InvenTreeWriter
 
 if TYPE_CHECKING:
@@ -74,7 +74,7 @@ def take_to_truck(scratch: Scratch, pk: int, quantity: str) -> MovementView:
 
 
 def reply(store: Store, movement: MovementView) -> None:
-    stored = _record(Extraction("rules", (movement.movement,)), [movement], late=False, poster=SAM, messages=(),
+    stored = dry_run_record(Extraction("rules", (movement.movement,)), [movement], late=False, poster=SAM, messages=(),
                      max_quantity=500)  # fmt: skip
     result: dict[str, Any] = json.loads(json.dumps(stored))
     made = plan_of(result)

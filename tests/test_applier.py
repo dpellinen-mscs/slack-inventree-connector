@@ -32,6 +32,7 @@ from stockthread.core.grouping import seconds
 from stockthread.core.marker import AttemptKind
 from stockthread.core.model import Extraction, MovementType, Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, IllegalTransition, RequestState
+from stockthread.dry_run import dry_run_record
 from stockthread.gate import Judgement, Policy, Verdict
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, ServerInfo, VersionCheck
 from stockthread.plan_record import NotRebuilt, plan_of
@@ -47,7 +48,6 @@ from stockthread.store import (
     WriteBlocked,
 )
 from stockthread.store.db import _migrations
-from stockthread.worker import _record
 from stockthread.writer import Outcome
 
 S = RequestState
@@ -74,7 +74,7 @@ def anyio_backend() -> str:
 
 def record(*views: MovementView, **extra: Any) -> dict[str, Any]:
     extraction = Extraction("rules", tuple(v.movement for v in views))
-    stored = _record(extraction, views, late=False, poster=SAM, messages=(), max_quantity=500)
+    stored = dry_run_record(extraction, views, late=False, poster=SAM, messages=(), max_quantity=500)
     return {**json.loads(json.dumps(stored)), **extra}
 
 

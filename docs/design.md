@@ -595,7 +595,7 @@ needs.
     reading of the post, and it is applied to that reading only:
     - *Scope.* A click is recorded only while the post has not moved on
       from the dry run that asked. Every later reading is compared with
-      that one (`_same_reading`, lateness left out). While they are the
+      that one (`dry_run.same_reading`, lateness left out). While they are the
       same, all answers given about it are replayed onto it, oldest first.
       A reading that differs (an edit, a new thread message read
       otherwise) starts over: earlier answers are kept in the audit trail

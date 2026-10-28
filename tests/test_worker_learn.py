@@ -35,12 +35,13 @@ from stockthread.core.model import (
 )
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import STATUS_OK, StockItem
+from stockthread.dry_run import dry_run_record
 from stockthread.gate import Policy
 from stockthread.inventree import DEPLETING_MARKER_FOUND_FROM, InvenTreeError, ServerInfo, VersionCheck
 from stockthread.plan_record import plan_of
 from stockthread.slack.replies import MovementView
 from stockthread.store import AliasKind, DryRunOutcome, NewPlan, Store
-from stockthread.worker import Worker, _record
+from stockthread.worker import Worker
 from stockthread.writer import Outcome
 
 S = RequestState
@@ -86,7 +87,7 @@ def clicked(store: Store, *movements: MovementView) -> None:
     movements = movements or (TAKE,)
     store.place_message(OWNER, POST, user_id=SAM, thread_ts=None, window_seconds=5)
     extraction = Extraction("rules", tuple(movement.movement for movement in movements))
-    record = _record(extraction, list(movements), late=False, poster=SAM, messages=(), max_quantity=500)
+    record = dry_run_record(extraction, list(movements), late=False, poster=SAM, messages=(), max_quantity=500)
     result = json.loads(json.dumps(record))
     made = plan_of(result)
     assert made is not None
@@ -427,7 +428,7 @@ def test_a_post_edited_before_its_dry_run_teaches_what_that_dry_run_read(store: 
     through = store.post_changes_through(POST)
     assert through > 0
     extraction = Extraction("rules", (TAKE.movement,))
-    record = _record(extraction, [TAKE], late=False, poster=SAM, messages=(), max_quantity=500)
+    record = dry_run_record(extraction, [TAKE], late=False, poster=SAM, messages=(), max_quantity=500)
     result = json.loads(json.dumps(record))
     made = plan_of(result)
     assert made is not None
