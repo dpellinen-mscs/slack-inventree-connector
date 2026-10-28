@@ -19,6 +19,7 @@ import pytest
 from slack_sdk.errors import SlackApiError
 
 from stockthread import picking, trail
+from stockthread import views as views_module
 from stockthread import worker as worker_module
 from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules, resolve
@@ -3801,7 +3802,7 @@ def test_a_post_is_searched_for_named_places_at_most_once(
         searched.append(args)
         return locations_named(*args)
 
-    monkeypatch.setattr(worker_module, "locations_named", counted)
+    monkeypatch.setattr(views_module, "locations_named", counted)
     take = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "truck 1")
     more = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("ONT 100", Decimal(1)),), None, "truck 1")
     if not reads:

@@ -58,7 +58,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
-from functools import cache, partial
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -69,19 +68,12 @@ from stockthread.core import extract_rules
 from stockthread.core.answers import Effects, Given, Typed, replay
 from stockthread.core.grouping import seconds
 from stockthread.core.marker import is_marker_id
-from stockthread.core.matching import Catalog, locations_named, match_part
+from stockthread.core.matching import Catalog
 from stockthread.core.model import (
-    CandidateMovement,
     Extraction,
-    LineItem,
-    Match,
-    MatchStatus,
     MessageInput,
     PostKey,
-    ReasonCode,
-    ReasonSource,
     RequestKey,
-    ReviewReason,
 )
 from stockthread.core.questions import (
     Question,
@@ -90,24 +82,16 @@ from stockthread.core.questions import (
     pick_question,
     question_from_json,
     question_json,
-    reason_line,
 )
 from stockthread.core.requests import UNDOABLE, RequestState
 from stockthread.core.resolve import StockItem
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
-from stockthread.core.validate import (
-    DETAIL_OTHER_AUTHOR,
-    in_stocking_unit,
-    photo_not_read,
-    validate,
-)
 from stockthread.dry_run import dry_run_record, kept_reading, reading_digest, same_reading, standing_row
 from stockthread.failures import described, error_code, is_outage, is_transient, retry_after, slack_code
 from stockthread.gate import Judgement
 from stockthread.learning import lessons
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.picking import stock_lines, with_stock
-from stockthread.places import by_default, default_source, is_default, located, place_left_out, rival_named
 from stockthread.plan_record import NotRebuilt, plan_hash, plan_of
 from stockthread.slack.catchup import is_catch_up
 from stockthread.slack.ingest import (
@@ -168,6 +152,7 @@ from stockthread.store import (
     new_button_id,
 )
 from stockthread.store.db import DryRunRecord
+from stockthread.views import reading_views, with_answers
 
 log = logging.getLogger(__name__)
 
@@ -1432,7 +1417,9 @@ class Worker:
                 catalog = self.catalog()
                 self.beat()  # a catalog read can take a while
             try:
-                views = self._views(extraction, messages, poster, catalog, late, others)
+                views = reading_views(
+                    extraction, messages, poster, catalog, late, others, max_quantity=self.settings.policy.max_quantity
+                )
                 reading = reading_digest(record(views, late))
                 if answering and reading != standing_row(history)[0]:
                     continue  # the post reads otherwise: answers start over
@@ -1446,7 +1433,17 @@ class Worker:
                         continue  # not an answer, or not from someone who may answer: read with the post
                     answers = self.store.post_answers_through(key)
                     effects = self._replay(key, history, reading, answers, views, answering, catalog, poster)
-                views = self._answered(views, effects, extraction, all_messages, late, catalog, poster, others)
+                views = with_answers(
+                    views,
+                    effects,
+                    extraction,
+                    all_messages,
+                    late,
+                    catalog,
+                    poster,
+                    others,
+                    max_quantity=self.settings.policy.max_quantity,
+                )
             except LockLost:
                 raise
             except Exception as error:
@@ -1679,7 +1676,17 @@ class Worker:
         """Whether the candidate message reads cleanly as the answer to its question, judged on the reading that
         stands with the answers given so far, and was recorded as that answer."""
         item, message, question, allowed = candidate
-        answered = self._answered(views, effects, extraction, messages, late, catalog, poster, others)
+        answered = with_answers(
+            views,
+            effects,
+            extraction,
+            messages,
+            late,
+            catalog,
+            poster,
+            others,
+            max_quantity=self.settings.policy.max_quantity,
+        )
         if not 0 <= question.movement < len(answered):
             return False
         movement = answered[question.movement].movement
@@ -1713,71 +1720,6 @@ class Worker:
         )
         if text is not None:
             self._tell(item.post.ts, _Feedback(item.channel_id, author, item.post.ts, text), "reply feedback")
-
-    def _answered(
-        self,
-        views: Sequence[MovementView],
-        effects: Effects,
-        extraction: Extraction,
-        messages: Sequence[MessageInput],
-        late: bool,
-        catalog: Catalog,
-        poster: str,
-        others: bool,
-    ) -> list[MovementView]:
-        """The views with the answers' effects: a picked type is validated again, a picked or confirmed record
-        replaces its match, and a cleared reason is left out. A quantity or serials typed in the thread replace the
-        line's own; validation then runs again on that movement, with the answer messages' text in the post. So it
-        does when a picked or confirmed part changes the units a line may be stocked in (`_stocking`)."""
-        found = []
-        named = cache(partial(locations_named, _post_text(messages), catalog, poster))
-        for n, view in enumerate(views):
-            movement, reasons = view.movement, view.reasons
-            items = [effects.parts.get((n, line), match) for line, match in enumerate(view.items)]
-            stocking = _stocking(items, catalog)
-            if n in effects.types:
-                movement = replace(movement, movement_type=effects.types[n])
-            if n in effects.retyped:
-                movement = replace(
-                    movement,
-                    line_items=tuple(
-                        _typed_line(effects, n, line, item) for line, item in enumerate(movement.line_items)
-                    ),
-                )
-            if n in effects.types or n in effects.retyped or stocking != _stocking(view.items, catalog):
-                reasons = self._reasons(movement, extraction, messages, late, others, stocking)
-                reasons = place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
-                # Unreachable with a rival pending today: its confirm is a reading question, asked before any
-                # whose answer recomputes, and a reading that changes starts the answers over. Kept so that a
-                # recompute reads the post as the first pass did.
-                picked = (effects.places.get((n, "source")), effects.places.get((n, "destination")))
-                reasons = rival_named(movement, picked, _post_text(messages), catalog, poster, reasons)
-            source = effects.places.get((n, "source"))
-            if source is None:
-                # A picked type takes its own default source, or none.
-                source = (
-                    default_source(movement, catalog, reasons)
-                    if is_default(view.source) or (n in effects.types and view.source is None)
-                    else view.source
-                )
-            reasons = by_default(reasons, source)
-            found.append(
-                MovementView(
-                    movement=movement,
-                    items=items,
-                    source=source,
-                    destination=effects.places.get((n, "destination"), view.destination),
-                    reasons=tuple(
-                        reason
-                        for reason in reasons
-                        if (n, reason_line(reason, movement), reason.code, reason.detail) not in effects.cleared
-                        and (n, reason_line(reason, movement), reason.code) not in effects.settled
-                    ),
-                    named={key[1]: text for key, text in effects.named.items() if key[0] == n},
-                    units=_own_units(movement, stocking),
-                )
-            )
-        return found
 
     def _standing(self, post: WaitingPost) -> Mapping[str, Any] | None:
         """For a revision: what the reply that stands in the thread decided, or {} when its record expired.
@@ -1948,37 +1890,6 @@ class Worker:
         else:
             log.info("post %s: dry run posted", key.ts)
 
-    def _views(
-        self,
-        extraction: Extraction,
-        messages: Sequence[MessageInput],
-        poster: str,
-        catalog: Catalog,
-        late: bool,
-        others: bool,
-    ) -> list[MovementView]:
-        views = []
-        named = cache(partial(locations_named, _post_text(messages), catalog, poster))
-        for movement in extraction.movements:
-            items = [_part(item.item_text, catalog, poster) for item in movement.line_items]
-            stocking = _stocking(items, catalog)
-            reasons = self._reasons(movement, extraction, messages, late, others, stocking)
-            reasons = place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
-            reasons = rival_named(movement, (), _post_text(messages), catalog, poster, reasons)
-            source = located(movement.source_text, catalog, poster) or default_source(movement, catalog, reasons)
-            reasons = by_default(reasons, source)
-            views.append(
-                MovementView(
-                    movement=movement,
-                    items=items,
-                    source=source,
-                    destination=located(movement.destination_text, catalog, poster),
-                    reasons=reasons,
-                    units=_own_units(movement, stocking),
-                )
-            )
-        return views
-
     def _read_stock(self, views: Sequence[MovementView]) -> Mapping[tuple[int, int], Sequence[StockItem]]:
         """The stock items of every (part, location) pair a settled line acts on (`picking.stock_lines`)."""
         pairs = sorted({(part, place) for view in views for _, _, part, place, _ in stock_lines(view)})
@@ -1987,38 +1898,6 @@ class Worker:
         found = self.stock(pairs)
         self.beat()  # a stock read can take a while
         return found
-
-    def _reasons(
-        self,
-        movement: CandidateMovement,
-        extraction: Extraction,
-        messages: Sequence[MessageInput],
-        late: bool,
-        others: bool,
-        stocking: Sequence[str | None] = (),
-    ) -> tuple[ReviewReason, ...]:
-        """The movement's reasons. `others`: a message read is not the poster's. `stocking`: the units of each
-        line's part, for a part that can authorize a write (`_stocking`)."""
-        text = _post_text(messages)
-        lateness = (ReviewReason(ReasonCode.LATE_INGEST, ReasonSource.RULE),) if late else ()
-        # No extractor sees a photo's pixels (design section 13): the photo may show other items, another
-        # quantity or serials, so a person checks the reading against it.
-        unread = (ReviewReason(ReasonCode.PHOTO_NOT_READ, ReasonSource.RULE),) if photo_not_read(messages) else ()
-        # Another person's reply joined to the post: "my truck" there is read as the poster's (T6).
-        mixed = (ReviewReason(ReasonCode.ACTOR_NOT_POSTER, ReasonSource.RULE, DETAIL_OTHER_AUTHOR),) if others else ()
-        return (
-            lateness
-            + unread
-            + mixed
-            + validate(
-                movement,
-                text,
-                max_quantity=self.settings.policy.max_quantity,
-                post_flags=extraction.post_flags,
-                stocking=stocking,
-                kinds={read.movement_type for read in extraction.movements},
-            )
-        )
 
     def _post_failed(self, key: PostKey, now: Decimal, error: Exception, sent: _Sent) -> None:
         failures = self._failures.get(key) or _Failures(first=now, count=0, next_try=now)
@@ -2192,48 +2071,6 @@ def _closed_already(blocks: Sequence[Any], closing: Mapping[str, Any]) -> bool:
         return False
     first = last["elements"][0]
     return isinstance(first, Mapping) and first.get("text") == closing["elements"][0]["text"]
-
-
-def _typed_line(effects: Effects, movement: int, line: int, item: LineItem) -> LineItem:
-    """A line item with the quantity and serials typed for it in the thread. A quantity typed for a pack-unit
-    question counts pieces: the line's unit is the piece and its pack size is dropped. A line the post named no item
-    for takes the typed name as its item text, so "items missing" moves on to the next line without one."""
-    key = (movement, line)
-    if key in effects.named and not (item.item_text or "").strip():
-        item = replace(item, item_text=effects.named[key])
-    if key in effects.quantities:
-        item = replace(item, quantity=effects.quantities[key])
-    if key in effects.pieces:
-        item = replace(item, unit=None, pack_size=None)
-    if key in effects.serials:
-        item = replace(item, serials=effects.serials[key])
-    return item
-
-
-def _part(text: str | None, catalog: Catalog, poster: str) -> Match:
-    return match_part(text, catalog, poster) if text else Match(MatchStatus.UNMATCHED)
-
-
-def _stocking(items: Sequence[Match], catalog: Catalog) -> tuple[str | None, ...]:
-    """The units of each line's part (`Part.units`), for a part matched so that it can authorize a write, else None:
-    what validate may spare a length in the part's own unit for. A guessed part's units are never trusted."""
-    units = {part.pk: part.units for part in catalog.parts}
-    return tuple(
-        units.get(match.record) if match.can_authorize_a_write and match.record is not None else None for match in items
-    )
-
-
-def _own_units(movement: CandidateMovement, stocking: Sequence[str | None]) -> tuple[str | None, ...]:
-    """`MovementView.units`: the part's units for each line in its part's own length unit, else None; () for none."""
-    units = tuple(
-        found if in_stocking_unit(item.unit, found) else None
-        for item, found in zip(movement.line_items, stocking, strict=True)
-    )
-    return units if any(unit is not None for unit in units) else ()
-
-
-def _post_text(messages: Sequence[MessageInput]) -> str:
-    return "\n".join(message.text for message in messages if not message.deleted)
 
 
 def _plan(key: PostKey, result: Mapping[str, Any]) -> NewPlan | None:
