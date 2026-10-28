@@ -18,7 +18,7 @@ from typing import Any, cast
 import pytest
 from slack_sdk.errors import SlackApiError
 
-from stockthread import trail
+from stockthread import picking, trail
 from stockthread import worker as worker_module
 from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules, resolve
@@ -46,6 +46,7 @@ from stockthread.core.validate import DETAIL_MIXED, DETAIL_OTHER_AUTHOR, DETAIL_
 from stockthread.dry_run import reading_digest
 from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
+from stockthread.picking import stock_lines, with_stock
 from stockthread.plan_record import plan_hash, views_of
 from stockthread.slack.ingest import Drop, Revised
 from stockthread.slack.listener import Listener
@@ -78,8 +79,6 @@ from stockthread.worker import (
     PosterBusy,
     PostStillRunning,
     Worker,
-    _stock_lines,
-    _with_stock,
 )
 
 OWNER = "instance-a"
@@ -4480,19 +4479,19 @@ def _rule(code: ReasonCode, detail: str = "") -> ReviewReason:
 
 
 def test_only_lines_whose_quantity_is_settled_read_stock() -> None:
-    assert [line for line, *_ in _stock_lines(stock_view())] == [0, 1]
+    assert [line for line, *_ in stock_lines(stock_view())] == [0, 1]
     pack = _rule(ReasonCode.PACK_UNIT_AMBIGUOUS, "line 1")
-    assert [line for line, *_ in _stock_lines(stock_view(reasons=[pack]))] == [1]
-    assert _stock_lines(stock_view(reasons=[_rule(ReasonCode.QUANTITY_VAGUE, "vague quantity word in the text")])) == []
-    assert [line for line, *_ in _stock_lines(stock_view(quantities=(None, Decimal(1))))] == [1]
-    assert [line for line, *_ in _stock_lines(stock_view(quantities=(Decimal(0), Decimal(1))))] == [1]
+    assert [line for line, *_ in stock_lines(stock_view(reasons=[pack]))] == [1]
+    assert stock_lines(stock_view(reasons=[_rule(ReasonCode.QUANTITY_VAGUE, "vague quantity word in the text")])) == []
+    assert [line for line, *_ in stock_lines(stock_view(quantities=(None, Decimal(1))))] == [1]
+    assert [line for line, *_ in stock_lines(stock_view(quantities=(Decimal(0), Decimal(1))))] == [1]
     # Not quantity doubts: the stock is still read, and the reasons stay to be asked.
-    assert len(_stock_lines(stock_view(reasons=[_rule(ReasonCode.LATE_INGEST)]))) == 2
+    assert len(stock_lines(stock_view(reasons=[_rule(ReasonCode.LATE_INGEST)]))) == 2
 
 
 def test_the_movements_of_a_post_share_the_stock_in_the_post_s_order() -> None:
     views = [stock_view(quantities=(Decimal(2),)), stock_view(MovementType.CONSUME, quantities=(Decimal(2),))]
-    [first, second] = _with_stock(views, {(1, 10): [ok(57, 3)]})
+    [first, second] = with_stock(views, {(1, 10): [ok(57, 3)]})
     assert first.stock is not None
     assert second.stock is not None
     [first_pick], [second_pick] = first.stock, second.stock
@@ -4503,18 +4502,18 @@ def test_the_movements_of_a_post_share_the_stock_in_the_post_s_order() -> None:
     assert [reason.detail for reason in second.reasons] == ["line 1: other lines of the post take the same stock"]
     assert first.reasons == ()
     unread = stock_view(MovementType.CONSUME, quantities=(None,))
-    assert _with_stock([unread, views[0]], {(1, 10): [ok(57, 3)]})[0] is unread
+    assert with_stock([unread, views[0]], {(1, 10): [ok(57, 3)]})[0] is unread
 
 
 def test_a_count_of_zero_reads_stock_and_the_place_depends_on_the_operation() -> None:
-    assert [line for line, *_ in _stock_lines(stock_view(MovementType.COUNT, (Decimal(0),)))] == [0]
+    assert [line for line, *_ in stock_lines(stock_view(MovementType.COUNT, (Decimal(0),)))] == [0]
     fuzzy = Match(MatchStatus.MATCHED, MatchRule.FUZZY, 10)
-    assert _stock_lines(stock_view(place=fuzzy)) == []
-    assert _stock_lines(stock_view(MovementType.UNCLEAR)) == []
+    assert stock_lines(stock_view(place=fuzzy)) == []
+    assert stock_lines(stock_view(MovementType.UNCLEAR)) == []
     source_only = replace(stock_view(MovementType.CONSUME), destination=None)
-    assert [(op, place) for _, op, _, place, _ in _stock_lines(source_only)] == [(Operation.REMOVE, 10)] * 2
+    assert [(op, place) for _, op, _, place, _ in stock_lines(source_only)] == [(Operation.REMOVE, 10)] * 2
     receive = replace(stock_view(MovementType.RECEIVE), source=None)
-    assert [(op, place) for _, op, _, place, _ in _stock_lines(receive)] == [(Operation.ADD, 10)] * 2
+    assert [(op, place) for _, op, _, place, _ in stock_lines(receive)] == [(Operation.ADD, 10)] * 2
 
 
 def test_a_rejected_reading_reads_no_stock(store: Store, clock: Clock) -> None:
@@ -4548,7 +4547,7 @@ def test_a_pick_that_breaks_fails_its_post_alone(
             raise ValueError("a bug in the pick")
         return real(*args)
 
-    monkeypatch.setattr(worker_module, "resolve_lines", resolve_lines)
+    monkeypatch.setattr(picking, "resolve_lines", resolve_lines)
     stock = FakeStock({(1, 10): [ok(57, 5)], (2, 10): [ok(60, 5)]})
     worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: CATALOG, clock, stock=stock)
     enqueue(store, message("1790000000.000100", TAKE))

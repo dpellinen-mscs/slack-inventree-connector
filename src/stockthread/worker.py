@@ -52,7 +52,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sqlite3
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
@@ -78,13 +77,11 @@ from stockthread.core.model import (
     Match,
     MatchStatus,
     MessageInput,
-    Operation,
     PostKey,
     ReasonCode,
     ReasonSource,
     RequestKey,
     ReviewReason,
-    operation_for,
 )
 from stockthread.core.questions import (
     Question,
@@ -96,7 +93,7 @@ from stockthread.core.questions import (
     reason_line,
 )
 from stockthread.core.requests import UNDOABLE, RequestState
-from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
+from stockthread.core.resolve import StockItem
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
 from stockthread.core.validate import (
     DETAIL_OTHER_AUTHOR,
@@ -105,10 +102,11 @@ from stockthread.core.validate import (
     validate,
 )
 from stockthread.dry_run import dry_run_record, kept_reading, reading_digest, same_reading, standing_row
+from stockthread.failures import described, error_code, is_outage, is_transient, retry_after, slack_code
 from stockthread.gate import Judgement
-from stockthread.inventree import InvenTreeError
 from stockthread.learning import lessons
 from stockthread.llm.extract import NoReading, ProviderError
+from stockthread.picking import stock_lines, with_stock
 from stockthread.places import by_default, default_source, is_default, located, place_left_out, rival_named
 from stockthread.plan_record import NotRebuilt, plan_hash, plan_of
 from stockthread.slack.catchup import is_catch_up
@@ -388,16 +386,6 @@ UNDO_NOT_REBUILT = "Not undone: the connector cannot rebuild this movement from 
 StockReader = Callable[[Sequence[tuple[int, int]]], Mapping[tuple[int, int], Sequence[StockItem]]]
 """(part, location) pairs -> the stock items of that part in that location itself, in stock (`stock_items`)."""
 
-_QUANTITY_UNSETTLED = frozenset(
-    {
-        ReasonCode.QUANTITY_MISSING,
-        ReasonCode.QUANTITY_VAGUE,
-        ReasonCode.PACK_UNIT_AMBIGUOUS,
-        ReasonCode.QUANTITY_FROM_PHOTO,
-    }
-)
-"""A line with one of these has no quantity to pick stock for yet: its question comes first (design section 4)."""
-
 
 @dataclass
 class Worker:
@@ -509,12 +497,12 @@ class Worker:
                     raise
                 except Exception as error:
                     _log_failure("event", event.id, error)
-                    if _transient(error) and event.attempts < MAX_EVENT_ATTEMPTS:
+                    if is_transient(error) and event.attempts < MAX_EVENT_ATTEMPTS:
                         after = timedelta(seconds=EVENT_RETRY_SECONDS[event.attempts - 1])
                         self.store.retry_event_later(self.owner, event.id, after)
                         done -= 1
                         continue
-                    status, outcome = EventStatus.FAILED, _code(error)
+                    status, outcome = EventStatus.FAILED, error_code(error)
                 self.store.finish_event(self.owner, event.id, status, outcome)
                 if self._feedback is not None and not self.stopping():
                     self._tell(event.id, self._feedback)
@@ -653,7 +641,7 @@ class Worker:
                 self._told(click, EventStatus.FAILED, "", UNDO_ERROR)
                 raise
             _log_failure("undo of request", key, error)
-            applied = Applied(self.store.request(key).state, f"failed: {_code(error)}")
+            applied = Applied(self.store.request(key).state, f"failed: {error_code(error)}")
         log.info("undo of request %s: %s (%s)", key, applied.state, applied.why)
         if applied.state is before and applied.why.startswith("no undo: "):  # refused before its intent was stored
             why = applied.why.removeprefix("no undo: ")
@@ -712,7 +700,7 @@ class Worker:
             return self._told(click, EventStatus.DROPPED, "not_rebuilt", APPLY_FEEDBACK["not_rebuilt"])
         except Exception as error:
             _log_failure("apply click on post", post.ts, error)
-            return self._told(click, EventStatus.FAILED, _code(error), APPLY_FEEDBACK["failed"])
+            return self._told(click, EventStatus.FAILED, error_code(error), APPLY_FEEDBACK["failed"])
         if judgement is None:
             if any(row.state in UNDO_REQUESTED for row in plan.requests):
                 return self._told(click, EventStatus.DROPPED, "undone", APPLY_FEEDBACK["undone"])
@@ -752,7 +740,7 @@ class Worker:
             except LockLost:
                 raise
             except Exception as error:
-                if _outage(error):
+                if is_outage(error):
                     wait = min(WORK_RETRY_SECONDS * 2 ** min(failures, 16), STUCK_RETRY_SECONDS)
                     self._to_approve[post] = (made, failures + 1, self._now() + wait)
                     log.warning("post %s: the policy's judgement failed (%s), tried again later", post.ts,
@@ -760,7 +748,7 @@ class Worker:
                     break
                 self._to_approve.pop(post)
                 log.error("post %s: the policy's judgement failed (%s); the plan waits for Apply", post.ts,
-                          _described(error))  # fmt: skip
+                          described(error))  # fmt: skip
                 continue
             self._to_approve.pop(post)
             if judgement is None:
@@ -807,7 +795,7 @@ class Worker:
                     continue
                 failed_at = self._now()  # a step can take long: its backoff counts from when it failed
                 failures = self._hold(key, failed_at, WORK_RETRY_SECONDS)
-                if _outage(error):
+                if is_outage(error):
                     log.warning("request %s: the step failed (%s), tried again later", key, type(error).__name__)
                     self._work_quiet_until = failed_at + WORK_RETRY_SECONDS
                     break
@@ -815,7 +803,7 @@ class Worker:
                     "request %s: the step failed %d times in a row (%s), an operator must look at it",
                     key,
                     failures,
-                    _described(error),
+                    described(error),
                 )
                 continue
             self._held.pop(key, None)
@@ -897,7 +885,7 @@ class Worker:
             try:
                 made = self._receipts_running.get(plan) or self._receipt(post, revision)
             except Exception as error:
-                if _outage(error):
+                if is_outage(error):
                     log.warning("post %s: no receipt now (%s), tried again later", post.ts, type(error).__name__)
                     self._receipts_quiet_until = self._now() + WORK_RETRY_SECONDS
                     return done
@@ -907,7 +895,7 @@ class Worker:
                     post.ts,
                     revision,
                     failures,
-                    _described(error),
+                    described(error),
                 )
                 continue
             states, body = made
@@ -932,13 +920,13 @@ class Worker:
                 self._receipts_running.pop(plan, None)
                 failed_at = self._now()  # Retry-After counts from Slack's answer, not from when the batch began
                 failures = self._hold(plan, failed_at, 2)
-                asked = _retry_after(error)
+                asked = retry_after(error, RETRY_FOR_SECONDS)
                 level = logging.ERROR if failures > RECEIPT_TRIES else logging.WARNING
-                log.log(level, "post %s: receipt failed (%s), %d in a row", post.ts, _slack_code(error), failures)
+                log.log(level, "post %s: receipt failed (%s), %d in a row", post.ts, slack_code(error), failures)
                 if asked:
                     self._quiet_until = failed_at + asked  # for every post, not only this one
                     return done
-                if _outage(error):
+                if is_outage(error):
                     self._receipts_quiet_until = self._held[plan][1]
                     return done
                 continue  # Slack refused this one (an archived channel, say): the others go on
@@ -1101,7 +1089,10 @@ class Worker:
             tries = failed(self.owner, row_id)
             # Every failure pauses all take-downs, the last try of this one too: the next one waits out the same
             # outage or rate limit instead of spending its tries in it.
-            wait = max(TAKE_DOWN_BACKOFF_SECONDS * 2 ** (min(tries, TAKE_DOWN_TRIES) - 1), _retry_after(error))
+            wait = max(
+                TAKE_DOWN_BACKOFF_SECONDS * 2 ** (min(tries, TAKE_DOWN_TRIES) - 1),
+                retry_after(error, RETRY_FOR_SECONDS),
+            )
             self._take_down_quiet_until = now + wait
             if tries < TAKE_DOWN_TRIES:
                 return 0
@@ -1468,7 +1459,7 @@ class Worker:
         # with a post whose stock changed. Outside the `try`: a failed read is an outage, and the post waits.
         stock = self._read_stock(views) if effects.rejected is None else {}
         try:
-            views = _with_stock(views, stock, effects.stock)
+            views = with_stock(views, stock, effects.stock)
             decided = {
                 **record(views, late),
                 "reading": reading,  # before the answers: what a later reading is compared with
@@ -1989,8 +1980,8 @@ class Worker:
         return views
 
     def _read_stock(self, views: Sequence[MovementView]) -> Mapping[tuple[int, int], Sequence[StockItem]]:
-        """The stock items of every (part, location) pair a settled line acts on (`_stock_lines`)."""
-        pairs = sorted({(part, place) for view in views for _, _, part, place, _ in _stock_lines(view)})
+        """The stock items of every (part, location) pair a settled line acts on (`picking.stock_lines`)."""
+        pairs = sorted({(part, place) for view in views for _, _, part, place, _ in stock_lines(view)})
         if self.stock is None or not pairs:
             return {}
         found = self.stock(pairs)
@@ -2032,7 +2023,7 @@ class Worker:
     def _post_failed(self, key: PostKey, now: Decimal, error: Exception, sent: _Sent) -> None:
         failures = self._failures.get(key) or _Failures(first=now, count=0, next_try=now)
         failures.count += 1
-        asked = _retry_after(error)
+        asked = retry_after(error, RETRY_FOR_SECONDS)
         if asked:
             self._quiet_until = now + asked  # for every post, not only this one
         failures.next_try = now + max(min(2 ** min(failures.count, 16), MAX_BACKOFF_SECONDS), asked)
@@ -2066,7 +2057,7 @@ class Worker:
     ) -> None:
         """The pure pipeline raised on this post: it gets no reply, so it cannot stop every later post."""
         _log_failure("post", post.key.ts, error)
-        result = {"error": _code(error)}
+        result = {"error": error_code(error)}
         self._conclude(post, now, DryRunOutcome.FAILED, extractor, result, read=read, changes=changes, answers=answers)
 
     def _finish(
@@ -2245,71 +2236,6 @@ def _post_text(messages: Sequence[MessageInput]) -> str:
     return "\n".join(message.text for message in messages if not message.deleted)
 
 
-def _stock_lines(view: MovementView) -> list[tuple[int, Operation, int, int, Decimal]]:
-    """The lines whose stock can be read: (line, operation, part, location, quantity). A line qualifies once its
-    part, the place its operation acts at (the source for a transfer or a remove, the destination for an add or a
-    count) and its quantity are settled; anything less would pick stock for a guess."""
-    movement = view.movement
-    operation = operation_for(movement.movement_type)
-    if operation is None:
-        return []
-    place = view.source if operation in (Operation.TRANSFER, Operation.REMOVE) else view.destination
-    if place is None or not place.can_authorize_a_write or place.record is None:
-        return []
-    unsettled = {reason_line(reason, movement) for reason in view.reasons if reason.code in _QUANTITY_UNSETTLED}
-    if None in unsettled:
-        return []  # a quantity doubt that names no line: none is settled
-    found = []
-    for line, (item, part) in enumerate(zip(movement.line_items, view.items, strict=True)):
-        if line in unsettled or item.quantity is None or not part.can_authorize_a_write or part.record is None:
-            continue
-        if item.quantity < 0 or (item.quantity == 0 and operation is not Operation.COUNT):
-            continue  # the validator raises its own reason
-        found.append((line, operation, part.record, place.record, item.quantity))
-    return found
-
-
-def _with_stock(
-    views: Sequence[MovementView],
-    found: Mapping[tuple[int, int], Sequence[StockItem]],
-    chosen: Mapping[tuple[int, int], tuple[int, ...]] | None = None,
-) -> list[MovementView]:
-    """The views with the stock items each settled line acts on, and the reasons the picks raise, each naming its
-    line (`core/resolve.py`). The lines of every movement of the post share the stock, in the post's order. A line
-    a person named stock items for (`chosen`, by movement and line) acts on those only. Lines whose stock was not
-    read are left as they are."""
-    chosen = chosen or {}
-    lines = [
-        (index, entry)
-        for index, view in enumerate(views)
-        for entry in _stock_lines(view)
-        if (entry[2], entry[3]) in found
-    ]
-    resolved = resolve_lines(
-        [
-            LineStock(
-                operation,
-                quantity,
-                found[(part, place)],
-                views[index].movement.line_items[line].serials,
-                chosen.get((index, line)),
-            )
-            for index, (line, operation, part, place, quantity) in lines
-        ]
-    )
-    picks: dict[int, list[SourcePick | None]] = {}
-    added: dict[int, list[ReviewReason]] = {}
-    for (index, (line, *_)), pick in zip(lines, resolved, strict=True):
-        picks.setdefault(index, [None] * len(views[index].items))[line] = pick
-        added.setdefault(index, []).extend(
-            replace(reason, detail=f"line {line + 1}: {reason.detail}") for reason in pick.reasons
-        )
-    return [
-        replace(view, reasons=(*view.reasons, *added[index]), stock=tuple(picks[index])) if index in picks else view
-        for index, view in enumerate(views)
-    ]
-
-
 def _plan(key: PostKey, result: Mapping[str, Any]) -> NewPlan | None:
     """The plan a reply showing the record `result` makes (ADR 0016), or None. Worked out before anything is posted:
     whatever goes wrong here makes no plan, and never keeps a reply that was sent from being recorded."""
@@ -2319,52 +2245,6 @@ def _plan(key: PostKey, result: Mapping[str, Any]) -> NewPlan | None:
         _log_failure("plan", key.ts, error)
         return None
     return None if made is None else NewPlan(*made)
-
-
-def _retry_after(error: Exception) -> int:
-    """The seconds a rate-limited Slack call asks to wait (its Retry-After header), or 0. The worker waits
-    between steps and never inside a call, so the instance lock keeps its heartbeat."""
-    headers: Any = getattr(getattr(error, "response", None), "headers", None) or {}
-    try:
-        stated = next(value for name, value in dict(headers).items() if str(name).lower() == "retry-after")
-        return min(max(int(stated), 0), RETRY_FOR_SECONDS)
-    except (StopIteration, TypeError, ValueError):
-        return 0
-
-
-def _outage(error: Exception) -> bool:
-    """A failure of what the worker reads or writes through, not of the request or receipt itself: InvenTree, the
-    network, the disk. It is likely to fail every other one too, so they all wait."""
-    return isinstance(error, InvenTreeError | TimeoutError) or _transient(error)
-
-
-def _described(error: Exception) -> str:
-    """The class, and for the connector's own errors their message (keys, states and fixed text only)."""
-    if isinstance(error, NotRebuilt | ValueError | AssertionError | StateConflict):
-        return f"{type(error).__name__}: {error}"
-    return type(error).__name__
-
-
-def _transient(error: Exception) -> bool:
-    """A failure that may pass by itself: the database busy or locked, a full disk, an I/O or network error. Any
-    other error is a bug or a payload that will fail the same way again."""
-    return isinstance(error, sqlite3.OperationalError | OSError)
-
-
-def _code(error: Exception) -> str:
-    """A short outcome code for an error: its class name only, never its message."""
-    name = re.sub(r"(?<!^)(?=[A-Z])", "_", type(error).__name__).lower()
-    return "error_" + re.sub(r"[^a-z0-9_]", "", name)[:58]
-
-
-def _slack_code(error: Exception) -> str:
-    """Slack's error code when Slack answered with one (`is_archived`, `channel_not_found`), else `_code`."""
-    response: Any = getattr(error, "response", None)
-    try:
-        code = response.get("error") if response is not None else None
-    except (AttributeError, TypeError):
-        code = None
-    return code if isinstance(code, str) and re.fullmatch(r"[a-z0-9_]{1,64}", code) else _code(error)
 
 
 def _log_failure(what: str, which: object, error: Exception) -> None:
