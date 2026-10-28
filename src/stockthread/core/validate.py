@@ -17,6 +17,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Collection, Sequence
 from decimal import Decimal, InvalidOperation
+from typing import NamedTuple
 
 from stockthread.core.model import (
     CandidateMovement,
@@ -658,30 +659,14 @@ def _one_clause(movement: CandidateMovement, text: str) -> set[ReviewReason]:
     Smith job got the drops"; not "for the Smith job", which says why). An item counts
     where its quantity is stated. A list under a heading ("Van 3 from shelf A:" then a line per item) has no rival
     and passes, as does another movement after the last clause."""
-    starts = [0] + [m.end() for m in _CLAUSE_END.finditer(text)]
+    span = _span(movement, text)
+    if span is None:
+        return set()
+    starts, lines, places, sides, first, last = span
 
     def clauses(found: list[re.Match[str]]) -> set[int]:
-        return {sum(start <= m.start() for start in starts) - 1 for m in found}
+        return _clauses(starts, found)
 
-    lines = [
-        [
-            m
-            for m in _occurrences(item.item_text, text)
-            if item.quantity is None or item.quantity in _stated(text[: m.start()])
-        ]
-        for item in movement.line_items
-        if item.item_text
-    ]
-    places = {
-        side: _occurrences(place, text)
-        for side, place in (("source", movement.source_text), ("destination", movement.destination_text))
-        if place
-    }
-    sides = {side: clauses(found) for side, found in places.items()}
-    fields = [found for found in (*map(clauses, lines), *sides.values()) if found]  # one not in the text is doubted
-    if not fields or set.intersection(*fields):
-        return set()
-    first, last = min(set.union(*fields)), max(set.union(*fields))
     # A line's own words run from where its quantity may start, never before its clause, to the end of its item.
     own = [
         (
@@ -722,6 +707,66 @@ def _one_clause(movement: CandidateMovement, text: str) -> set[ReviewReason]:
         or any(first <= n <= last and n not in set().union(*sides.values()) for n in clauses(places_named))
     )
     return {_rule(ReasonCode.MOVEMENT_UNCLEAR, DETAIL_MIXED)} if rival else set()
+
+
+class _Span(NamedTuple):
+    """The clauses a movement draws on, when no single one holds all of its fields."""
+
+    starts: list[int]
+    lines: list[list[re.Match[str]]]
+    places: dict[str, list[re.Match[str]]]
+    sides: dict[str, set[int]]
+    first: int
+    last: int
+
+
+def _clauses(starts: list[int], found: list[re.Match[str]]) -> set[int]:
+    return {sum(start <= m.start() for start in starts) - 1 for m in found}
+
+
+def _span(movement: CandidateMovement, text: str) -> _Span | None:
+    """Where the movement's fields are in the folded text, and the first and last clause they are in; None when
+    one clause holds them all, or none of them is in the text."""
+    starts = [0] + [m.end() for m in _CLAUSE_END.finditer(text)]
+    lines = [
+        [
+            m
+            for m in _occurrences(item.item_text, text)
+            if item.quantity is None or item.quantity in _stated(text[: m.start()])
+        ]
+        for item in movement.line_items
+        if item.item_text
+    ]
+    places = {
+        side: _occurrences(place, text)
+        for side, place in (("source", movement.source_text), ("destination", movement.destination_text))
+        if place
+    }
+    sides = {side: _clauses(starts, found) for side, found in places.items()}
+    fields = [found for found in (*(_clauses(starts, found) for found in lines), *sides.values()) if found]
+    if not fields or set.intersection(*fields):
+        return None  # a field not in the text is doubted
+    return _Span(starts, lines, places, sides, min(set.union(*fields)), max(set.union(*fields)))
+
+
+def clauses_drawn_on(movement: CandidateMovement, text: str) -> tuple[str, ...]:
+    """The clauses, from the first to the last, of a movement whose fields no single clause holds all of (as
+    `_one_clause`), with the movement's own items and places, and anything after "for", blanked out by commas; none
+    when one clause holds them all. The caller looks in them for a rival place only the catalog knows: "took 2 ONTs
+    to van 3, Riverside Apartments got 4 drops" read as 2 ONTs and 4 drops to van 3 (T6)."""
+    text = _folded(text)
+    span = _span(movement, text)
+    if span is None:
+        return ()
+    own = [m for item in movement.line_items if item.item_text for m in _occurrences(item.item_text, text)]
+    own += [m for found in span.places.values() for m in found]
+    blanked = list(text)
+    for m in own:
+        blanked[m.start() : m.end()] = "," * (m.end() - m.start())
+    ends = [*span.starts[1:], len(text)]
+    drawn_on = ("".join(blanked[span.starts[n] : ends[n]]) for n in range(span.first, span.last + 1))
+    # A place after "for" says why, not where, as in `_one_clause`: "to van 3 for Riverside Apartments".
+    return tuple(re.sub(r"(?<!\w)for(?!\w).*", lambda m: "," * len(m.group(0)), clause) for clause in drawn_on)
 
 
 def _contradictions(movement: CandidateMovement) -> set[ReviewReason]:

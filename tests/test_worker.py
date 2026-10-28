@@ -22,7 +22,7 @@ from stockthread import trail
 from stockthread import worker as worker_module
 from stockthread.config import Settings, parse_settings
 from stockthread.core import extract_rules, resolve
-from stockthread.core.matching import Catalog, LocationRecord, PartRecord, locations_named
+from stockthread.core.matching import Alias, Catalog, LocationRecord, PartRecord, locations_named
 from stockthread.core.model import (
     CandidateMovement,
     Extraction,
@@ -42,7 +42,7 @@ from stockthread.core.model import (
 )
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import STATUS_OK, SourcePick, StockItem, Take
-from stockthread.core.validate import DETAIL_OTHER_AUTHOR, DETAIL_PLACE_NAMED, DETAIL_SOURCE_LEFT_OUT
+from stockthread.core.validate import DETAIL_MIXED, DETAIL_OTHER_AUTHOR, DETAIL_PLACE_NAMED, DETAIL_SOURCE_LEFT_OUT
 from stockthread.inventree import InvenTreeError
 from stockthread.llm.extract import NoReading, ProviderError
 from stockthread.plan_record import plan_hash, views_of
@@ -3704,6 +3704,90 @@ def test_a_destination_the_post_names_only_loosely_does_not_account_for_a_named_
     movement = record.result["movements"][0]
     assert movement["source"] is None
     assert {"code": "implied_source", "source": "rule", "detail": DETAIL_PLACE_NAMED} in movement["reasons"]
+
+
+RIVERSIDE = replace(
+    CATALOG,
+    locations=(*CATALOG.locations, LocationRecord(14, "Riverside Apartments")),
+    location_aliases=(Alias("the warehouse", 10),),
+)
+
+
+def _mixed_reading(
+    store: Store,
+    clock: Clock,
+    text: str,
+    source: str | None = "main stock",
+    *others: CandidateMovement,
+    catalog: Catalog = RIVERSIDE,
+) -> dict[str, Any]:
+    lines = (LineItem("Disc 40", Decimal(2)), LineItem("ONT 100", Decimal(4)))
+    both = CandidateMovement(MovementType.TAKE_TO_VEHICLE, lines, source, "truck 1")
+    catalog = replace(catalog, default_sources={MovementType.TAKE_TO_VEHICLE: 10})
+    worker = Worker(
+        approving(), store, OWNER, FakeSlack(), lambda: catalog, clock, llm=FakeLLM(Extraction(MODEL, (both, *others)))
+    )
+    enqueue(store, message(ROOT, text))
+    read_and_answered(worker, clock)
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    return cast(dict[str, Any], record.result["movements"][0])
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "took 2 Disc 40 from main stock to truck 1\nRiverside Apartments got 4 ONT 100",
+        "took 2 Disc 40 from main stock to truck 1, 4 ONT 100 riverside apartments",
+    ],
+)
+def test_a_clause_that_names_another_stock_location_is_a_rival(store: Store, clock: Clock, text: str) -> None:
+    """T6: the reading puts both lines on truck 1, but the second clause names Riverside Apartments, a place the
+    rules cannot tell by its words: the movement may mix two, so it waits for a person."""
+    movement = _mixed_reading(store, clock, text)
+    assert {"code": "movement_unclear", "source": "rule", "detail": DETAIL_MIXED} in movement["reasons"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "took 2 Disc 40 and 4 ONT 100 from main stock to truck 1. Riverside Apartments is next",
+        "took 2 Disc 40 from main stock to truck 1, the warehouse had 4 ONT 100 too",
+        "took 2 Disc 40 and 4 ONT 100 from main stock to truck 1 for Riverside Apartments",
+    ],
+)
+def test_a_stock_location_outside_the_movements_clauses_or_one_of_its_places_is_no_rival(
+    store: Store, clock: Clock, text: str
+) -> None:
+    """ "the warehouse" is an alias of main stock, the movement's source, so it names no other place."""
+    movement = _mixed_reading(store, clock, text)
+    assert DETAIL_MIXED not in {reason["detail"] for reason in movement["reasons"]}
+
+
+def test_the_default_source_named_in_another_clause_is_no_rival(store: Store, clock: Clock) -> None:
+    movement = _mixed_reading(store, clock, "took 2 Disc 40 to truck 1, main stock had 4 ONT 100 too", None)
+    assert DETAIL_MIXED not in {reason["detail"] for reason in movement["reasons"]}
+
+
+def test_the_default_source_is_a_rival_for_a_movement_that_states_another(store: Store, clock: Clock) -> None:
+    """The reading takes both lines from shelf B, but the second clause names main stock, the default source: the
+    default is no place of a movement that states its own, so the 4 ONT 100 may come from main stock."""
+    shelved = replace(RIVERSIDE, locations=(*RIVERSIDE.locations, LocationRecord(12, "Shelf B")))
+    text = "took 2 Disc 40 from shelf B to truck 1, 4 ONT 100 main stock"
+    movement = _mixed_reading(store, clock, text, "shelf B", catalog=shelved)
+    assert {"code": "movement_unclear", "source": "rule", "detail": DETAIL_MIXED} in movement["reasons"]
+
+
+def test_a_movement_to_the_rival_does_not_hide_it(store: Store, clock: Clock) -> None:
+    """The model reads both lines to truck 1 and adds a movement to Riverside Apartments: the rival is still not one
+    of the first movement's places."""
+    there = CandidateMovement(
+        MovementType.TAKE_TO_SITE, (LineItem("ONT 100", Decimal(4)),), None, "Riverside Apartments"
+    )
+    text = "took 2 Disc 40 from main stock to truck 1\nRiverside Apartments got 4 ONT 100"
+    movement = _mixed_reading(store, clock, text, "main stock", there)
+    assert {"code": "movement_unclear", "source": "rule", "detail": DETAIL_MIXED} in movement["reasons"]
 
 
 @pytest.mark.parametrize(("text", "reads"), [("2 Disc 40 shelf B to truck 1, 1 ONT 100 to truck 1", 1), (SHUFFLED, 0)])

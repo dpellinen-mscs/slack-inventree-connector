@@ -25,6 +25,7 @@ from stockthread.core.model import (
 from stockthread.core.validate import (
     DETAIL_MIXED,
     DETAIL_SOURCE_LEFT_OUT,
+    clauses_drawn_on,
     in_stocking_unit,
     photo_not_read,
     stocking_unit,
@@ -981,6 +982,30 @@ def test_a_rival_site_with_no_place_word_and_no_spare_number_is_seen(text: str) 
     lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(4)))
     movement = take(line_items=lines, source_text="main stock" if "main stock" in text else None)
     assert mixed(movement, text)
+
+
+def test_the_clauses_a_mixed_movement_draws_on_are_given_without_its_own_items_and_places() -> None:
+    """The worker looks in them for a stock location the rules cannot tell is a place (T6)."""
+    lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(4)))
+    text = "took 2 Disc 40 to Truck 1\nRiverside Apartments got 4 Disc 60\nsee you at 5"
+    assert clauses_drawn_on(take(line_items=lines, source_text=None), text) == (
+        "took 2 ,,,,,,, to ,,,,,,,\n",
+        "riverside apartments got 4 ,,,,,,,\n",
+    )
+    text = "took 2 Disc 40, 4 Disc 60 to Truck 1 for Riverside Apartments"
+    assert clauses_drawn_on(take(line_items=lines, source_text=None), text)[-1] == " 4 ,,,,,,, to ,,,,,,, " + "," * 24
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "took 2 Disc 40 to truck 1",
+        "took 2 Disc 40 to truck 1. Riverside Apartments got 4 Disc 60",
+        "Truck 1: 2 Disc 40",
+    ],
+)
+def test_a_movement_one_clause_holds_draws_on_no_other(text: str) -> None:
+    assert clauses_drawn_on(take(source_text=None), text) == ()
 
 
 @pytest.mark.parametrize(

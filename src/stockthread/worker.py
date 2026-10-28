@@ -104,9 +104,11 @@ from stockthread.core.requests import UNDOABLE, RequestState
 from stockthread.core.resolve import LineStock, SourcePick, StockItem, resolve_lines
 from stockthread.core.typed_answers import read_typed_answer, replay_typed, takes_typed_answer
 from stockthread.core.validate import (
+    DETAIL_MIXED,
     DETAIL_OTHER_AUTHOR,
     DETAIL_PLACE_NAMED,
     DETAIL_SOURCE_LEFT_OUT,
+    clauses_drawn_on,
     in_stocking_unit,
     photo_not_read,
     validate,
@@ -1762,6 +1764,11 @@ class Worker:
             if n in effects.types or n in effects.retyped or stocking != _stocking(view.items, catalog):
                 reasons = self._reasons(movement, extraction, messages, late, others, stocking)
                 reasons = _place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
+                # Unreachable with a rival pending today: its confirm is a reading question, asked before any
+                # whose answer recomputes, and a reading that changes starts the answers over. Kept so that a
+                # recompute reads the post as the first pass did.
+                picked = (effects.places.get((n, "source")), effects.places.get((n, "destination")))
+                reasons = _rival_named(movement, picked, _post_text(messages), catalog, poster, reasons)
             source = effects.places.get((n, "source"))
             if source is None:
                 # A picked type takes its own default source, or none.
@@ -1974,6 +1981,7 @@ class Worker:
             stocking = _stocking(items, catalog)
             reasons = self._reasons(movement, extraction, messages, late, others, stocking)
             reasons = _place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
+            reasons = _rival_named(movement, (), _post_text(messages), catalog, poster, reasons)
             source = _location(movement.source_text, catalog, poster) or _default_source(movement, catalog, reasons)
             reasons = _by_default(reasons, source)
             views.append(
@@ -2311,6 +2319,43 @@ def _place_left_out(
         return tuple(reasons)
     marked = replace(unstated, detail=DETAIL_PLACE_NAMED)
     return tuple(marked if reason == unstated else reason for reason in reasons)
+
+
+def _rival_named(
+    movement: CandidateMovement,
+    picked: Sequence[Match | None],
+    text: str,
+    catalog: Catalog,
+    poster: str,
+    reasons: Sequence[ReviewReason],
+) -> tuple[ReviewReason, ...]:
+    """The reasons, with `validate.DETAIL_MIXED` added when a clause the movement draws on from another
+    (`validate.clauses_drawn_on`) names a stock location that is not one of its places: "took 2 ONTs to van 3,
+    Riverside Apartments got 4 drops" read as 6 items to van 3. The rules know vehicles, jobs and sites by their
+    words; a place named by neither ("Riverside Apartments") only the catalog knows (T6). Its places are its source
+    and destination as read or `picked` by a person (source first), and its type's default source when it states
+    none and none was picked. Unlike in `_place_left_out`, a
+    destination of the post's other movements is no place of its own: a model could add a movement to Riverside
+    Apartments to hide the rival."""
+    mixed = ReviewReason(ReasonCode.MOVEMENT_UNCLEAR, ReasonSource.RULE, DETAIL_MIXED)
+    if mixed in reasons:
+        return tuple(reasons)
+    drawn_on = clauses_drawn_on(movement, text)
+    if not drawn_on:
+        return tuple(reasons)
+    places = [
+        *picked,
+        _location(movement.source_text, catalog, poster),
+        _location(movement.destination_text, catalog, poster),
+    ]
+    mine = {place.record for place in places if place is not None and place.record is not None}
+    default = catalog.default_sources.get(movement.movement_type)
+    if default is not None and movement.source_text is None and (not picked or picked[0] is None):
+        mine.add(default)  # only a movement that takes its source from the default: "from shelf B" does not
+    # One search over all of them: each reads the whole catalog. A line break ends a name as a comma does.
+    if not locations_named("\n".join(drawn_on), catalog, poster) - mine:
+        return tuple(reasons)
+    return (*reasons, mixed)
 
 
 def _default_source(movement: CandidateMovement, catalog: Catalog, reasons: Sequence[ReviewReason]) -> Match | None:

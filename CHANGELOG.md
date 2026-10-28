@@ -25,6 +25,11 @@ reply too long to show in full carries no Apply button. An approved plan is neve
   source as left out (T19). No recorded corpus post changes. A name that holds punctuation itself ("Cage (north)",
   "Shelf B: top") is found across it, as "pulled 2 ONTs cage (north) to van 3"; other names still stop at a comma,
   colon, bracket or full stop.
+- A reading that draws its fields from several clauses now waits for a person when one of those clauses names
+  another stock location by its name, full path or alias, with no vehicle, job or site word (T6): "took 2 ONTs to
+  van 3, Riverside Apartments got 4 drops" read as 2 ONTs and 4 drops to van 3. Before, only a vehicle, job or site
+  word, a place word or a spare number made such a clause a rival. "for Riverside Apartments" says why and is
+  none, nor is the movement's own source or destination, or its default source when it states no other.
 - A take to a site is written with no click only when its destination is under one of the new `locations.sites`
   paths (such as `["Sites"]`). Unset, the default, every take to a site waits for Apply, and `check-setup` warns with
   writes on. A return read as a take to a site no longer puts stock back on a shelf unasked (#199, #210, ADR 0022).
