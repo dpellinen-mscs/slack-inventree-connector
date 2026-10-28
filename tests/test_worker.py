@@ -3714,11 +3714,16 @@ RIVERSIDE = replace(
 
 
 def _mixed_reading(
-    store: Store, clock: Clock, text: str, source: str | None = "main stock", *others: CandidateMovement
+    store: Store,
+    clock: Clock,
+    text: str,
+    source: str | None = "main stock",
+    *others: CandidateMovement,
+    catalog: Catalog = RIVERSIDE,
 ) -> dict[str, Any]:
     lines = (LineItem("Disc 40", Decimal(2)), LineItem("ONT 100", Decimal(4)))
     both = CandidateMovement(MovementType.TAKE_TO_VEHICLE, lines, source, "truck 1")
-    catalog = replace(RIVERSIDE, default_sources={MovementType.TAKE_TO_VEHICLE: 10})
+    catalog = replace(catalog, default_sources={MovementType.TAKE_TO_VEHICLE: 10})
     worker = Worker(
         approving(), store, OWNER, FakeSlack(), lambda: catalog, clock, llm=FakeLLM(Extraction(MODEL, (both, *others)))
     )
@@ -3763,6 +3768,15 @@ def test_a_stock_location_outside_the_movements_clauses_or_one_of_its_places_is_
 def test_the_default_source_named_in_another_clause_is_no_rival(store: Store, clock: Clock) -> None:
     movement = _mixed_reading(store, clock, "took 2 Disc 40 to truck 1, main stock had 4 ONT 100 too", None)
     assert DETAIL_MIXED not in {reason["detail"] for reason in movement["reasons"]}
+
+
+def test_the_default_source_is_a_rival_for_a_movement_that_states_another(store: Store, clock: Clock) -> None:
+    """The reading takes both lines from shelf B, but the second clause names main stock, the default source: the
+    default is no place of a movement that states its own, so the 4 ONT 100 may come from main stock."""
+    shelved = replace(RIVERSIDE, locations=(*RIVERSIDE.locations, LocationRecord(12, "Shelf B")))
+    text = "took 2 Disc 40 from shelf B to truck 1, 4 ONT 100 main stock"
+    movement = _mixed_reading(store, clock, text, "shelf B", catalog=shelved)
+    assert {"code": "movement_unclear", "source": "rule", "detail": DETAIL_MIXED} in movement["reasons"]
 
 
 def test_a_movement_to_the_rival_does_not_hide_it(store: Store, clock: Clock) -> None:

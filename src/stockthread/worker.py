@@ -1764,6 +1764,9 @@ class Worker:
             if n in effects.types or n in effects.retyped or stocking != _stocking(view.items, catalog):
                 reasons = self._reasons(movement, extraction, messages, late, others, stocking)
                 reasons = _place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
+                # Unreachable with a rival pending today: its confirm is a reading question, asked before any
+                # whose answer recomputes, and a reading that changes starts the answers over. Kept so that a
+                # recompute reads the post as the first pass did.
                 picked = (effects.places.get((n, "source")), effects.places.get((n, "destination")))
                 reasons = _rival_named(movement, picked, _post_text(messages), catalog, poster, reasons)
             source = effects.places.get((n, "source"))
@@ -2330,7 +2333,8 @@ def _rival_named(
     (`validate.clauses_drawn_on`) names a stock location that is not one of its places: "took 2 ONTs to van 3,
     Riverside Apartments got 4 drops" read as 6 items to van 3. The rules know vehicles, jobs and sites by their
     words; a place named by neither ("Riverside Apartments") only the catalog knows (T6). Its places are its source
-    and destination as read or `picked` by a person, and its type's default source. Unlike in `_place_left_out`, a
+    and destination as read or `picked` by a person (source first), and its type's default source when it states
+    none and none was picked. Unlike in `_place_left_out`, a
     destination of the post's other movements is no place of its own: a model could add a movement to Riverside
     Apartments to hide the rival."""
     mixed = ReviewReason(ReasonCode.MOVEMENT_UNCLEAR, ReasonSource.RULE, DETAIL_MIXED)
@@ -2345,8 +2349,9 @@ def _rival_named(
         _location(movement.destination_text, catalog, poster),
     ]
     mine = {place.record for place in places if place is not None and place.record is not None}
-    if movement.movement_type in catalog.default_sources:
-        mine.add(catalog.default_sources[movement.movement_type])
+    default = catalog.default_sources.get(movement.movement_type)
+    if default is not None and movement.source_text is None and (not picked or picked[0] is None):
+        mine.add(default)  # only a movement that takes its source from the default: "from shelf B" does not
     # One search over all of them: each reads the whole catalog. A line break ends a name as a comma does.
     if not locations_named("\n".join(drawn_on), catalog, poster) - mine:
         return tuple(reasons)

@@ -29,7 +29,7 @@ reply too long to show in full carries no Apply button. An approved plan is neve
   another stock location by its name, full path or alias, with no vehicle, job or site word (T6): "took 2 ONTs to
   van 3, Riverside Apartments got 4 drops" read as 2 ONTs and 4 drops to van 3. Before, only a vehicle, job or site
   word, a place word or a spare number made such a clause a rival. "for Riverside Apartments" says why and is
-  none, nor is the movement's own source, destination or default source.
+  none, nor is the movement's own source or destination, or its default source when it states no other.
 - A take to a site is written with no click only when its destination is under one of the new `locations.sites`
   paths (such as `["Sites"]`). Unset, the default, every take to a site waits for Apply, and `check-setup` warns with
   writes on. A return read as a take to a site no longer puts stock back on a shelf unasked (#199, #210, ADR 0022).
