@@ -318,35 +318,48 @@ def _spellings(name: str) -> list[str]:
     return sorted(spellings)
 
 
+_NameIndex = dict[tuple[int, str, str], list[tuple[int, list[set[str]]]]]
+
+
+def _named_in(said: list[set[str]], index: _NameIndex) -> set[int]:
+    """The records whose indexed name `said` holds word for word, by `_same`."""
+    lengths = sorted({length for length, _, _ in index})
+    found = set()
+    for at in range(len(said)):
+        for length in (length for length in lengths if at + length <= len(said)):
+            window = said[at : at + length]
+            keys = {(length, first, last) for first in window[0] for last in window[-1]}
+            for pk, wanted in (entry for key in keys for entry in index.get(key, ())):
+                if pk not in found and _same(window, wanted):
+                    found.add(pk)
+    return found
+
+
 def locations_named(text: str, catalog: Catalog, poster: str) -> frozenset[int]:
     """The stock locations a text names anywhere in it: a location's name, full path or one of its aliases word for
     word (as rule 2, in any of its `_spellings`), or "my truck" for the poster's vehicle. No typos and no single
     words of a longer name: "the truck" names no one truck. A name does not run across punctuation: "Sam's truck: 2
-    d40s" does not name truck 2, and a name that holds such punctuation ("Cage (north)") is never found."""
+    d40s" does not name truck 2. Only a name that holds such punctuation itself ("Cage (north)") may: "2 ONTs cage
+    (north) to van 3"."""
     locations, _, aliases, vocabulary = _location_rules(catalog, poster)
     names: dict[int, list[str]] = {pk: [location.name, location.path] for pk, location in locations.items()}
     for alias in aliases:
         if alias.record in names:
             names[alias.record].append(alias.text)
     # Indexed by length and a form of the first and the last word, so a post is read once, not once per name.
-    index: dict[tuple[int, str, str], list[tuple[int, list[set[str]]]]] = {}
+    plain: _NameIndex = {}
+    punctuated: _NameIndex = {}
     for pk, texts in names.items():
-        for spelling in {spelling for name in texts for spelling in _spellings(name)}:
+        spellings = {(bool(_PUNCTUATION.search(name)), spelling) for name in texts for spelling in _spellings(name)}
+        for crosses, spelling in spellings:
             wanted = _text_words(spelling)
             for first in wanted[0]:
                 for last in wanted[-1]:
-                    index.setdefault((len(wanted), first, last), []).append((pk, wanted))
-    lengths = sorted({length for length, _, _ in index})
+                    (punctuated if crosses else plain).setdefault((len(wanted), first, last), []).append((pk, wanted))
     found = set()
     for piece in _PUNCTUATION.split(text):
-        said = _text_words(piece)
-        for at in range(len(said)):
-            for length in (length for length in lengths if at + length <= len(said)):
-                window = said[at : at + length]
-                keys = {(length, first, last) for first in window[0] for last in window[-1]}
-                for pk, wanted in (entry for key in keys for entry in index.get(key, ())):
-                    if pk not in found and _same(window, wanted):
-                        found.add(pk)
+        found |= _named_in(_text_words(piece), plain)
+    found |= _named_in(_text_words(text), punctuated)
     vehicle = catalog.vehicles.get(poster)
     if vehicle in locations:
         for mine in re.finditer(rf"\b{_MY_VEHICLE}\b", " ".join(words(text))):
