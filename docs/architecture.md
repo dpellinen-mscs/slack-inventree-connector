@@ -88,6 +88,7 @@ Every module under `src/stockthread/`:
 | `run.py` | `stockthread run`: starts the listener, catch-up and the worker, and wires InvenTree into them. |
 | `worker.py` | The worker: from the queue to dry runs, questions, approvals, writes and receipts. |
 | `places.py` | A movement's source and destination: the default source, and when a named place keeps it out. |
+| `views.py` | A reading's movements as a reply shows them: parts, places and review reasons, then the answers' effects. |
 | `dry_run.py` | The dry-run record a reply decided, and what the worker reads back from it. |
 | `picking.py` | Which lines of a dry run are settled enough to read stock for, and the stock items they act on. |
 | `failures.py` | How the worker sorts the errors it catches: transient, an outage, or a rate limit; their short codes. |

@@ -99,7 +99,7 @@ def test_a_name_typed_in_the_thread_teaches_the_posts_own_text_only_when_it_fits
 
 
 def test_a_name_typed_for_a_line_the_post_named_nothing_for_teaches_nothing_new() -> None:
-    # The record's item text is then the typed name (`worker._typed_line`): an exact match of it needs no alias.
+    # The record's item text is then the typed name (`views._typed_line`): an exact match of it needs no alias.
     assert taught(take("PC-1", matched(MatchRule.EXACT, 3), named={0: "pc-1"})) == []
 
 
