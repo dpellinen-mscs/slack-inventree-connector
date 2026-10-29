@@ -25,6 +25,9 @@ reply too long to show in full carries no Apply button. An approved plan is neve
   source as left out (T19). No recorded corpus post changes. A name that holds punctuation itself ("Cage (north)",
   "Shelf B: top") is found across it, as "pulled 2 ONTs cage (north) to van 3"; other names still stop at a comma,
   colon, bracket or full stop.
+- The typo "form" now counts as "from" where a source is looked for (T19): "2 ONTs form shelf B to van 3" marks the
+  source as left out when the reading has none, and a source read after it is on the source side. "the form", "a
+  form" and "small form factor" stay nouns. No recorded corpus post changes.
 - A reading that draws its fields from several clauses now waits for a person when one of those clauses names
   another stock location by its name, full path or alias, with no vehicle, job or site word (T6): "took 2 ONTs to
   van 3, Riverside Apartments got 4 drops" read as 2 ONTs and 4 drops to van 3. Before, only a vehicle, job or site

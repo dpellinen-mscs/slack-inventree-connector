@@ -83,7 +83,11 @@ _TYPE_VERBS = {
 }
 """A movement type that changes stock in a way a take cannot needs one of its words in the text."""
 _TAKE_OUTS = (MovementType.TAKE_TO_VEHICLE, MovementType.TAKE_TO_SITE)
-_FROM = r"(?<!\w)(from|frm|off|out\s+of|out-of|out the|outta|outa)"
+_FROM = (
+    r"(?<!\w)(from|frm|off|out\s+of|out-of|out the|outta|outa"
+    r"|(?<!\bthe )(?<!\bthis )(?<!\bthat )(?<!\ba )(?<!\bsmall )form(?![-\s]+factor))"
+)
+"""Words that open a source. "form" is a typo of "from", but not as a noun: "the form", "small form factor"."""
 _ARROW = r"(?<![-\u2013\u2014=])[-\u2013\u2014=]+(>|&gt;)|[→⇒⟶➔➜➝➞➡⇨]|(?<=\w) (>|&gt;) (?=\w)"
 """An arrow, typed or a symbol: "->", "=>", a dash then ">", "→", "⇒", "⟶", or a lone ">" between two words. Slack
 sends a typed ">" as "&gt;"."""
