@@ -28,6 +28,7 @@ editing history.
 | [0020](0020-default-source.md) | A configured default source settles an implied source | Accepted |
 | [0021](0021-a-pick-teaches-nothing.md) | A pick among candidates teaches nothing; an admin adds an alias by hand | Accepted |
 | [0022](0022-sites-for-take-to-site.md) | A take to a site applies with no click only when its destination is under a configured site | Accepted |
+| [0023](0023-inventree-1-6-tested.md) | InvenTree 1.6 joins the tested range; 1.4 stays in it | Accepted |
 
 ## Template
 

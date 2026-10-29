@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Start a disposable InvenTree server in Docker for the integration tests.
 #
-#   tests/integration/start-inventree.sh inventree/inventree:1.5.6
-#   STOCKTHREAD_IT_DB=postgres tests/integration/start-inventree.sh inventree/inventree:1.5.6
+#   tests/integration/start-inventree.sh inventree/inventree:1.6.3
+#   STOCKTHREAD_IT_DB=postgres tests/integration/start-inventree.sh inventree/inventree:1.6.3
 #   tests/integration/start-inventree.sh --stop
 #   STOCKTHREAD_IT_NAME=stockthread-soak STOCKTHREAD_IT_PORT=8010 tests/integration/start-inventree.sh ...
 #

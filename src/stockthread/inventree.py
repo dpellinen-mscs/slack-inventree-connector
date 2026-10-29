@@ -29,8 +29,8 @@ from stockthread.core.marker import Marker, is_marker_id, marked
 
 MIN_API_VERSION = 511
 """InvenTree 1.4.3, the oldest release CI tests. (1.4.4 has the same API version but no Docker image.)"""
-MAX_API_VERSION = 530
-"""InvenTree 1.5.6, the newest release CI tests."""
+MAX_API_VERSION = 561
+"""InvenTree 1.6.3, the newest release CI tests."""
 
 DEPLETING_MARKER_FOUND_FROM = 530
 """Measured (`test_char_deplete_deletes_item_keeps_history`): API 511 (1.4.3) does not find the marker of a removal

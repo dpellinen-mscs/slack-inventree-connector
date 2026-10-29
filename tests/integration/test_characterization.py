@@ -275,7 +275,10 @@ def test_char_transfer_merge_setting_on(api: RawApi, scratch: Scratch) -> None:
 DB = os.environ.get("STOCKTHREAD_IT_DB", "sqlite")
 """The database behind the test server: `sqlite` or `postgres` (set by start-inventree.sh)."""
 NOTES_LIMIT = 512
-"""Measured: history notes are `varchar(512)`. PostgreSQL enforces it, SQLite does not."""
+"""Measured: history notes are `varchar(512)`. PostgreSQL enforces it, SQLite does not before API 561."""
+NOTES_REFUSED_FROM = 561
+"""Measured on API 561 (1.6.3), both databases: notes over the limit are a 400 on `notes` and nothing changes.
+API 530 (1.5.6) and 511 (1.4.3) let the database decide. The versions in between are not tested."""
 OVERLONG_COMMITS_FROM = 530
 """Measured on PostgreSQL: API 530 (1.5.6) commits the stock change of a request whose notes are too long, and
 answers 500. API 511 (1.4.3) changes nothing."""
@@ -285,7 +288,8 @@ API 530 (1.5.6) serializes them."""
 
 
 def test_char_notes_length(api: RawApi, scratch: Scratch) -> None:
-    """Notes up to 512 characters are stored whole. Longer notes: SQLite stores them, PostgreSQL answers 500.
+    """Notes up to 512 characters are stored whole. Longer notes: from API 561 a 400; before it SQLite stores them
+    and PostgreSQL answers 500.
 
     The connector keeps its notes under 200 characters (design section 7).
     """
@@ -295,10 +299,18 @@ def test_char_notes_length(api: RawApi, scratch: Scratch) -> None:
     body = {"items": [{"pk": item["pk"], "quantity": 1}], "location": scratch.other, "notes": notes}
     assert api.post("/api/stock/transfer/", body).status_code == 201
     assert set(search(api, prefix)) == {notes}  # a partial transfer writes two entries
-    if DB == "sqlite":
-        prefix = f"longer-{uuid.uuid4().hex}-"
-        notes = prefix + "n" * 20_000
-        body = {"items": [{"pk": item["pk"], "quantity": 1}], "location": scratch.other, "notes": notes}
+    prefix = f"longer-{uuid.uuid4().hex}-"
+    notes = prefix + "n" * 20_000
+    body = {"items": [{"pk": item["pk"], "quantity": 1}], "location": scratch.other, "notes": notes}
+    if api.get("/api/")["apiVersion"] >= NOTES_REFUSED_FROM:
+        response = api.post("/api/stock/transfer/", body)
+        assert (response.status_code, response.json()) == (
+            400,
+            {"notes": [f"Ensure this field has no more than {NOTES_LIMIT} characters."]},
+        )
+        assert search(api, prefix) == []
+        assert float(scratch.item(item["pk"])["quantity"]) == 4
+    elif DB == "sqlite":
         assert api.post("/api/stock/transfer/", body).status_code == 201
         assert set(search(api, prefix)) == {notes}  # a partial transfer writes two entries
 
@@ -307,7 +319,8 @@ def test_char_notes_length(api: RawApi, scratch: Scratch) -> None:
 @pytest.mark.parametrize("path", ["/api/stock/transfer/", "/api/stock/add/", "/api/stock/remove/"])
 def test_char_overlong_notes_write_without_history(api: RawApi, scratch: Scratch, path: str) -> None:
     """Notes over the limit give a 500. On API 530 (1.5.6) the stock change is still committed, without the history
-    entry that would carry the marker. On API 511 (1.4.3) nothing changes.
+    entry that would carry the marker. On API 511 (1.4.3) nothing changes. From API 561 (1.6.3) the notes are
+    checked first: a 400 and nothing changes.
 
     This is why a 5xx is an unknown outcome, and why a marker that is not found proves nothing (design section 7).
     """
@@ -318,11 +331,12 @@ def test_char_overlong_notes_write_without_history(api: RawApi, scratch: Scratch
         body["location"] = scratch.other
     history_before = len(api.get("/api/stock/track/", item=item["pk"]))
     response = api.post(path, body)
-    assert response.status_code == 500
+    api_version = api.get("/api/")["apiVersion"]
+    assert response.status_code == (400 if api_version >= NOTES_REFUSED_FROM else 500)
     assert search_rows(api, marker) == []
     assert len(api.get("/api/stock/track/", item=item["pk"])) == history_before
     committed = {"/api/stock/transfer/": 9, "/api/stock/add/": 11, "/api/stock/remove/": 9}[path]
-    expected = committed if api.get("/api/")["apiVersion"] >= OVERLONG_COMMITS_FROM else 10
+    expected = committed if OVERLONG_COMMITS_FROM <= api_version < NOTES_REFUSED_FROM else 10
     assert float(scratch.item(item["pk"])["quantity"]) == expected
 
 
