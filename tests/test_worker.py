@@ -3687,6 +3687,27 @@ def test_a_place_another_movement_of_the_post_goes_to_keeps_the_default(store: S
     assert record.result["movements"][0]["source"] is not None
 
 
+def test_a_place_another_movement_goes_to_is_still_a_source_where_this_movement_names_it(
+    store: Store, clock: Clock
+) -> None:
+    """T19: truck 1 is the first take's destination, but the second take's own clause names it with no "from"
+    word, so it may be the source the reading left out. Only the second take loses the default."""
+    trucks = replace(SHELVED, locations=(*SHELVED.locations, LocationRecord(15, "Vehicles/Truck 2")))
+    first = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(2)),), None, "truck 1")
+    second = CandidateMovement(MovementType.TAKE_TO_VEHICLE, (LineItem("Disc 40", Decimal(1)),), None, "truck 2")
+    llm = FakeLLM(Extraction(MODEL, (first, second)))
+    worker = Worker(approving(), store, OWNER, FakeSlack(), lambda: trucks, clock, llm=llm)
+    enqueue(store, message(ROOT, "took 2 Disc 40 to truck 1, then 1 Disc 40 truck 1 to truck 2"))
+    read_and_answered(worker, clock)
+    record = store.dry_run(KEY)
+    assert record is not None
+    assert record.result is not None
+    took, passed_on = record.result["movements"]
+    assert took["source"] is not None
+    assert passed_on["source"] is None
+    assert {"code": "implied_source", "source": "rule", "detail": DETAIL_PLACE_NAMED} in passed_on["reasons"]
+
+
 def test_a_destination_the_post_names_only_loosely_does_not_account_for_a_named_place(
     store: Store, clock: Clock
 ) -> None:

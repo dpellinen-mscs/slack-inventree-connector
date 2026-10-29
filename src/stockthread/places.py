@@ -18,7 +18,13 @@ from stockthread.core.model import (
     ReasonSource,
     ReviewReason,
 )
-from stockthread.core.validate import DETAIL_MIXED, DETAIL_PLACE_NAMED, DETAIL_SOURCE_LEFT_OUT, clauses_drawn_on
+from stockthread.core.validate import (
+    DETAIL_MIXED,
+    DETAIL_PLACE_NAMED,
+    DETAIL_SOURCE_LEFT_OUT,
+    clauses_drawn_on,
+    clauses_held,
+)
 
 
 def located(text: str | None, catalog: Catalog, poster: str) -> Match | None:
@@ -49,6 +55,7 @@ def place_left_out(
     movement: CandidateMovement,
     readings: Sequence[CandidateMovement],
     named: Callable[[], frozenset[int]],
+    text: str,
     catalog: Catalog,
     poster: str,
     reasons: Sequence[ReviewReason],
@@ -57,20 +64,32 @@ def place_left_out(
     the text names (`named`: the post's `locations_named`, read once per post) a stock location that is neither a
     destination of the post's movements (`readings`; matched by name or alias: "the shelf" may be any shelf) nor the
     movement type's default source: "pulled 2 ONTs shelf B to van 3" states shelf B as the source (T19), so the
-    default must not settle it."""
+    default must not settle it. Another movement's destination accounts for a place only outside the clauses that
+    hold this movement (`validate.clauses_held`): in "took 2 ONTs to van 3, then 1 ONT van 3 to the Smith job" the
+    second take names van 3 as its source."""
     unstated = ReviewReason(ReasonCode.IMPLIED_SOURCE, ReasonSource.RULE)
     default = catalog.default_sources.get(movement.movement_type)
     if movement.source_text is not None or default is None or unstated not in reasons:
         return tuple(reasons)  # with no default the source is asked for anyway
-    sides = {default}
+    mine = {default, *_sure(movement.destination_text, catalog, poster)}
+    sides = set(mine)
     for read in readings:  # a destination of the post's movements, found for sure, is accounted for
-        destination = located(read.destination_text, catalog, poster)
-        if destination is not None and destination.rule in _SURE and destination.record is not None:
-            sides.add(destination.record)
-    if not named() - sides:
+        sides.update(_sure(read.destination_text, catalog, poster))
+    left_out = bool(named() - sides)
+    if not left_out and named() & (sides - mine):
+        # One search over the movement's clauses, as the whole post's: each reads the whole catalog.
+        held = clauses_held(movement, text)
+        left_out = bool(held) and bool(locations_named("\n".join(held), catalog, poster) - mine)
+    if not left_out:
         return tuple(reasons)
     marked = replace(unstated, detail=DETAIL_PLACE_NAMED)
     return tuple(marked if reason == unstated else reason for reason in reasons)
+
+
+def _sure(text: str | None, catalog: Catalog, poster: str) -> set[int]:
+    """The location `text` is, when a rule in `_SURE` finds it."""
+    place = located(text, catalog, poster)
+    return {place.record} if place is not None and place.rule in _SURE and place.record is not None else set()
 
 
 def rival_named(

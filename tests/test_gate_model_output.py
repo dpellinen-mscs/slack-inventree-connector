@@ -423,3 +423,53 @@ def test_a_take_mixed_with_a_rival_sentence_is_never_approved_by_the_policy(migr
     assert verdict(migrated, tmp_path / "apart.db", case, read_apart) is Verdict.ALLOWED
     output = {"readable": True, "movements": [_take(4, "main stock", "truck 1")], "post_flags": []}
     assert verdict(migrated, tmp_path / "stockthread.db", case, output) is not Verdict.ALLOWED
+
+
+@pytest.mark.parametrize(
+    ("text", "allowed"),
+    [
+        ("took 2 Disc 40 to truck 1, then 1 Disc 40 to smith residence", True),
+        ("took 2 Disc 40 to truck 1, then 1 Disc 40 truck 1 to smith residence", False),
+        ("took 2 Disc 40 to truck 1. 1 Disc 40 truck 1 to smith residence", False),
+        ("2 Disc 40 to truck 1 and 1 Disc 40 to smith residence", True),
+        ("took 2 Disc 40 to truck 1 then took 1 Disc 40 to smith residence", True),
+    ],
+)
+def test_a_source_that_is_another_take_s_destination_is_not_settled_by_the_default(
+    migrated: Path, tmp_path: Path, text: str, allowed: bool
+) -> None:
+    """T19: the second take names truck 1, the first take's destination, in its own clause: the reading left out its
+    source, so the default (main stock) must not stand in for it."""
+    case = {
+        **TWO_TAKES,
+        "id": "synthetic-onward-take",
+        "post": {
+            "channel": CHANNELS[0],
+            "user": SAM,
+            "messages": [{"ts": "1790009003.000100", "user": SAM, "text": text}],
+        },
+    }
+    takes = [_take(2, "main stock", "truck 1"), _take(1, "main stock", "smith residence")]
+    for each in takes:
+        each["source_text"] = None
+    output = {"readable": True, "movements": takes, "post_flags": []}
+    assert (verdict(migrated, tmp_path / "stockthread.db", case, output) is Verdict.ALLOWED) is allowed
+
+
+def test_a_take_made_up_to_a_stated_source_does_not_account_for_it(migrated: Path, tmp_path: Path) -> None:
+    """T19: a model that leaves out "truck 1" as the source and adds a take to truck 1, so that truck 1 is a
+    destination of the post, does not get the default: the text does not put truck 1 after "to" (the side check)."""
+    case = {
+        **TWO_TAKES,
+        "id": "synthetic-made-up-take",
+        "post": {
+            "channel": CHANNELS[0],
+            "user": SAM,
+            "messages": [{"ts": "1790009004.000100", "user": SAM, "text": "took 1 Disc 40 truck 1 to smith residence"}],
+        },
+    }
+    takes = [_take(1, "main stock", "smith residence"), _take(1, "main stock", "truck 1")]
+    for each in takes:
+        each["source_text"] = None
+    output = {"readable": True, "movements": takes, "post_flags": []}
+    assert verdict(migrated, tmp_path / "stockthread.db", case, output) is not Verdict.ALLOWED
