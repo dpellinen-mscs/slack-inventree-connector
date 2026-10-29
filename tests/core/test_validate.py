@@ -26,6 +26,7 @@ from stockthread.core.validate import (
     DETAIL_MIXED,
     DETAIL_SOURCE_LEFT_OUT,
     clauses_drawn_on,
+    clauses_held,
     in_stocking_unit,
     photo_not_read,
     stocking_unit,
@@ -1006,6 +1007,25 @@ def test_the_clauses_a_mixed_movement_draws_on_are_given_without_its_own_items_a
     )
     text = "took 2 Disc 40, 4 Disc 60 to Truck 1 for Riverside Apartments"
     assert clauses_drawn_on(take(line_items=lines, source_text=None), text)[-1] == " 4 ,,,,,,, to ,,,,,,, " + "," * 24
+
+
+def test_the_clauses_that_hold_a_movement_are_given_without_its_own_items() -> None:
+    """The worker looks in them for a place the movement names but does not read (T19)."""
+    text = "took 2 Disc 40 to Truck 1, then 1 Disc 40 truck 1 to Truck 2"
+    second = take(line_items=(LineItem("Disc 40", Decimal(1)),), source_text=None, destination_text="truck 2")
+    assert clauses_held(second, text) == (" 1 ,,,,,,, truck 1 to truck 2",)
+    first = take(source_text=None, destination_text="truck 1")
+    assert clauses_held(first, text) == ("took 2 ,,,,,,, to truck 1,",)
+    lines = (LineItem("Disc 40", Decimal(2)), LineItem("Disc 60", Decimal(4)))
+    spread = take(line_items=lines, source_text=None, destination_text="truck 1")
+    assert clauses_held(spread, "took 2 Disc 40\nand 4 Disc 60 to truck 1") == (
+        "took 2 ,,,,,,,\n",
+        "and",
+        " 4 ,,,,,,, to truck 1",
+    )
+    assert clauses_held(take(source_text=None, destination_text="van 9"), "nothing here") == ()
+    twice = "1 Disc 40 to truck 2, 2 Disc 40 to truck 1, then 1 Disc 40 truck 1 to truck 2"
+    assert clauses_held(second, twice) == ("1 ,,,,,,, to truck 2,", " 1 ,,,,,,, truck 1 to truck 2")
 
 
 @pytest.mark.parametrize(

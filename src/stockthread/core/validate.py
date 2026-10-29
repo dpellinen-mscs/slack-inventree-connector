@@ -728,9 +728,9 @@ def _clauses(starts: list[int], found: list[re.Match[str]]) -> set[int]:
     return {sum(start <= m.start() for start in starts) - 1 for m in found}
 
 
-def _span(movement: CandidateMovement, text: str) -> _Span | None:
-    """Where the movement's fields are in the folded text, and the first and last clause they are in; None when
-    one clause holds them all, or none of them is in the text."""
+def _fields(movement: CandidateMovement, text: str) -> tuple[_Span, list[set[int]]]:
+    """Where the movement's fields are in the folded text, and the clauses each field is in (a field not in the
+    text is left out). The span's first and last clause are those of every field's clauses."""
     starts = [0] + [m.end() for m in _CLAUSE_END.finditer(text)]
     lines = [
         [
@@ -748,9 +748,36 @@ def _span(movement: CandidateMovement, text: str) -> _Span | None:
     }
     sides = {side: _clauses(starts, found) for side, found in places.items()}
     fields = [found for found in (*(_clauses(starts, found) for found in lines), *sides.values()) if found]
+    every = set().union(*fields)
+    return _Span(starts, lines, places, sides, min(every, default=0), max(every, default=0)), fields
+
+
+def _span(movement: CandidateMovement, text: str) -> _Span | None:
+    """Where the movement's fields are in the folded text, and the first and last clause they are in; None when
+    one clause holds them all, or none of them is in the text."""
+    span, fields = _fields(movement, text)
     if not fields or set.intersection(*fields):
         return None  # a field not in the text is doubted
-    return _Span(starts, lines, places, sides, min(set.union(*fields)), max(set.union(*fields)))
+    return span
+
+
+def clauses_held(movement: CandidateMovement, text: str) -> tuple[str, ...]:
+    """The clauses that hold the movement's fields, with its own items blanked out by commas: every clause that
+    holds them all (a movement read twice is in each), else those from the first to the last that any of them is in;
+    none when none of them is in the text. The caller looks in them for a stock location the movement names but does
+    not read: in "took 2 ONTs to van 3, then 1 ONT van 3 to the Smith job" the second take names van 3, the first
+    take's destination (T19)."""
+    text = _folded(text)
+    span, fields = _fields(movement, text)
+    if not fields:
+        return ()
+    held = sorted(set.intersection(*fields)) or range(span.first, span.last + 1)
+    blanked = list(text)
+    for item in movement.line_items:
+        for m in _occurrences(item.item_text, text) if item.item_text else ():
+            blanked[m.start() : m.end()] = "," * (m.end() - m.start())
+    ends = [*span.starts[1:], len(text)]
+    return tuple("".join(blanked[span.starts[n] : ends[n]]) for n in held)
 
 
 def clauses_drawn_on(movement: CandidateMovement, text: str) -> tuple[str, ...]:

@@ -19,6 +19,10 @@ reply too long to show in full carries no Apply button. An approved plan is neve
   "outta", "frm", "src: shelf B", "@ shelf B", "at the yard", and the arrows "=>", "⇒", "⟶", a dash then ">" and a
   lone ">" between words now mark the source as left out, so the thread asks for it. Typed arrows are read as Slack
   sends them ("-&gt;"), which also makes a typed "->" count as a destination word again.
+- A configured `policy.default_source` no longer settles a source the text names with no marker word in a
+  movement's own clause when that place is another movement's destination (T19): in "took 2 ONTs to van 3, then 1
+  ONT van 3 to the Smith job" the second take's source was main stock and the policy could apply it with no click;
+  now its source is asked for. The first take keeps the default.
 - A configured `policy.default_source` no longer settles a source the text names with no marker word: a post that
   names a stock location word for word (its name, full path ("Shelves/B"), an alias, or "my truck") that is neither a
   destination of the post's movements nor the default ("pulled 2 ONTs shelf B to van 3", "van 3 gave me 2") marks the

@@ -45,7 +45,7 @@ def reading_views(
         items = [_part(item.item_text, catalog, poster) for item in movement.line_items]
         stocking = _stocking(items, catalog)
         reasons = _reasons(movement, extraction, messages, late, others, stocking, max_quantity=max_quantity)
-        reasons = place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
+        reasons = place_left_out(movement, extraction.movements, named, _post_text(messages), catalog, poster, reasons)
         reasons = rival_named(movement, (), _post_text(messages), catalog, poster, reasons)
         source = located(movement.source_text, catalog, poster) or default_source(movement, catalog, reasons)
         reasons = by_default(reasons, source)
@@ -127,7 +127,9 @@ def with_answers(
             )
         if n in effects.types or n in effects.retyped or stocking != _stocking(view.items, catalog):
             reasons = _reasons(movement, extraction, messages, late, others, stocking, max_quantity=max_quantity)
-            reasons = place_left_out(movement, extraction.movements, named, catalog, poster, reasons)
+            reasons = place_left_out(
+                movement, extraction.movements, named, _post_text(messages), catalog, poster, reasons
+            )
             # Unreachable with a rival pending today: its confirm is a reading question, asked before any
             # whose answer recomputes, and a reading that changes starts the answers over. Kept so that a
             # recompute reads the post as the first pass did.
