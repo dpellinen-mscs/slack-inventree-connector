@@ -779,6 +779,12 @@ def test_a_long_run_of_dashes_is_read_in_linear_time(dashes: str) -> None:
     assert time.perf_counter() - started < 1
 
 
+@pytest.mark.parametrize("text", ["took 2 breakers form shop to van 3", "took 2 breakers FORM the shop to van 3"])
+def test_a_source_after_the_typo_form_is_on_the_source_side(text: str) -> None:
+    """ "form" is read as "from" wherever a source is looked for (T19)."""
+    assert codes(breakers(), text) == set()
+
+
 @pytest.mark.parametrize(
     ("text", "left_out"),
     [
@@ -804,6 +810,12 @@ def test_a_long_run_of_dashes_is_read_in_linear_time(dashes: str) -> None:
         ("2 Disc 40 from\u200bshelf B to truck 1", True),
         ("2 Disc 40 outta shelf B to truck 1", True),
         ("2 Disc 40 frm shelf B to truck 1", True),
+        ("2 Disc 40 form shelf B to truck 1", True),  # a typo of "from"
+        ("grabbed 2 Disc 40 Form: shelf B, to truck 1", True),
+        ("2 small form factor PCs to truck 1", False),  # a noun, not a typo
+        ("2 SFF form-factor PCs to truck 1", False),
+        ("signed the form for 2 Disc 40 to truck 1", False),
+        ("2 Disc 40 to truck 1, a form went with them", False),
         ("source: shelf B, 2 Disc 40 to truck 1", True),
         ("truck 1 => truck 2: 2 Disc 40", True),
         ("truck 1 ⇒ truck 2: 2 Disc 40", True),
