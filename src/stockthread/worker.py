@@ -372,6 +372,24 @@ StockReader = Callable[[Sequence[tuple[int, int]]], Mapping[tuple[int, int], Seq
 """(part, location) pairs -> the stock items of that part in that location itself, in stock (`stock_items`)."""
 
 
+@dataclass(frozen=True)
+class _Reading:
+    """A post as `Worker._read_post` read it, with its answers replayed: what `Worker._send_reply` replies on."""
+
+    extraction: Extraction
+    views: Sequence[MovementView]  # as answered, before stock is read
+    effects: Effects
+    reading: str  # the digest a later reading is compared with
+    record: Callable[[Sequence[MovementView], bool], dict[str, Any]]  # the dry-run record of these views
+    catalog: Catalog
+    poster: str
+    late: bool
+    kept: bool  # the reading that stands was kept rather than asked for again
+    standing: Mapping[str, Any] | None  # see `Worker._standing`
+    read: tuple[str, ...]  # every message of the post
+    answers: int  # as `Store.post_answers_through`, after an answer this reading took
+
+
 @dataclass
 class Worker:
     settings: Settings
@@ -1312,7 +1330,6 @@ class Worker:
         # the next revision.
         changes = self.store.post_changes_through(key)
         answers = self.store.post_answers_through(key)
-        age = now - seconds(post.newest_ts)
         # The first dry run fixes when the plan expires (stored as the post's `plan_from`): a revision's movement is
         # as old as the post as first read, and a new reply does not make a week-old movement current.
         plan_from = post.newest_ts if post.revision == 1 else post.plan_from or post.key.ts
@@ -1339,6 +1356,26 @@ class Worker:
                 answers=answers,
             )
             return True
+        reading = self._read_post(post, now, read, changes, answers, ask=ask)
+        if isinstance(reading, bool):
+            return reading
+        self._send_reply(post, now, reading, plan_from, changes)
+        return True
+
+    def _read_post(
+        self,
+        post: WaitingPost,
+        now: Decimal,
+        read: tuple[Sequence[MessageInput], str, bool, Mapping[str, str]],
+        changes: int,
+        answers: int,
+        *,
+        ask: bool,
+    ) -> _Reading | bool:
+        """The reading of the post, with its answers replayed. A bool: the post got no reading, and `_reply`
+        returns it (True: the post was concluded without a reply; False: it waits for a model call)."""
+        key = post.key
+        age = now - seconds(post.newest_ts)
         all_messages, poster, caught_up, authors = read
         everything = tuple(message.ts for message in all_messages)
         history = self.store.dry_run_history(key) if post.revision > 1 else []
@@ -1449,17 +1486,36 @@ class Worker:
             except Exception as error:
                 self._broken(post, now, error, extraction.extractor, read=everything, changes=changes, answers=answers)
                 return True
-            break
-        if extraction is None or catalog is None:  # the last try reads every message and always ends the loop
-            raise RuntimeError("no reading after every try")
+            return _Reading(
+                extraction,
+                views,
+                effects,
+                reading,
+                record,
+                catalog,
+                poster=poster,
+                late=late,
+                kept=kept is not None,
+                standing=standing,
+                read=everything,
+                answers=answers,
+            )
+        # The last try reads every message and always ends the loop.
+        raise RuntimeError("no reading after every try")
+
+    def _send_reply(self, post: WaitingPost, now: Decimal, read: _Reading, plan_from: str, changes: int) -> None:
+        """Post the reply for the post as read, with the one question it needs or its apply button. Or record
+        that it reads as the reply that stands, which is not posted again."""
+        key = post.key
+        extraction, catalog, effects, answers = read.extraction, read.catalog, read.effects, read.answers
         # Stock is read last, for the parts and places as answered, and is not part of the reading: answers stay
         # with a post whose stock changed. Outside the `try`: a failed read is an outage, and the post waits.
-        stock = self._read_stock(views) if effects.rejected is None else {}
+        stock = self._read_stock(read.views) if effects.rejected is None else {}
         try:
-            views = with_stock(views, stock, effects.stock)
+            views = with_stock(read.views, stock, effects.stock)
             decided = {
-                **record(views, late),
-                "reading": reading,  # before the answers: what a later reading is compared with
+                **read.record(views, read.late),
+                "reading": read.reading,  # before the answers: what a later reading is compared with
                 "answers": effects.applied,
                 "ignored": effects.ignored,
                 "rejected": effects.rejected,
@@ -1470,10 +1526,10 @@ class Worker:
             if effects.rejected is not None:
                 body = rejection_notice()
             else:
-                body = dry_run_reply(views, parts, locations, revised=standing is not None, answered=kept is not None)
+                body = dry_run_reply(views, parts, locations, revised=read.standing is not None, answered=read.kept)
         except Exception as error:
-            self._broken(post, now, error, extraction.extractor, read=everything, changes=changes, answers=answers)
-            return True
+            self._broken(post, now, error, extraction.extractor, read=read.read, changes=changes, answers=answers)
+            return
         # The one question the post needs goes in the reply, with buttons whose ids are stored with it. A
         # question that cannot be put is left out: the reply still says what needs a human. A rejected reading
         # asks nothing: a corrected post or thread reply is read afresh.
@@ -1489,12 +1545,12 @@ class Worker:
                     question_json(question),
                     question.approver_only,
                     [(button_id, choice_json(choice)) for button_id, choice in zip(ids, buttons, strict=True)],
-                    poster=poster,
-                    expires_from=plan_from,  # the plan's one expiry, as `since` above
+                    poster=read.poster,
+                    expires_from=plan_from,  # the plan's one expiry, as `since` in `_reply`
                 )
         except Exception as error:
             _log_failure("question", key.ts, error)
-        if standing is not None and same_reading(standing, decided):
+        if read.standing is not None and same_reading(read.standing, decided):
             log.info("post %s: revision %d reads as the reply that stands", key.ts, post.revision)
             self._finish(
                 key,
@@ -1502,12 +1558,12 @@ class Worker:
                 extraction.extractor,
                 decided,
                 post.revision,
-                everything,
+                read.read,
                 changes,
                 answers,
-                plan=_plan(key, standing),  # the reply that stands is the one a plan acts on
+                plan=_plan(key, read.standing),  # the reply that stands is the one a plan acts on
             )
-            return True
+            return
         plan = _plan(key, decided)
         apply = False
         if plan is not None and asked is None and self.approve_click is not None:
@@ -1528,7 +1584,7 @@ class Worker:
                 decided,
                 body,
                 post.revision,
-                everything,
+                read.read,
                 changes,
                 answers,
                 question=asked,
@@ -1536,7 +1592,6 @@ class Worker:
                 apply=apply,
             ),
         )
-        return True
 
     def _replay(
         self,
