@@ -139,12 +139,13 @@ async def test_step_two_excuses_a_depleting_write_only_by_inventrees_404(
     assert [(f.kind, f.marker) for f in findings] == [(FindingKind.MISSING, unsent)]
 
 
-async def test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_refused(
+async def test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_read_again(
     api: RawApi, scratch: Scratch, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The history list comes newest first, so an entry written between two pages of a search pushes the last row
-    of the first page onto the second: it comes back twice, and the count grows. The reader refuses that list
-    rather than return it (`InvenTreeReader.list_all`; #220 item 4). Pages of 2 here; the reader's are 100."""
+    of the first page onto the second: it comes back twice, and the count grows. The reader never returns that list
+    (`InvenTreeReader.list_all`; #220 item 4): it reads the whole list again, and refuses one that changes on every
+    read (`MAX_LIST_READS`). Pages of 2 here; the reader's are 100."""
     item = scratch.stock(10)
     marker_id = new_marker_id()
     for attempt in (1, 2, 3):
@@ -162,17 +163,18 @@ async def test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_refus
     assert second["results"][0]["pk"] == first["results"][-1]["pk"]
 
     class Interleaved(httpx.AsyncBaseTransport):
-        """The real server, with one more matching entry written after the first page is read."""
+        """The real server, with one more matching entry written after each page in `after` is read."""
 
-        def __init__(self) -> None:
+        def __init__(self, after: set[int]) -> None:
             self.inner = httpx.AsyncHTTPTransport()
+            self.after = after
             self.pages = 0
 
         async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
             response = await self.inner.handle_async_request(request)
             if request.url.path == "/api/stock/track/":
                 self.pages += 1
-                if self.pages == 1:
+                if self.pages in self.after:
                     await response.aread()
                     write_one_more()
             return response
@@ -180,7 +182,15 @@ async def test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_refus
     monkeypatch.setattr(inventree, "PAGE_SIZE", 2)
     token = Path(os.environ["STOCKTHREAD_IT_TOKEN_FILE"]).read_text(encoding="utf-8").strip()
     settings = InvenTreeSettings(url=os.environ["STOCKTHREAD_IT_URL"])
-    async with InvenTreeReader(settings, SecretStr(token), transport=Interleaved()) as reader:
+    once = Interleaved(after={1})
+    async with InvenTreeReader(settings, SecretStr(token), transport=once) as reader:
+        assert len(await reader.marker_entries(marker_id)) == 3  # all three, from the second, whole read
+    assert once.pages == 2 + 3  # refused on page 2; then 5 entries (ours and two quotes) in 3 pages
+
+    # A write after the first page of every read: 3 more entries, so 8 in 4 pages by the last read.
+    always = Interleaved(after={1, 3, 5})
+    async with InvenTreeReader(settings, SecretStr(token), transport=always) as reader:
         with pytest.raises(InvenTreeError, match="the list changed while it was read"):
             await reader.marker_entries(marker_id)
         assert len(await reader.marker_entries(marker_id)) == 3  # read again once it holds still: all three
+    assert always.pages == 3 * 2 + 4
