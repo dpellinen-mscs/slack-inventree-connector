@@ -1176,54 +1176,46 @@ class Worker:
 
     def _take_down_apply(self, button: ApplyButton, closed: str, approved_by: str | None) -> bool:
         """Edit the reply; False when it is gone or carries no Apply button to take out."""
-        found = self.slack.conversations_replies(
-            channel=button.post.channel_id,
-            ts=button.post.ts,
-            oldest=button.message_ts,
-            latest=button.message_ts,
-            inclusive=True,
-            limit=2,  # the thread's root always comes first
+        return self._close_reply(
+            button.post.channel_id, button.post.ts, button.message_ts, without_apply, apply_closed(closed, approved_by)
         )
-        reply = next((m for m in found["messages"] if m.get("ts") == button.message_ts), None)
-        if reply is None or not posted_by_app(reply, self.settings.slack.app_id):
-            return False
-        blocks = reply.get("blocks") or []
-        closing = apply_closed(closed, approved_by)
-        kept = without_apply(blocks)
-        if kept is None:
-            return _closed_already(blocks, closing)  # an edit whose call ran out of time went through
-        self.slack.chat_update(
-            channel=button.post.channel_id,
-            ts=button.message_ts,
-            text=str(reply.get("text") or ""),
-            blocks=[*kept, closing],
-        )
-        return True
 
     def _take_down(self, item: ReviewItem, answered_by: str | None) -> bool:
         """Edit the reply; False when it is gone or carries no question to take out."""
         if item.message_ts is None:  # closed_with_buttons lists none
             return False
-        found = self.slack.conversations_replies(
-            channel=item.channel_id,
-            ts=item.post.ts,
-            oldest=item.message_ts,
-            latest=item.message_ts,
-            inclusive=True,
-            limit=2,  # the thread's root always comes first
-        )
-        reply = next((m for m in found["messages"] if m.get("ts") == item.message_ts), None)
-        if reply is None or not posted_by_app(reply, self.settings.slack.app_id):
-            return False
-        blocks = reply.get("blocks") or []
         # Listed while open only once expired (closed_with_buttons).
         expired = item.status is QuestionStatus.OPEN
         closing = question_closed(answered_by if item.status is QuestionStatus.ANSWERED else None, expired=expired)
-        kept = without_question(blocks)
+        return self._close_reply(item.channel_id, item.post.ts, item.message_ts, without_question, closing)
+
+    def _close_reply(
+        self,
+        channel: str,
+        thread_ts: str,
+        message_ts: str,
+        without: Callable[[Sequence[Any]], list[Any] | None],
+        closing: dict[str, Any],
+    ) -> bool:
+        """Read the reply back from Slack and edit it to end with `closing`, with what `without` takes out gone; False
+        when it is gone, is not this app's, or has nothing to take out."""
+        found = self.slack.conversations_replies(
+            channel=channel,
+            ts=thread_ts,
+            oldest=message_ts,
+            latest=message_ts,
+            inclusive=True,
+            limit=2,  # the thread's root always comes first
+        )
+        reply = next((m for m in found["messages"] if m.get("ts") == message_ts), None)
+        if reply is None or not posted_by_app(reply, self.settings.slack.app_id):
+            return False
+        blocks = reply.get("blocks") or []
+        kept = without(blocks)
         if kept is None:
             return _closed_already(blocks, closing)  # an edit whose call ran out of time went through
         self.slack.chat_update(
-            channel=item.channel_id, ts=item.message_ts, text=str(reply.get("text") or ""), blocks=[*kept, closing]
+            channel=channel, ts=message_ts, text=str(reply.get("text") or ""), blocks=[*kept, closing]
         )
         return True
 
