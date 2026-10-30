@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT
+import itertools
 import json
 from collections.abc import Callable
 
@@ -10,6 +11,7 @@ from stockthread.config import InvenTreeSettings
 from stockthread.core.marker import AttemptKind, Marker
 from stockthread.inventree import (
     MAX_API_VERSION,
+    MAX_LIST_READS,
     MIN_API_VERSION,
     PAGE_SIZE,
     InvenTreeError,
@@ -322,22 +324,62 @@ async def test_list_all_refuses_an_empty_page_before_the_count_is_reached() -> N
     async with client:
         with pytest.raises(InvenTreeError, match="changed while it was read"):
             await client.parts()
-    assert len(recorder.requests) == 1
+    assert len(recorder.requests) == MAX_LIST_READS
+    assert {request.url.params["offset"] for request in recorder.requests} == {"0"}
 
 
-@pytest.mark.parametrize("second_count", [PAGE_SIZE + 1, PAGE_SIZE + 5])
-async def test_list_all_refuses_a_count_that_changes_between_pages(second_count: int) -> None:
-    counts = iter([PAGE_SIZE + 3, second_count])
+@pytest.mark.parametrize("step", [-2, 2])
+async def test_list_all_refuses_a_count_that_changes_between_pages(step: int) -> None:
+    counts = itertools.count(PAGE_SIZE + 30, step)  # every read is two pages, and every page a new count
 
     def handler(request: httpx.Request) -> httpx.Response:
         count = next(counts)
         size = PAGE_SIZE if request.url.params["offset"] == "0" else 3
         return httpx.Response(200, json={"count": count, "results": [{"pk": 1}] * size})
 
-    client, _ = reader(handler)
+    client, recorder = reader(handler)
     async with client:
         with pytest.raises(InvenTreeError, match="changed while it was read"):
             await client.parts()
+    assert len(recorder.requests) == 2 * MAX_LIST_READS
+
+
+async def test_list_all_reads_a_list_that_changed_again_from_the_start() -> None:
+    # A transfer lands between pages 1 and 2 of the first read (one row gone); the second read is whole. Its rows
+    # alone come back, never a mix of the two reads.
+    first = [{"pk": pk} for pk in range(PAGE_SIZE)], [{"pk": PAGE_SIZE + 1}]
+    second = [{"pk": pk} for pk in range(1, PAGE_SIZE + 1)], [{"pk": PAGE_SIZE + 1}]
+    counts = iter([PAGE_SIZE + 2, PAGE_SIZE + 1, PAGE_SIZE + 1, PAGE_SIZE + 1])
+    rows_read = iter([*first, *second])
+    offsets: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        offsets.append(request.url.params["offset"])
+        return httpx.Response(200, json={"count": next(counts), "results": next(rows_read)})
+
+    client, _ = reader(handler)
+    async with client:
+        rows = await client.parts()
+    assert [row["pk"] for row in rows] == list(range(1, PAGE_SIZE + 2))
+    assert offsets == ["0", str(PAGE_SIZE), "0", str(PAGE_SIZE)]
+
+
+async def test_list_all_reads_again_when_the_count_disagrees_with_an_empty_first_page() -> None:
+    # The count and the rows are two queries: a write that commits between them gives a count with no rows.
+    pages = iter([{"count": 1, "results": []}, {"count": 0, "results": []}])
+    client, recorder = reader(lambda request: httpx.Response(200, json=next(pages)))
+    async with client:
+        assert await client.list_all("/api/stock/") == []
+    assert len(recorder.requests) == 2
+
+
+async def test_list_all_does_not_read_again_for_a_list_it_cannot_trust() -> None:
+    # Only a list that changed is read again; more rows than the count is not a race the next read fixes.
+    client, recorder = reader(respond(body={"count": 1, "results": [{"pk": 1}, {"pk": 2}]}))
+    async with client:
+        with pytest.raises(InvenTreeError, match="rows for a count of"):
+            await client.list_all("/api/stock/")
+    assert len(recorder.requests) == 1
 
 
 @pytest.mark.parametrize(
