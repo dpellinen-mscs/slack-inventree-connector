@@ -1379,11 +1379,14 @@ request shares it.
   an entry that quotes the marker later in its notes is not. A later
   split of the marked item does not copy the entry onto the new item
   (`test_char_a_later_split_does_not_copy_the_marked_entry`). The search
-  refuses a result whose count changed between pages or in which an
+  never returns a result whose count changed between pages or in which an
   entry comes back twice, because offset paging then skipped another.
   Measured: the list comes newest first, so an entry written between two
   pages repeats the last row of the first and grows the count
-  (`test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_refused`).
+  (`test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_read_again`).
+  A list whose count changed is read again from the start, up to three
+  whole reads (`MAX_LIST_READS`), and then refused; rows from two reads
+  are never mixed. This holds for every list the reader reads.
   A repeat with an unchanged count (rows that tie on the ordering) is
   not reproducible from outside; that guard is tested with a mock only.
 - **A marker that is found proves the write happened. A marker that is not
@@ -2117,7 +2120,7 @@ the test suite.
 | `test_char_marker_on_every_entry_type` | The notes reach every history entry a request writes |
 | `test_char_marker_visible_after_response` | Whether history is readable as soon as the server has answered |
 | `test_char_marker_search_is_substring` | The history search matches substrings, and `limit` with `offset` pages through it without overlap |
-| `test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_refused` | An entry written between two pages of a search repeats a row and grows the count, and the reader refuses that list |
+| `test_char_a_search_that_grows_between_pages_repeats_a_row_and_is_read_again` | An entry written between two pages of a search repeats a row and grows the count; the reader reads the list again, and refuses one that changes on every read |
 | `test_char_notes_length` | Notes up to 512 characters are stored whole. Longer ones: a 400 that changes nothing from 1.6.3; before it, SQLite stores them and PostgreSQL answers 500 |
 | `test_char_overlong_notes_write_without_history` | PostgreSQL: on 1.5.6 that 500 still commits the stock change, with no history entry. On 1.4.3 it changes nothing; on 1.6.3 it is a 400 that changes nothing |
 | `test_char_multi_item_request_is_atomic` | One bad line fails the whole request |

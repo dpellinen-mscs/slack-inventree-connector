@@ -42,12 +42,19 @@ MAX_PAGES = 1000
 MAX_ATTEMPTS = 3
 """Attempts for one read that gets HTTP 429. Only reads are ever retried."""
 MAX_RETRY_AFTER_SECONDS = 30.0
+MAX_LIST_READS = 3
+"""Whole reads of one list that changes while it is read, before giving up. A write that lands mid-read (a transfer,
+another process's undo) is the usual cause, and the next read sees the list after it."""
 _API_PATH = re.compile(r"/api/(?:[A-Za-z0-9_-]+/)*")
 """Plain segments only: no dots, no percent escapes, no query. Every InvenTree path ends with a slash."""
 
 
 class InvenTreeError(Exception):
     """A read failed. The message is safe to log: it holds no body and no secret."""
+
+
+class _ListChanged(InvenTreeError):
+    """The list changed while it was read, so the rows read are not one list. Reading it again may succeed."""
 
 
 class ReadOnlyViolation(InvenTreeError):
@@ -152,7 +159,17 @@ class InvenTreeReader:
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def list_all(self, path: str, params: Mapping[str, str | int | bool] | None = None) -> list[dict[str, Any]]:
-        """GET every page of a list endpoint."""
+        """GET every page of a list endpoint. A list that changes while it is read is read again from the start, up to
+        `MAX_LIST_READS` times: rows from two reads are never mixed."""
+        for read in range(1, MAX_LIST_READS + 1):
+            try:
+                return await self._read_pages(path, params)
+            except _ListChanged:
+                if read == MAX_LIST_READS:
+                    raise
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def _read_pages(self, path: str, params: Mapping[str, str | int | bool] | None) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         count: int | None = None
         for _ in range(MAX_PAGES):
@@ -171,7 +188,7 @@ class InvenTreeReader:
             # Offset paging skips or repeats rows when the list changes between pages. A changed count or an early
             # empty page shows that happened, and a partial list must never pass for the whole one.
             if (count is not None and page["count"] != count) or (not batch and len(results) < page["count"]):
-                raise InvenTreeError(f"GET {path}: the list changed while it was read")
+                raise _ListChanged(f"GET {path}: the list changed while it was read")
             count = page["count"]
             results.extend(batch)
             if len(results) >= count:
