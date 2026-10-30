@@ -23,6 +23,8 @@ STEP = Decimal(1).scaleb(-QUANTITY_PLACES)
 DB = os.environ.get("STOCKTHREAD_IT_DB", "sqlite")
 OVERFLOW_STORED_FROM = 530
 """From this API version, SQLite stores an item total past 15 digits (and then cannot read the item)."""
+LINE_ERRORS_KEYED_FROM = 561
+"""Measured: API 561 (1.6.3) keys a 400's line errors by line index (`{"0": {...}}`); 530 and 511 list them."""
 
 
 def _add(api: RawApi, pk: int, quantity: Decimal) -> tuple[int, object]:
@@ -36,13 +38,15 @@ def test_char_quantity_precision_is_refused_not_rounded(api: RawApi, scratch: Sc
     Nothing is rounded and nothing changes. 5 places and 10 digits are accepted.
     """
     item = scratch.stock(1)
-    places = {"items": [{"quantity": ["Ensure that there are no more than 5 decimal places."]}]}
+    keyed = api.get("/api/")["apiVersion"] >= LINE_ERRORS_KEYED_FROM
+    error = {"quantity": ["Ensure that there are no more than 5 decimal places."]}
+    places = {"items": {"0": error} if keyed else [error]}
     assert _add(api, item["pk"], STEP / 10) == (400, places)
     status, body = _add(api, item["pk"], LARGEST + 1)
     assert status == 400
     assert isinstance(body, dict)
     assert list(body) == ["items"]
-    assert "10 digits before the decimal point" in body["items"][0]["quantity"][0]
+    assert "10 digits before the decimal point" in body["items"]["0" if keyed else 0]["quantity"][0]
     assert float(scratch.item(item["pk"])["quantity"]) == 1
     for path, line in (("/api/stock/count/", "1.000001"), ("/api/stock/remove/", "0.000001")):
         body = {"items": [{"pk": item["pk"], "quantity": line}], "notes": "limits"}

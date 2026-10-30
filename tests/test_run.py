@@ -39,7 +39,14 @@ from stockthread.core.matching import Catalog, LocationRecord, PartRecord
 from stockthread.core.model import MovementType, Operation, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
 from stockthread.core.resolve import StockItem
-from stockthread.inventree import InvenTreeError, InvenTreeReader, ServerInfo, VersionCheck, check_version
+from stockthread.inventree import (
+    MAX_API_VERSION,
+    InvenTreeError,
+    InvenTreeReader,
+    ServerInfo,
+    VersionCheck,
+    check_version,
+)
 from stockthread.llm.extract import WithinDeadline
 from stockthread.llm.openai_compatible import OpenAICompatible
 from stockthread.run import CatalogCache, run, with_vehicles
@@ -1303,7 +1310,7 @@ def test_catch_up_that_cannot_open_the_database_keeps_trying_with_its_first_swee
     assert [call["latest"] for call in client.listed] == ["1790000030.000000"]
 
 
-@pytest.mark.parametrize("api_version", [530, 531])
+@pytest.mark.parametrize("api_version", [MAX_API_VERSION, MAX_API_VERSION + 1])
 def test_the_version_check_is_logged_as_a_warning_when_untested(
     tmp_path: Path, stop: threading.Event, caplog: pytest.LogCaptureFixture, api_version: int
 ) -> None:
@@ -1328,7 +1335,11 @@ def approved_request(database: Path) -> RequestKey:
     ("writes", "version", "line"),
     [
         (False, TESTED, "stock writes are off (writes.enabled = false): only dry runs are posted"),
-        (True, check_version(ServerInfo("1.x", 531)), "stock writes are off (this InvenTree is not tested for writes)"),
+        (
+            True,
+            check_version(ServerInfo("1.x", MAX_API_VERSION + 1)),
+            "stock writes are off (this InvenTree is not tested for writes)",
+        ),
     ],
 )
 def test_without_writes_on_and_a_tested_server_the_worker_gets_no_apply_step(

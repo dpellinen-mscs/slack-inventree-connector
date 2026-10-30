@@ -14,6 +14,8 @@ reply too long to show in full carries no Apply button. An approved plan is neve
 
 ### Changed
 
+- InvenTree 1.6.3 (API 561) is tested, on SQLite and PostgreSQL, so stock writes are no longer turned off on it.
+  The tested range is now API 511 to 561 (1.4.3 to 1.6.3).
 - A configured `policy.default_source` no longer settles a source the text names in wording the check missed
   (T19): "from 3rd floor cage", "from 3 boxes in the cage", "from: shelf B", "from (shelf B)", "out the van",
   "outta", "frm", "src: shelf B", "@ shelf B", "at the yard", and the arrows "=>", "⇒", "⟶", a dash then ">" and a

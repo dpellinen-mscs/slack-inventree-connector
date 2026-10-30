@@ -59,7 +59,7 @@ def restricted(api: RawApi) -> Iterator[Any]:
             "username": f"connector-{tag}",
             "first_name": "Stock",
             "last_name": "Thread",
-            "email": "bot@example.com",
+            "email": f"bot-{tag}@example.com",  # unique: API 561 (1.6.3) refuses a second user with one email
         }
         user = api.create("/api/user/", body)["pk"]
         # Measured: `group_ids` in the create request answers 500 (1.4.3 and 1.5.6), so the group is set afterwards.

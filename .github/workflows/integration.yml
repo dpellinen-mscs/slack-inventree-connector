@@ -62,8 +62,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The tested range in src/stockthread/inventree.py: the current stable release and the previous minor.
-        inventree: ["1.4.3", "1.5.6"]
+        # The tested range in src/stockthread/inventree.py: the current stable release and the two minors before it.
+        inventree: ["1.4.3", "1.5.6", "1.6.3"]
         db: [sqlite]
         # PostgreSQL on every pinned version too (design section 5): notes length, atomicity and concurrency differ
         # by database, and 1.4.3's concurrent transfers lose an update only there.
@@ -71,6 +71,8 @@ jobs:
           - inventree: "1.4.3"
             db: postgres
           - inventree: "1.5.6"
+            db: postgres
+          - inventree: "1.6.3"
             db: postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
