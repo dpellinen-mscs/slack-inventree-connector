@@ -50,6 +50,7 @@ from stockthread.core.requests import (
 S = RequestState
 
 MIN_SQLITE = (3, 37, 0)
+BUSY_TIMEOUT_SECONDS = 10
 """STRICT tables."""
 
 MAX_EVENT_ATTEMPTS = 4
@@ -488,11 +489,14 @@ class Store:
         if sqlite3.sqlite_version_info < MIN_SQLITE:
             raise RuntimeError(f"SQLite {'.'.join(map(str, MIN_SQLITE))} or later is needed")
         _create_private(path)
-        connection = sqlite3.connect(path, isolation_level=None, timeout=10)
+        connection = sqlite3.connect(path, isolation_level=None, timeout=BUSY_TIMEOUT_SECONDS)
         try:
             connection.execute("PRAGMA foreign_keys = ON")
             # REPLACE fires DELETE triggers only with this on. The schema also refuses REPLACE by itself.
             connection.execute("PRAGMA recursive_triggers = ON")
+            # Text retention blanks must leave the file too: without this, whether freed content stays on disk is up
+            # to how the platform's SQLite was built.
+            connection.execute("PRAGMA secure_delete = ON")
             _set_wal(connection)
             connection.execute("PRAGMA synchronous = FULL")
             store = cls(connection, clock)
@@ -2305,7 +2309,8 @@ class Store:
     def expire_text(self, owner: str, before: datetime) -> ExpiredText:
         """Blank the message text stored before `before`: the raw body of each finished Slack event, and the result
         of each dry run (first or revision), which quotes words of the post. The rows stay, with their ids, states
-        and times; `audit_log` holds no text and is never touched. Each expiry is audited by id.
+        and times; `audit_log` holds no text and is never touched. Each expiry is audited by id. The text leaves the
+        database file and its -wal file too (`PRAGMA secure_delete`, then a checkpoint).
 
         A post's text is kept while it may still be needed: while the post, any of its dry runs, or any change to one
         of its requests is newer than `before`, and while any request may have a write in flight (`UNSETTLED`) or is
@@ -2362,7 +2367,20 @@ class Store:
             for event_id in events:
                 self._db.execute("UPDATE slack_events SET body = NULL WHERE id = ?", (event_id,))
                 self._audit("retention", "body_expired", slack_event_id=event_id)
+        self._checkpoint_without_waiting()
         return ExpiredText(posts=len(posts), events=len(events))
+
+    def _checkpoint_without_waiting(self) -> None:
+        """Clear the -wal file, where blanked text can still sit in old frames. Every pass of retention tries, also one
+        that blanked nothing, so a reader in the way only delays it to the next pass. It never waits for that reader:
+        a checkpoint under the usual busy timeout can hold up every writer for many seconds."""
+        self._db.execute("PRAGMA busy_timeout = 0")
+        try:
+            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        except sqlite3.OperationalError:
+            pass  # the text is blanked and committed; the next pass tries again
+        finally:
+            self._db.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_SECONDS * 1000}")
 
     # Catch-up after downtime
 

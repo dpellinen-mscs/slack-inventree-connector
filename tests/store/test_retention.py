@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -113,6 +114,44 @@ def test_the_text_of_a_post_done_with_is_blanked_and_its_rows_stay(store: Store,
     )
     assert store.expire_text(OWNER, now() + LATER) == ExpiredText(posts=0, events=0)  # nothing twice
     assert len(stored(path)[2]) == 2
+
+
+def test_blanked_text_leaves_the_database_file_and_its_wal(store: Store, path: Path) -> None:
+    secret = "gatecode-synthetic-7341"
+    assert store.enqueue_event("ev:private", "event", json.dumps({"event": {"text": secret * 500}}))
+    assert store.enqueue_event("ev:short", "event", json.dumps({"event": {"text": secret}}))
+    for claimed in store.claim_events(OWNER, limit=2):
+        store.finish_event(OWNER, claimed.id, EventStatus.DONE)
+    store._db.execute(
+        "PRAGMA wal_checkpoint(TRUNCATE)"
+    ).fetchone()  # the text is in the main file now, as it is by then
+    assert secret.encode() in path.read_bytes()
+    assert store.expire_text(OWNER, now() + LATER).events == 2
+    for file in (path, path.with_name(path.name + "-wal")):
+        assert secret.encode() not in file.read_bytes(), file.name
+
+
+def test_a_reader_in_the_way_delays_the_scrub_of_the_wal_to_a_later_pass_without_a_wait(
+    store: Store, path: Path
+) -> None:
+    secret = "gatecode-synthetic-7342"
+    wal = path.with_name(path.name + "-wal")
+    assert store.enqueue_event("ev:private", "event", json.dumps({"event": {"text": secret}}))
+    [claimed] = store.claim_events(OWNER, limit=1)
+    store.finish_event(OWNER, claimed.id, EventStatus.DONE)
+    reader = sqlite3.connect(path, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM slack_events").fetchone()
+    started = time.monotonic()
+    assert store.expire_text(OWNER, now() + LATER).events == 1
+    assert time.monotonic() - started < 5  # the busy timeout is 10 s
+    assert secret.encode() in wal.read_bytes()  # the reader still needs those frames
+    reader.execute("COMMIT")
+    reader.close()
+    assert store.expire_text(OWNER, now() + LATER) == ExpiredText(posts=0, events=0)  # nothing to blank, still scrubs
+    assert secret.encode() not in wal.read_bytes()
+    assert store.enqueue_event("ev:next", "event", "{}")  # the connection works on as before
+    assert store._db.execute("PRAGMA busy_timeout").fetchone()[0] == 10000
 
 
 def test_text_newer_than_the_cutoff_is_kept(store: Store, path: Path) -> None:
