@@ -493,6 +493,9 @@ class Store:
             connection.execute("PRAGMA foreign_keys = ON")
             # REPLACE fires DELETE triggers only with this on. The schema also refuses REPLACE by itself.
             connection.execute("PRAGMA recursive_triggers = ON")
+            # Text retention blanks must leave the file too: without this, whether freed content stays on disk is up
+            # to how the platform's SQLite was built.
+            connection.execute("PRAGMA secure_delete = ON")
             _set_wal(connection)
             connection.execute("PRAGMA synchronous = FULL")
             store = cls(connection, clock)
@@ -2305,7 +2308,8 @@ class Store:
     def expire_text(self, owner: str, before: datetime) -> ExpiredText:
         """Blank the message text stored before `before`: the raw body of each finished Slack event, and the result
         of each dry run (first or revision), which quotes words of the post. The rows stay, with their ids, states
-        and times; `audit_log` holds no text and is never touched. Each expiry is audited by id.
+        and times; `audit_log` holds no text and is never touched. Each expiry is audited by id. The text leaves the
+        database file and its -wal file too (`PRAGMA secure_delete`, then a checkpoint).
 
         A post's text is kept while it may still be needed: while the post, any of its dry runs, or any change to one
         of its requests is newer than `before`, and while any request may have a write in flight (`UNSETTLED`) or is
@@ -2362,6 +2366,10 @@ class Store:
             for event_id in events:
                 self._db.execute("UPDATE slack_events SET body = NULL WHERE id = ?", (event_id,))
                 self._audit("retention", "body_expired", slack_event_id=event_id)
+        if posts or events:
+            # The blanked text can still sit in old frames of the -wal file. A reader in the way only leaves them
+            # until a later checkpoint: this reports busy, it does not raise.
+            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         return ExpiredText(posts=len(posts), events=len(events))
 
     # Catch-up after downtime

@@ -115,6 +115,21 @@ def test_the_text_of_a_post_done_with_is_blanked_and_its_rows_stay(store: Store,
     assert len(stored(path)[2]) == 2
 
 
+def test_blanked_text_leaves_the_database_file_and_its_wal(store: Store, path: Path) -> None:
+    secret = "gatecode-synthetic-7341"
+    assert store.enqueue_event("ev:private", "event", json.dumps({"event": {"text": secret * 500}}))
+    assert store.enqueue_event("ev:short", "event", json.dumps({"event": {"text": secret}}))
+    for claimed in store.claim_events(OWNER, limit=2):
+        store.finish_event(OWNER, claimed.id, EventStatus.DONE)
+    store._db.execute(
+        "PRAGMA wal_checkpoint(TRUNCATE)"
+    ).fetchone()  # the text is in the main file now, as it is by then
+    assert secret.encode() in path.read_bytes()
+    assert store.expire_text(OWNER, now() + LATER).events == 2
+    for file in (path, path.with_name(path.name + "-wal")):
+        assert secret.encode() not in file.read_bytes(), file.name
+
+
 def test_text_newer_than_the_cutoff_is_kept(store: Store, path: Path) -> None:
     replied(store, plan=False)
     event(store, "ev:dropped", "lunch at noon?", EventStatus.DROPPED)

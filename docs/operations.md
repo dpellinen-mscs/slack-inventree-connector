@@ -16,8 +16,11 @@ directory the connector is started in, which in the quickstart is the checkout t
 - It runs in WAL mode. While the connector runs, `stockthread.db-wal` and `stockthread.db-shm` sit
   next to it, and the newest changes may be in the `-wal` file only. **Copying `stockthread.db` alone
   while the connector runs can give a backup without its newest changes, or a broken one.**
-- Message text is blanked `storage.retention_days` days after a post is done with. Ids, states and the
-  audit log stay. A backup holds whatever text the live file held when it was made.
+- Message text is blanked `storage.retention_days` days after a post is done with, in the file as well as
+  in the rows (`PRAGMA secure_delete`, then a WAL checkpoint). Ids, states and the audit log stay. A backup
+  holds whatever text the live file held when it was made, and blanking never reaches a backup. Text blanked
+  by a version before this one may stay in free space until SQLite reuses it; `VACUUM` with the connector
+  stopped clears it.
 - One connector runs on one database: a second one started on the same file refuses to run while the
   first one's heartbeat is fresh.
 
