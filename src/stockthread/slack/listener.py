@@ -43,6 +43,8 @@ class BotIdentity:
     team_id: str
     bot_id: str
     bot_user_id: str
+    url: str | None = None
+    """The workspace's URL, for links to its messages. None when `auth.test` names none."""
 
 
 class IdentityError(Exception):
@@ -61,7 +63,8 @@ def identify(client: _AuthTest, settings: SlackSettings) -> BotIdentity:
         raise IdentityError("auth.test did not name a bot: use a bot token (xoxb-)")
     if team_id != settings.workspace_id:
         raise IdentityError("the bot token belongs to another workspace than slack.workspace_id")
-    return BotIdentity(team_id, bot_id, user_id)
+    url = result.get("url")
+    return BotIdentity(team_id, bot_id, user_id, url if isinstance(url, str) else None)
 
 
 class ThreadStores:

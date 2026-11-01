@@ -29,6 +29,7 @@ from stockthread.plan_record import plan_of
 from stockthread.run import inventree_steps, policy_approver
 from stockthread.slack.replies import MovementView
 from stockthread.store import DryRunOutcome, NewPlan, Store
+from stockthread.trail import message_key
 from stockthread.writer import InvenTreeWriter
 
 if TYPE_CHECKING:
@@ -139,7 +140,10 @@ def test_the_run_loops_steps_write_once_read_back_and_undo_on_the_real_server(st
     def soon() -> datetime:  # the post's plan expires a day after it
         return datetime.fromtimestamp(1700000300, UTC)
 
-    step, undo = inventree_steps(settings, lambda: vehicles, store, OWNER, beat=lambda: None, clock=soon)
+    step, undo = inventree_steps(
+        settings, lambda: vehicles, store, OWNER, beat=lambda: None, clock=soon,
+        workspace_url="https://acme-fiber.slack.com/",
+    )  # fmt: skip
     approve = policy_approver(settings, lambda: vehicles, store, OWNER, beat=lambda: None)  # the real version check
     judgement = approve(POST)
     assert judgement is not None
@@ -149,4 +153,9 @@ def test_the_run_loops_steps_write_once_read_back_and_undo_on_the_real_server(st
     assert sum(Decimal(str(row["quantity"])) for row in scratch.api.items(scratch.part, scratch.other)) == Decimal(2)
     undone = undo(KEY, movement, SAM)
     assert undone.state is RequestState.UNDONE, undone
+    entries = scratch.api.get("/api/stock/track/", search=store.request(KEY).marker_id, limit=100)["results"]
+    notes = [row["notes"] for row in entries]
+    assert notes  # the apply's entries and the undo's, as the server stored them
+    for note in notes:
+        assert message_key(POST.workspace_id, note.split(" ")[2]) == POST
     assert sum(Decimal(str(row["quantity"])) for row in scratch.api.items(scratch.part, scratch.other)) == Decimal(0)

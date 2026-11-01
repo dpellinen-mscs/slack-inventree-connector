@@ -23,7 +23,7 @@ from decimal import MAX_EMAX, MIN_EMIN, Decimal, localcontext
 from typing import Any
 
 from stockthread.core.marker import Marker
-from stockthread.core.model import Operation
+from stockthread.core.model import Operation, PostKey
 from stockthread.core.resolve import Take
 
 PATHS = {
@@ -46,6 +46,9 @@ past it answers 500 to every read (`test_char_an_add_past_the_stored_digits_brea
 
 _USER = re.compile(r"[UW][A-Z0-9]{2,}")
 _LINK = re.compile(r"https://[!-~]+")
+_WORKSPACE_URL = re.compile(r"https://[A-Za-z0-9.-]+/?")
+_LINK_LIMIT = 120
+"""A link takes at most this much of the notes, which leaves the marker and the user id room under NOTES_LIMIT."""
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,16 @@ class WriteRequest:
     path: str
     body: Mapping[str, Any]
     """JSON-ready: quantities as decimal strings, never floats."""
+
+
+def message_link(workspace_url: str | None, post: PostKey) -> str | None:
+    """The link to `post`'s message under the workspace's URL (`url` of `auth.test`), or None when the URL is missing
+    or no plain https host, or the link would be too long: a stock write never depends on having a link. The form is
+    the one `chat.getPermalink` answers, and `stockthread trail` reads it."""
+    if workspace_url is None or not _WORKSPACE_URL.fullmatch(workspace_url):
+        return None
+    link = f"{workspace_url.rstrip('/')}/archives/{post.channel_id}/p{post.ts.replace('.', '')}"
+    return link if len(link) <= _LINK_LIMIT and _LINK.fullmatch(link) else None
 
 
 def write_notes(marker: Marker, user: str, link: str | None = None) -> str:

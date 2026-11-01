@@ -117,7 +117,10 @@ class FakeClient(WebClient):
         raise AssertionError("no thread in these tests")
 
     def auth_test(self, **kwargs: Any) -> Any:
-        return {"team_id": self.team, "bot_id": "B0STOCKBOT", "user_id": "U0STOCKBOT"}
+        return {
+            "team_id": self.team, "bot_id": "B0STOCKBOT", "user_id": "U0STOCKBOT",
+            "url": "https://acme-fiber.slack.com/",
+        }  # fmt: skip
 
     def chat_postMessage(self, **kwargs: Any) -> Any:
         self.posted.append(kwargs)
@@ -1397,7 +1400,8 @@ def test_with_writes_on_and_a_tested_server_the_worker_runs_the_apply_step(
     built: list[tuple[Settings, Any, str]] = []
     stepped: list[RequestKey] = []
 
-    def steps(settings: Settings, catalog: Any, store: Store, owner: str, *, beat: Any) -> Any:
+    def steps(settings: Settings, catalog: Any, store: Store, owner: str, *, beat: Any, workspace_url: str) -> Any:
+        assert workspace_url == "https://acme-fiber.slack.com/"  # from auth.test, for the links in the notes
         built.append((settings, catalog, owner))
         beat()  # the worker's own beat
         assert catalog().parts == CATALOG.parts  # the worker's catalog cache

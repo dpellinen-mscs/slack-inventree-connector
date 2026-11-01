@@ -58,7 +58,9 @@ connector, but it is not a backup of the database.
 3. Copy the backup to `stockthread.db`, then run `chmod 600 stockthread.db`.
 4. Set `writes.enabled = false` in `stockthread.toml` (see below for why).
 5. Start the connector. Let it catch up, then check the posts it answers again (below) against
-   InvenTree or the old database's `trail`.
+   InvenTree or the old database's `trail`. The notes of a stock history entry the connector wrote
+   normally hold a link to its post, and `trail` takes that link. Entries from before this was added
+   have none, nor do any written when Slack's `auth.test` named no workspace URL.
 6. Set `writes.enabled` back to what it was and restart the connector.
 
 What happens after a restore:
