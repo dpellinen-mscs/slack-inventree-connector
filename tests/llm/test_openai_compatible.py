@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
+import certifi
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -209,3 +211,26 @@ def test_a_key_that_cannot_be_a_header_is_refused_without_quoting_it(key: str) -
     with pytest.raises(ValueError, match="API key") as raised:
         OpenAICompatible("https://llm.example.test/v1", "test-model", SecretStr(key))
     assert key not in str(raised.value)
+
+
+def test_the_client_trusts_the_ca_file_from_the_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # One CA out of certifi's bundle stands in for a private CA: a context that loaded the file holds it alone.
+    bundle = Path(certifi.where()).read_text()
+    end = "-----END CERTIFICATE-----"
+    ca_file = tmp_path / "private-ca.pem"
+    ca_file.write_text(bundle[bundle.index("-----BEGIN CERTIFICATE-----") : bundle.index(end) + len(end)] + "\n")
+    monkeypatch.setenv("SSL_CERT_FILE", str(ca_file))
+    client = OpenAICompatible("https://llm.example.test/v1", "test-model", SecretStr(KEY))
+    try:
+        assert len(client._client._transport._pool._ssl_context.get_ca_certs()) == 1  # type: ignore[attr-defined]
+    finally:
+        client.close()
+
+
+def test_the_client_takes_no_proxy_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example.test:3128")
+    client = OpenAICompatible("https://llm.example.test/v1", "test-model", SecretStr(KEY))
+    try:
+        assert not client._client._mounts
+    finally:
+        client.close()

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DOC = (ROOT / "docs" / "versions.md").read_text()
 INTEGRATION = (ROOT / ".github" / "workflows" / "integration.yml").read_text()
 CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+README = " ".join((ROOT / "README.md").read_text().split())
 
 
 def _list(workflow: str, key: str) -> set[str]:
@@ -45,6 +46,12 @@ def test_python_is_the_ci_matrix_and_the_package_floor() -> None:
     assert f"CI runs the unit tests and the eval corpus on {' and '.join(pythons)}." in DOC
     floor = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["requires-python"]
     assert f"Python {floor.removeprefix('>=')} or newer" in DOC
+
+
+def test_the_quickstart_names_every_tested_minor() -> None:
+    minors = sorted({version.rpartition(".")[0] for version in _list(INTEGRATION, "inventree")})
+    named = f"{', '.join(minors[:-1])} or {minors[-1]}"
+    assert f"an InvenTree server (see `docs/versions.md`: {named})" in README
 
 
 def test_the_manifests_named_exist() -> None:
