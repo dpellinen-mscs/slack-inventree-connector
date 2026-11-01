@@ -38,9 +38,14 @@ class OpenAICompatible:
         self._url = check_endpoint(base_url, model, api_key)
         self._model = model
         self._api_key = api_key
-        # trust_env off: a proxy from the environment would see the post, and the key of a local server.
+        # trust_env off: a proxy from the environment would see the post, and the key of a local server. It would also
+        # drop SSL_CERT_FILE and SSL_CERT_DIR, so the TLS context is built as the InvenTree clients' is: same CAs.
         self._client = httpx.Client(
-            timeout=timeout_seconds, transport=transport, follow_redirects=False, trust_env=False
+            timeout=timeout_seconds,
+            transport=transport,
+            follow_redirects=False,
+            trust_env=False,
+            verify=httpx.create_ssl_context(trust_env=True),
         )
 
     @property

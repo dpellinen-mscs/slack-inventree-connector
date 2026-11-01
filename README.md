@@ -10,7 +10,7 @@ runs**: it changes no stock until you set `writes.enabled = true` (see "What to 
 
 ## Quickstart: the first dry run
 
-You need Python 3.11 or later, an InvenTree server (1.4 or 1.5), and a Slack workspace where you may
+You need Python 3.11 or later, an InvenTree server (see `docs/versions.md`: 1.4, 1.5 or 1.6), and a Slack workspace where you may
 install an app. About 15 minutes.
 
 1. **Install.** From a checkout of this repository:
