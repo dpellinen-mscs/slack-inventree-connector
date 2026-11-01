@@ -50,6 +50,7 @@ from stockthread.core.requests import (
 S = RequestState
 
 MIN_SQLITE = (3, 37, 0)
+BUSY_TIMEOUT_SECONDS = 10
 """STRICT tables."""
 
 MAX_EVENT_ATTEMPTS = 4
@@ -488,7 +489,7 @@ class Store:
         if sqlite3.sqlite_version_info < MIN_SQLITE:
             raise RuntimeError(f"SQLite {'.'.join(map(str, MIN_SQLITE))} or later is needed")
         _create_private(path)
-        connection = sqlite3.connect(path, isolation_level=None, timeout=10)
+        connection = sqlite3.connect(path, isolation_level=None, timeout=BUSY_TIMEOUT_SECONDS)
         try:
             connection.execute("PRAGMA foreign_keys = ON")
             # REPLACE fires DELETE triggers only with this on. The schema also refuses REPLACE by itself.
@@ -2366,11 +2367,20 @@ class Store:
             for event_id in events:
                 self._db.execute("UPDATE slack_events SET body = NULL WHERE id = ?", (event_id,))
                 self._audit("retention", "body_expired", slack_event_id=event_id)
-        if posts or events:
-            # The blanked text can still sit in old frames of the -wal file. A reader in the way only leaves them
-            # until a later checkpoint: this reports busy, it does not raise.
-            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        self._checkpoint_without_waiting()
         return ExpiredText(posts=len(posts), events=len(events))
+
+    def _checkpoint_without_waiting(self) -> None:
+        """Clear the -wal file, where blanked text can still sit in old frames. Every pass of retention tries, also one
+        that blanked nothing, so a reader in the way only delays it to the next pass. It never waits for that reader:
+        a checkpoint under the usual busy timeout can hold up every writer for many seconds."""
+        self._db.execute("PRAGMA busy_timeout = 0")
+        try:
+            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        except sqlite3.OperationalError:
+            pass  # the text is blanked and committed; the next pass tries again
+        finally:
+            self._db.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_SECONDS * 1000}")
 
     # Catch-up after downtime
 
