@@ -1,6 +1,7 @@
 name: Integration
 
-# Real InvenTree servers in Docker. Runs only when code that talks to InvenTree changes.
+# Real InvenTree servers in Docker. Runs only when code the integration tests exercise changes: both path lists below
+# name every module tests/integration imports (tests/test_integration_paths.py keeps them so).
 on:
   pull_request:
     paths:
@@ -11,6 +12,18 @@ on:
       - "src/stockthread/inverse.py"
       - "src/stockthread/core/marker_check.py"
       - "src/stockthread/writer.py"
+      - "src/stockthread/applier.py"
+      - "src/stockthread/plan.py"
+      - "src/stockthread/plan_record.py"
+      - "src/stockthread/gate.py"
+      - "src/stockthread/run.py"
+      - "src/stockthread/worker.py"
+      - "src/stockthread/dry_run.py"
+      - "src/stockthread/setup_check.py"
+      - "src/stockthread/core/model.py"
+      - "src/stockthread/core/matching.py"
+      - "src/stockthread/core/requests.py"
+      - "src/stockthread/slack/replies.py"
       - "src/stockthread/catalog.py"
       - "src/stockthread/config.py"
       - "src/stockthread/core/marker.py"
@@ -33,6 +46,18 @@ on:
       - "src/stockthread/inverse.py"
       - "src/stockthread/core/marker_check.py"
       - "src/stockthread/writer.py"
+      - "src/stockthread/applier.py"
+      - "src/stockthread/plan.py"
+      - "src/stockthread/plan_record.py"
+      - "src/stockthread/gate.py"
+      - "src/stockthread/run.py"
+      - "src/stockthread/worker.py"
+      - "src/stockthread/dry_run.py"
+      - "src/stockthread/setup_check.py"
+      - "src/stockthread/core/model.py"
+      - "src/stockthread/core/matching.py"
+      - "src/stockthread/core/requests.py"
+      - "src/stockthread/slack/replies.py"
       - "src/stockthread/catalog.py"
       - "src/stockthread/config.py"
       - "src/stockthread/core/marker.py"
