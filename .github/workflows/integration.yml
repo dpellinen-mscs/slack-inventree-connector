@@ -1,7 +1,8 @@
 name: Integration
 
 # Real InvenTree servers in Docker. Runs only when code the integration tests exercise changes: both path lists below
-# name every module tests/integration imports (tests/test_integration_paths.py keeps them so).
+# name every module tests/integration imports and every module a real write depends on, the LLM client excepted
+# (tests/test_integration_paths.py keeps them so).
 on:
   pull_request:
     paths:
@@ -24,6 +25,15 @@ on:
       - "src/stockthread/core/matching.py"
       - "src/stockthread/core/requests.py"
       - "src/stockthread/slack/replies.py"
+      - "src/stockthread/core/answers.py"
+      - "src/stockthread/core/grouping.py"
+      - "src/stockthread/core/questions.py"
+      - "src/stockthread/core/signals.py"
+      - "src/stockthread/core/typed_answers.py"
+      - "src/stockthread/core/validate.py"
+      - "src/stockthread/picking.py"
+      - "src/stockthread/places.py"
+      - "src/stockthread/views.py"
       - "src/stockthread/catalog.py"
       - "src/stockthread/config.py"
       - "src/stockthread/core/marker.py"
@@ -58,6 +68,15 @@ on:
       - "src/stockthread/core/matching.py"
       - "src/stockthread/core/requests.py"
       - "src/stockthread/slack/replies.py"
+      - "src/stockthread/core/answers.py"
+      - "src/stockthread/core/grouping.py"
+      - "src/stockthread/core/questions.py"
+      - "src/stockthread/core/signals.py"
+      - "src/stockthread/core/typed_answers.py"
+      - "src/stockthread/core/validate.py"
+      - "src/stockthread/picking.py"
+      - "src/stockthread/places.py"
+      - "src/stockthread/views.py"
       - "src/stockthread/catalog.py"
       - "src/stockthread/config.py"
       - "src/stockthread/core/marker.py"
