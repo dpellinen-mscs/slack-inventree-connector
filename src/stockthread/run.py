@@ -37,6 +37,7 @@ from stockthread.core.matching import Catalog
 from stockthread.core.model import MovementType, PostKey, RequestKey
 from stockthread.core.requests import RequestState
 from stockthread.core.resolve import StockItem, stock_items
+from stockthread.core.write_request import message_link
 from stockthread.gate import Judgement, Policy
 from stockthread.inventree import InvenTreeError, InvenTreeReader, VersionCheck, check_version
 from stockthread.llm.extract import LLMExtractor, WithinDeadline
@@ -276,6 +277,7 @@ def inventree_steps(
     connect: Connect | None = None,
     limit: float | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    workspace_url: str | None = None,
 ) -> tuple[Stepper, Undoer]:
     """The worker's apply step (`applier.work_request`) and undo (`apply.undo_apply`) against InvenTree, for
     `writes.enabled`. Each call opens its own reader and writer (`connect`) and reads the server's version again: a
@@ -283,6 +285,7 @@ def inventree_steps(
     vehicles are the catalog's (`catalog`, the cache), read before the step of an `approved` request only, and the
     lock is beaten (`beat`) after that read. A plan expires `slack.plan_expiry_hours` after its post, on `clock`, as
     the worker counts it: one that expired before its first write goes back to review (`applier.work_request`).
+    `workspace_url` makes the link to the post in the notes of each write and undo (`write_request.message_link`).
 
     Each call is cut off after `limit` seconds (by default before the instance lock could go stale), and begins no
     write once less than SEND_MARGIN_TIMEOUTS times `inventree.timeout_seconds` is left: a cut-off then ends a read,
@@ -312,7 +315,8 @@ def inventree_steps(
         async def run() -> Applied:
             send_by = anyio.current_time() + limit - margin
             async with opened() as (reader, writer):
-                now = GateNow(Policy.of(settings, check_version(await reader.server_info())), vehicles, defaults, sites)
+                policy = Policy.of(settings, check_version(await reader.server_info()))
+                now = GateNow(policy, vehicles, defaults, sites, workspace_url)
                 return await work_request(
                     key, store=store, reader=reader, writer=writer, lock=anyio.Lock(), lock_owner=owner,
                     gate_now=lambda: now, expired=expired, settle=settle, send_by=send_by,
@@ -330,7 +334,7 @@ def inventree_steps(
                     return Applied(store.request(key).state, f"no undo: {version.message}")
                 return await undo_apply(
                     key, movement, store=store, reader=reader, writer=writer, lock=anyio.Lock(), lock_owner=owner,
-                    user=user, send_by=send_by,
+                    user=user, link=message_link(workspace_url, key.post), send_by=send_by,
                 )  # fmt: skip
 
         with writing:
@@ -707,7 +711,7 @@ def run(
         worker.stock = stock or inventree_stock(settings)
         if settings.writes.enabled and version.writes_allowed:
             beat = functools.partial(worker.beat, now=True)
-            worker.apply, worker.undo = steps(settings, cache, store, owner, beat=beat)
+            worker.apply, worker.undo = steps(settings, cache, store, owner, beat=beat, workspace_url=identity.url)
             worker.approve = approver(settings, cache, store, owner, beat=beat, check=check)
             worker.approve_click = clicker(settings, cache, store, owner, beat=beat, check=check)
             auto = ", ".join(settings.policy.auto_apply) or "none"

@@ -9,9 +9,10 @@ from typing import Any
 import pytest
 
 from stockthread.core.marker import AttemptKind, Marker
-from stockthread.core.model import Operation
+from stockthread.core.model import Operation, PostKey
 from stockthread.core.resolve import Take
-from stockthread.core.write_request import NOTES_LIMIT, PATHS, build_request, write_notes
+from stockthread.core.write_request import NOTES_LIMIT, PATHS, build_request, message_link, write_notes
+from stockthread.trail import message_key
 
 MARKER = Marker("k7m2q9x4t1b8w3n6p5r0zd", AttemptKind.APPLY, 1)
 LINK = "https://acme-fiber.slack.com/archives/C0ACME001/p1790000000000100"
@@ -130,3 +131,37 @@ def test_a_request_takes_no_other_text_into_its_notes(user: str, link: str, mess
 def test_a_count_to_negative_zero_is_sent_as_zero() -> None:
     request = build_request(Operation.COUNT, [Take(44, Decimal("-0E-7"))], **BY)
     assert request.body["items"] == [{"pk": 44, "quantity": "0"}]
+
+
+POST = PostKey("T0ACME001", "C0ACME001", "1790000000.000100")
+
+
+@pytest.mark.parametrize("url", ["https://acme-fiber.slack.com/", "https://acme-fiber.slack.com"])
+def test_a_message_link_is_slacks_own_form_and_trail_reads_it(url: str) -> None:
+    link = message_link(url, POST)
+    assert link == LINK
+    assert message_key(POST.workspace_id, link) == POST
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        None,
+        "",
+        "http://acme-fiber.slack.com/",
+        "https://acme fiber.slack.com/",
+        "https://acme-fiber.slack.com/path/",
+        "https://user:secret@acme-fiber.slack.com/",
+        "https://" + "a" * 120 + ".slack.com/",
+    ],
+)
+def test_a_workspace_url_that_is_not_a_plain_https_host_gives_no_link(url: str | None) -> None:
+    assert message_link(url, POST) is None
+
+
+def test_the_longest_link_still_fits_the_notes() -> None:
+    url = "https://" + "a" * 200
+    for size in range(1, 200):
+        link = message_link(url[: 8 + size], POST)
+        if link is not None:
+            assert len(write_notes(MARKER, "U0SAM0001", link)) < NOTES_LIMIT

@@ -37,6 +37,7 @@ from stockthread.core.grouping import seconds
 from stockthread.core.marker import AttemptKind, Marker
 from stockthread.core.model import MovementType, PostKey, RequestKey
 from stockthread.core.requests import Actor, RequestState
+from stockthread.core.write_request import message_link
 from stockthread.gate import Judgement, Policy, Verdict, judge
 from stockthread.plan_record import NotRebuilt, plan_hash, views_of
 from stockthread.slack.replies import MovementView
@@ -55,6 +56,9 @@ class GateNow:
     taken from a default counts for the policy only while it is still that type's default."""
     sites: frozenset[int] = frozenset()
     """The locations under a site now (`Catalog.sites` of the current catalog)."""
+    workspace_url: str | None = None
+    """The Slack workspace's URL (`BotIdentity.url`), for the link in a write's notes. Judging a plan does not depend
+    on it: only the judgement a write is sent from needs it."""
 
 
 @dataclass(frozen=True)
@@ -107,6 +111,7 @@ def judge_plan(
         markers,
         now.policy,
         poster=rebuilt.poster,
+        link=message_link(now.workspace_url, plan.post),
         answered=rebuilt.answered,
         rejected=rebuilt.rejected,
         poster_vehicle=now.vehicles.get(rebuilt.poster),

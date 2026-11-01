@@ -43,6 +43,7 @@ from stockthread.plan_record import NotRebuilt, plan_of
 from stockthread.run import inventree_steps
 from stockthread.slack.replies import UNDO_ACTION, MovementView, receipt_replaced
 from stockthread.store import DryRunOutcome, LockLost, NewPlan, Store
+from stockthread.trail import message_key
 from stockthread.worker import (
     RECEIPT_TRIES,
     STUCK_RETRY_SECONDS,
@@ -806,7 +807,12 @@ class Connected(FakeInvenTree):
 
 
 def steps(
-    store: Store, fake: Connected, catalog: Any = None, limit: float | None = None, clock: Any = None
+    store: Store,
+    fake: Connected,
+    catalog: Any = None,
+    limit: float | None = None,
+    clock: Any = None,
+    workspace_url: str | None = None,
 ) -> tuple[Stepper, Undoer]:
     @asynccontextmanager
     async def connect() -> AsyncIterator[tuple[Any, Any]]:
@@ -818,7 +824,7 @@ def steps(
     at = clock or Clock()
     return inventree_steps(
         settings(writes=True), vehicles, store, OWNER, beat=lambda: beats.append(1), connect=connect, limit=limit,
-        clock=at,
+        clock=at, workspace_url=workspace_url,
     )  # fmt: skip
 
 
@@ -833,6 +839,28 @@ def test_the_run_loops_step_writes_once_and_reads_back_with_a_client_of_its_own(
     assert len(fake.sent) == 1
     assert fake.opened == 1
     assert beats == [1]  # after the catalog read, before the step
+
+
+def test_the_notes_of_a_write_and_its_undo_link_to_the_post(store: Store) -> None:
+    """From a history entry in InvenTree back to the post: `stockthread trail` takes the link in the notes."""
+    approved(store)
+    fake = Connected()
+    step, undo = steps(store, fake, workspace_url="https://acme-fiber.slack.com/")
+    assert step(KEY).state is S.VERIFIED
+    assert undo(KEY, TAKE, SAM).state is S.UNDONE
+    assert len(fake.sent) == 2
+    for sent in fake.sent:
+        link = str(sent.body["notes"]).split(" ")[2]
+        assert link.startswith("https://acme-fiber.slack.com/archives/")
+        assert message_key(POST.workspace_id, link) == POST
+
+
+def test_a_write_goes_out_without_a_link_when_slack_named_no_workspace_url(store: Store) -> None:
+    approved(store)
+    fake = Connected()
+    step, _ = steps(store, fake)
+    assert step(KEY).state is S.VERIFIED
+    assert len(str(fake.sent[0].body["notes"]).split(" ")) == 2
 
 
 def test_the_run_loops_step_sends_an_expired_plan_back_to_review(store: Store) -> None:

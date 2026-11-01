@@ -229,6 +229,9 @@ class FakeClient:
 def test_identify_checks_the_workspace_of_the_token() -> None:
     result = {"ok": True, "team_id": "T0ACME001", "bot_id": "B0STOCKBOT", "user_id": "U0STOCKBOT"}
     assert identify(FakeClient(result), settings("socket")) == IDENTITY
+    url = "https://acme-fiber.slack.com/"
+    assert identify(FakeClient({**result, "url": url}), settings("socket")).url == url
+    assert identify(FakeClient({**result, "url": 7}), settings("socket")).url is None
     with pytest.raises(IdentityError, match="another workspace"):
         identify(FakeClient({**result, "team_id": "T0OTHER01"}), settings("socket"))
     with pytest.raises(IdentityError, match="bot token"):
