@@ -24,7 +24,7 @@ disposable InvenTree server, which CI starts for every pinned version.
 To run them locally you need Docker:
 
 ```sh
-tests/integration/start-inventree.sh inventree/inventree:1.6.3 > .it.env
+tests/integration/start-inventree.sh inventree/inventree:1.6.4 > .it.env
 set -a; . ./.it.env; set +a
 .venv/bin/pytest tests/integration
 tests/integration/start-inventree.sh --stop

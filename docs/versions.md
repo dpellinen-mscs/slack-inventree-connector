@@ -10,10 +10,11 @@ What CI tests on every change, and what the connector does with anything else.
 | 1.4.3 | 511 | PostgreSQL | integration tests, against a real server in Docker |
 | 1.5.6 | 530 | SQLite | integration tests, against a real server in Docker |
 | 1.5.6 | 530 | PostgreSQL | integration tests, against a real server in Docker |
-| 1.6.3 | 561 | SQLite | integration tests, against a real server in Docker |
-| 1.6.3 | 561 | PostgreSQL | integration tests, against a real server in Docker |
+| 1.6.4 | 561 | SQLite | integration tests, against a real server in Docker |
+| 1.6.4 | 561 | PostgreSQL | integration tests, against a real server in Docker |
 
-The tested range is API 511 to 561: the current stable release and the two minors before it. The connector reads the
+The tested range is API 511 to 561: the current stable release and the two minors before it. 1.6.3 has the same API
+version as 1.6.4 and passed the same tests before CI moved to 1.6.4. The connector reads the
 server's API version when it starts. On a version outside the range it still posts dry runs, but stock writes stay
 off, whatever `writes.enabled` says, and the log names both versions
 ([Troubleshooting](troubleshooting.md#writes-are-on-but-nothing-is-written)). `stockthread check-setup` reports the server version.
